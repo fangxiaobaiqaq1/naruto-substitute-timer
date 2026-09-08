@@ -1,0 +1,27 @@
+# 构建产物
+bin/
+*.exe
+*.exe~
+
+# 调试产物（截图/日志）
+debug/
+*.bmp
+*.log
+*.txt
+inbox/**/*.png
+!assets/templates/*.png
+!assets/identity/*.png
+assets/identity/seen/
+
+# 全量 APK 解包（1.9G apk + 展开树，不进 git）
+unpack/apk/
+unpack/extracted/
+unpack/apktool/
+unpack/jadx/
+unpack/native/
+unpack/unity/
+unpack/bundles/
+unpack/metadata/
+*.apk
+*.so
+*.dex

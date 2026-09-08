@@ -1,0 +1,20 @@
+{
+  "source": "F:\\\u8ba1\u65f6\u5668\\inbox\\regressions\\camp-both-naruto-right-one-20260907.png",
+  "sourceSHA256": "fccc051e1bc8b2346dce15987330a907a9efb72534406d714bb955a6f5ccfd92",
+  "crop": [
+    1034,
+    752,
+    1126,
+    846
+  ],
+  "reference": [
+    1920,
+    1080
+  ],
+  "size": [
+    110,
+    113
+  ],
+  "mask": "inside button ellipse; excludes exterior background, bottom bean indicators and central cooldown-number area",
+  "purpose": "continuation only; never opens match or directly starts opponent cooldown"
+}

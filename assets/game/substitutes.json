@@ -1,0 +1,7931 @@
+{
+  "source": "com.tencent.KiHan files/1.78.78.8/StreamConfig/skillgroup.bytes",
+  "version": "1.78.78.8 / hot 0.169.39.1",
+  "frameRate": 30,
+  "note": "seconds = field5 / 30. slot 901 = 替身. 奥义(401) often has no time CD (4 beads).",
+  "defaultSubstituteSeconds": 15,
+  "substitutes": [
+    {
+      "ninjaId": 900030,
+      "name": "佐助",
+      "subId": 900030901,
+      "subName": "佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900010,
+      "name": "鸣人",
+      "subId": 900010901,
+      "subName": "鸣人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900020,
+      "name": "小樱",
+      "subId": 900020901,
+      "subName": "小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900090,
+      "name": "卡卡西",
+      "subId": 900090901,
+      "subName": "卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900050,
+      "name": "李洛克",
+      "subId": 900050901,
+      "subName": "李洛克替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900040,
+      "name": "井野",
+      "subId": 900040901,
+      "subName": "井野替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900060,
+      "name": "雏田",
+      "subId": 900060901,
+      "subName": "雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900110,
+      "name": "波风水门",
+      "subId": 900110901,
+      "subName": "波风水门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900080,
+      "name": "我爱罗",
+      "subId": 900080901,
+      "subName": "我爱罗替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900100,
+      "name": "自来也",
+      "subId": 900100901,
+      "subName": "自来也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900070,
+      "name": "鹿丸",
+      "subId": 900070901,
+      "subName": "鹿丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900160,
+      "name": "牙",
+      "subId": 900160901,
+      "subName": "牙替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900140,
+      "name": "丁次",
+      "subId": 900140901,
+      "subName": "丁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900150,
+      "name": "宁次",
+      "subId": 900150901,
+      "subName": "宁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900170,
+      "name": "天天",
+      "subId": 900170901,
+      "subName": "天天替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900180,
+      "name": "志乃",
+      "subId": 900180901,
+      "subName": "志乃替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900190,
+      "name": "替身术_手鞠",
+      "subId": 900190901,
+      "subName": "替身术_手鞠",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900200,
+      "name": "替身术_勘九郎",
+      "subId": 900200901,
+      "subName": "替身术_勘九郎",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 910200,
+      "name": "替身术_傀儡_乌鸦",
+      "subId": 910200901,
+      "subName": "替身术_傀儡_乌鸦",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900280,
+      "name": "咒印佐助",
+      "subId": 900280901,
+      "subName": "咒印佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900310,
+      "name": "替身术_兜",
+      "subId": 900310901,
+      "subName": "替身术_兜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900360,
+      "name": "青年佐助",
+      "subId": 900360901,
+      "subName": "青年佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900470,
+      "name": "阿斯玛",
+      "subId": 900470901,
+      "subName": "阿斯玛替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900330,
+      "name": "白",
+      "subId": 900330901,
+      "subName": "白替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900290,
+      "name": "君麻吕",
+      "subId": 900290901,
+      "subName": "君麻吕替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900230,
+      "name": "鬼鲛",
+      "subId": 900230901,
+      "subName": "鬼鲛替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900270,
+      "name": "",
+      "subId": 900270901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900300,
+      "name": "咒印君麻吕",
+      "subId": 900300901,
+      "subName": "咒印君麻吕替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900730,
+      "name": "御手洗红豆",
+      "subId": 900730901,
+      "subName": "御手洗红豆替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900440,
+      "name": "",
+      "subId": 900440901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900380,
+      "name": "迪达拉",
+      "subId": 900380901,
+      "subName": "迪达拉替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980380,
+      "name": "迪达拉",
+      "subId": 980380901,
+      "subName": "迪达拉替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900370,
+      "name": "青年小樱",
+      "subId": 900370901,
+      "subName": "青年小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900340,
+      "name": "青年我爱罗",
+      "subId": 900340901,
+      "subName": "青年我爱罗替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900740,
+      "name": "少年卡卡西·",
+      "subId": 900740901,
+      "subName": "少年卡卡西·替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900420,
+      "name": "替身术_佐井",
+      "subId": 900420901,
+      "subName": "替身术_佐井",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901190,
+      "name": "福禄丸",
+      "subId": 901190901,
+      "subName": "福禄丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901210,
+      "name": "旗袍天天",
+      "subId": 901210901,
+      "subName": "旗袍天天替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900710,
+      "name": "",
+      "subId": 900710901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901130,
+      "name": "",
+      "subId": 901130901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900690,
+      "name": "",
+      "subId": 900690901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900350,
+      "name": "疾风传鸣人",
+      "subId": 900350901,
+      "subName": "疾风传鸣人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900460,
+      "name": "青年鹿丸",
+      "subId": 900460901,
+      "subName": "青年鹿丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903530,
+      "name": "新春鹿丸",
+      "subId": 903530901,
+      "subName": "新春鹿丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901220,
+      "name": "",
+      "subId": 901220901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900220,
+      "name": "宇智波鼬",
+      "subId": 900220901,
+      "subName": "宇智波鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901230,
+      "name": "黑衣佐助",
+      "subId": 901230901,
+      "subName": "黑衣佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900760,
+      "name": "玖辛奈",
+      "subId": 900760901,
+      "subName": "玖辛奈替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900390,
+      "name": "蝎",
+      "subId": 900390901,
+      "subName": "蝎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980390,
+      "name": "蝎",
+      "subId": 980390901,
+      "subName": "蝎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901070,
+      "name": "青年宁次",
+      "subId": 901070901,
+      "subName": "青年宁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900430,
+      "name": "",
+      "subId": 900430901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900780,
+      "name": "青年勘九郎",
+      "subId": 900780901,
+      "subName": "青年勘九郎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901080,
+      "name": "替身术_天天[疾风传]",
+      "subId": 901080901,
+      "subName": "替身术_天天[疾风传]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900530,
+      "name": "阿飞",
+      "subId": 900530901,
+      "subName": "阿飞替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901050,
+      "name": "伊鲁卡",
+      "subId": 901050901,
+      "subName": "伊鲁卡替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901120,
+      "name": "",
+      "subId": 901120901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901260,
+      "name": "暗部卡卡西",
+      "subId": 901260901,
+      "subName": "暗部卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901270,
+      "name": "泳装小樱",
+      "subId": 901270901,
+      "subName": "泳装小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901250,
+      "name": "暗部鼬",
+      "subId": 901250901,
+      "subName": "暗部鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901280,
+      "name": "泳装井野",
+      "subId": 901280901,
+      "subName": "泳装井野替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900670,
+      "name": "鬼童丸",
+      "subId": 900670901,
+      "subName": "鬼童丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900700,
+      "name": "左近右近",
+      "subId": 900700901,
+      "subName": "左近右近替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901290,
+      "name": "替身术_飞段[死司凭血]",
+      "subId": 901290901,
+      "subName": "替身术_飞段[死司凭血]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900510,
+      "name": "疾风雏田",
+      "subId": 900510901,
+      "subName": "疾风雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980570,
+      "name": "小南",
+      "subId": 980570901,
+      "subName": "小南替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900450,
+      "name": "地怨虞角都",
+      "subId": 900450901,
+      "subName": "地怨虞角都替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901300,
+      "name": "角都",
+      "subId": 901300901,
+      "subName": "角都替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900680,
+      "name": "多由也",
+      "subId": 900680901,
+      "subName": "多由也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900480,
+      "name": "香燐",
+      "subId": 900480901,
+      "subName": "香燐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900500,
+      "name": "",
+      "subId": 900500901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901370,
+      "name": "替身术_手鞠",
+      "subId": 901370901,
+      "subName": "替身术_手鞠",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 911370,
+      "name": "替身术_手鞠",
+      "subId": 911370901,
+      "subName": "替身术_手鞠",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901310,
+      "name": "花火",
+      "subId": 901310901,
+      "subName": "花火替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901160,
+      "name": "志乃",
+      "subId": 901160901,
+      "subName": "志乃替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900770,
+      "name": "替身术_手鞠",
+      "subId": 900770901,
+      "subName": "替身术_手鞠",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900490,
+      "name": "替身术_水月",
+      "subId": 900490901,
+      "subName": "替身术_水月",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900410,
+      "name": "千代",
+      "subId": 900410901,
+      "subName": "千代替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 910410,
+      "name": "妈妈",
+      "subId": 910410901,
+      "subName": "妈妈替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 900720,
+      "name": "月光疾风",
+      "subId": 900720901,
+      "subName": "月光疾风替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901330,
+      "name": "圣诞雏田",
+      "subId": 901330901,
+      "subName": "圣诞雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901350,
+      "name": "唐装佐助",
+      "subId": 901350901,
+      "subName": "唐装佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900550,
+      "name": "佩恩·天道",
+      "subId": 900550901,
+      "subName": "佩恩·天道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980550,
+      "name": "佩恩·天道",
+      "subId": 980550901,
+      "subName": "佩恩·天道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900260,
+      "name": "",
+      "subId": 900260901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 910260,
+      "name": "",
+      "subId": 910260901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901340,
+      "name": "替身术_漩涡鸣人[新春限定]",
+      "subId": 901340901,
+      "subName": "替身术_漩涡鸣人[新春限定]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901360,
+      "name": "替身术_春野樱[新春限定]",
+      "subId": 901360901,
+      "subName": "替身术_春野樱[新春限定]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901150,
+      "name": "青年犬塚牙",
+      "subId": 901150901,
+      "subName": "青年犬塚牙替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 911150,
+      "name": "大赤丸",
+      "subId": 911150901,
+      "subName": "大赤丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901380,
+      "name": "鸣人",
+      "subId": 901380901,
+      "subName": "鸣人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901320,
+      "name": "",
+      "subId": 901320901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908310,
+      "name": "",
+      "subId": 908310901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908320,
+      "name": "",
+      "subId": 908320901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 901700,
+      "name": "",
+      "subId": 901700901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900850,
+      "name": "二位由木人",
+      "subId": 900850901,
+      "subName": "二位由木人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901720,
+      "name": "替身术_长发樱",
+      "subId": 901720901,
+      "subName": "替身术_长发樱",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901170,
+      "name": "替身术_木叶丸",
+      "subId": 901170901,
+      "subName": "替身术_木叶丸",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 911170,
+      "name": "替身术_木叶丸",
+      "subId": 911170901,
+      "subName": "替身术_木叶丸",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 911180,
+      "name": "替身术_木叶丸",
+      "subId": 911180901,
+      "subName": "替身术_木叶丸",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901390,
+      "name": "替身术_萨克·镫",
+      "subId": 901390901,
+      "subName": "替身术_萨克·镫",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901690,
+      "name": "替身术_醉拳李",
+      "subId": 901690901,
+      "subName": "替身术_醉拳李",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901630,
+      "name": "替身术_三忍纲手",
+      "subId": 901630901,
+      "subName": "替身术_三忍纲手",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901680,
+      "name": "泳装雏田",
+      "subId": 901680901,
+      "subName": "泳装雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901760,
+      "name": "夕日红·",
+      "subId": 901760901,
+      "subName": "夕日红·替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900660,
+      "name": "替身术_水木",
+      "subId": 900660901,
+      "subName": "替身术_水木",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901750,
+      "name": "替身术_泳装红豆",
+      "subId": 901750901,
+      "subName": "替身术_泳装红豆",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901740,
+      "name": "替身术_神秘面具男",
+      "subId": 901740901,
+      "subName": "替身术_神秘面具男",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900860,
+      "name": "矢仓",
+      "subId": 900860901,
+      "subName": "矢仓替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901400,
+      "name": "替身术_托斯",
+      "subId": 901400901,
+      "subName": "替身术_托斯",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901420,
+      "name": "惠比寿",
+      "subId": 901420901,
+      "subName": "惠比寿替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901710,
+      "name": "替身术_三忍大蛇丸",
+      "subId": 901710901,
+      "subName": "替身术_三忍大蛇丸",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901410,
+      "name": "替身术_金·槌",
+      "subId": 901410901,
+      "subName": "替身术_金·槌",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901110,
+      "name": "替身术_鸣人[四尾]",
+      "subId": 901110901,
+      "subName": "替身术_鸣人[四尾]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900580,
+      "name": "仙人鸣人",
+      "subId": 900580901,
+      "subName": "仙人鸣人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902210,
+      "name": "替身术_兜",
+      "subId": 902210901,
+      "subName": "替身术_兜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901560,
+      "name": "替身术_通草野饵人",
+      "subId": 901560901,
+      "subName": "替身术_通草野饵人",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901430,
+      "name": "替身术_伊比喜",
+      "subId": 901430901,
+      "subName": "替身术_伊比喜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901240,
+      "name": "替身术_绝",
+      "subId": 901240901,
+      "subName": "替身术_绝",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900870,
+      "name": "老紫",
+      "subId": 900870901,
+      "subName": "老紫替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908660,
+      "name": "千手扉间",
+      "subId": 908660901,
+      "subName": "千手扉间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908750,
+      "name": "替身术_秽土次郎坊",
+      "subId": 908750901,
+      "subName": "替身术_秽土次郎坊",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908710,
+      "name": "秽土日斩",
+      "subId": 908710901,
+      "subName": "秽土日斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908740,
+      "name": "青年我爱罗",
+      "subId": 908740901,
+      "subName": "青年我爱罗替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908770,
+      "name": "替身术_托斯",
+      "subId": 908770901,
+      "subName": "替身术_托斯",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902020,
+      "name": "替身术_圣诞天天",
+      "subId": 902020901,
+      "subName": "替身术_圣诞天天",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902030,
+      "name": "新春卡卡西",
+      "subId": 902030901,
+      "subName": "新春卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901540,
+      "name": "畜生道",
+      "subId": 901540901,
+      "subName": "畜生道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900560,
+      "name": "奇拉比",
+      "subId": 900560901,
+      "subName": "奇拉比替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903650,
+      "name": "晓创生角都",
+      "subId": 903650901,
+      "subName": "晓创生角都替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902900,
+      "name": "晓创生角都",
+      "subId": 902900901,
+      "subName": "晓创生角都替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902040,
+      "name": "新春犬塚牙",
+      "subId": 902040901,
+      "subName": "新春犬塚牙替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 912040,
+      "name": "新春赤丸",
+      "subId": 912040901,
+      "subName": "新春赤丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902050,
+      "name": "替身术_新春井野",
+      "subId": 902050901,
+      "subName": "替身术_新春井野",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900520,
+      "name": "仙人自来也",
+      "subId": 900520901,
+      "subName": "仙人自来也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901880,
+      "name": "替身术_卡鲁伊",
+      "subId": 901880901,
+      "subName": "替身术_卡鲁伊",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900960,
+      "name": "惊门凯",
+      "subId": 900960901,
+      "subName": "惊门凯替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900910,
+      "name": "达鲁伊",
+      "subId": 900910901,
+      "subName": "达鲁伊替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901490,
+      "name": "替身术_佩恩[修罗道]",
+      "subId": 901490901,
+      "subName": "替身术_佩恩[修罗道]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901620,
+      "name": "奥摩伊",
+      "subId": 901620901,
+      "subName": "奥摩伊替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901840,
+      "name": "替身术_希",
+      "subId": 901840901,
+      "subName": "替身术_希",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900630,
+      "name": "替身术_志村团藏",
+      "subId": 900630901,
+      "subName": "替身术_志村团藏",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902260,
+      "name": "一尾我爱罗",
+      "subId": 902260901,
+      "subName": "一尾我爱罗替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901730,
+      "name": "小南[青蛙小队]",
+      "subId": 901730901,
+      "subName": "小南[青蛙小队]替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900590,
+      "name": "鹰佐",
+      "subId": 900590901,
+      "subName": "鹰佐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902240,
+      "name": "替身术_萨姆伊",
+      "subId": 902240901,
+      "subName": "替身术_萨姆伊",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902170,
+      "name": "替身术_鹰水月",
+      "subId": 902170901,
+      "subName": "替身术_鹰水月",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901770,
+      "name": "替身术_黑土",
+      "subId": 901770901,
+      "subName": "替身术_黑土",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902250,
+      "name": "泳装纲手",
+      "subId": 902250901,
+      "subName": "泳装纲手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902230,
+      "name": "汉服宁次",
+      "subId": 902230901,
+      "subName": "汉服宁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900240,
+      "name": "千手柱间",
+      "subId": 900240901,
+      "subName": "千手柱间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907770,
+      "name": "千手柱间",
+      "subId": 907770901,
+      "subName": "千手柱间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902420,
+      "name": "忍界大战勘九郎",
+      "subId": 902420901,
+      "subName": "忍界大战勘九郎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901790,
+      "name": "帕库拉",
+      "subId": 901790901,
+      "subName": "帕库拉替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902060,
+      "name": "猫儿鼬",
+      "subId": 902060901,
+      "subName": "猫儿鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902270,
+      "name": "君麻吕",
+      "subId": 902270901,
+      "subName": "君麻吕替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901550,
+      "name": "栗霰串丸",
+      "subId": 901550901,
+      "subName": "栗霰串丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900800,
+      "name": "青",
+      "subId": 900800901,
+      "subName": "青替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900610,
+      "name": "照美冥",
+      "subId": 900610901,
+      "subName": "照美冥替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900790,
+      "name": "长十郎",
+      "subId": 900790901,
+      "subName": "长十郎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900920,
+      "name": "三船",
+      "subId": 900920901,
+      "subName": "三船替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902280,
+      "name": "替身术_圣诞香燐",
+      "subId": 902280901,
+      "subName": "替身术_圣诞香燐",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908730,
+      "name": "宇智波斑",
+      "subId": 908730901,
+      "subName": "宇智波斑替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900880,
+      "name": "汉",
+      "subId": 900880901,
+      "subName": "汉替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902630,
+      "name": "波风水门",
+      "subId": 902630901,
+      "subName": "波风水门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902610,
+      "name": "新春静音",
+      "subId": 902610901,
+      "subName": "新春静音替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901460,
+      "name": "不知火玄间",
+      "subId": 901460901,
+      "subName": "不知火玄间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 911460,
+      "name": "不知火玄间",
+      "subId": 911460901,
+      "subName": "不知火玄间替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 902620,
+      "name": "新春玖辛奈",
+      "subId": 902620901,
+      "subName": "新春玖辛奈替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901570,
+      "name": "替身术_无梨甚八",
+      "subId": 901570901,
+      "subName": "替身术_无梨甚八",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902320,
+      "name": "替身术_山中井野[忍界大战]",
+      "subId": 902320901,
+      "subName": "替身术_山中井野[忍界大战]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902360,
+      "name": "忍战志乃",
+      "subId": 902360901,
+      "subName": "忍战志乃替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900620,
+      "name": "大野木",
+      "subId": 900620901,
+      "subName": "大野木替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901990,
+      "name": "替身术_秽土次郎坊",
+      "subId": 901990901,
+      "subName": "替身术_秽土次郎坊",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902000,
+      "name": "替身术_秽土鬼童丸",
+      "subId": 902000901,
+      "subName": "替身术_秽土鬼童丸",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901030,
+      "name": "鬼灯幻月",
+      "subId": 901030901,
+      "subName": "鬼灯幻月替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902660,
+      "name": "",
+      "subId": 902660901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902670,
+      "name": "少年自来也",
+      "subId": 902670901,
+      "subName": "少年自来也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902460,
+      "name": "秽土阿斯玛",
+      "subId": 902460901,
+      "subName": "秽土阿斯玛替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902640,
+      "name": "替身术_泳装李洛克",
+      "subId": 902640901,
+      "subName": "替身术_泳装李洛克",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902720,
+      "name": "秽土日斩",
+      "subId": 902720901,
+      "subName": "秽土日斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902710,
+      "name": "天天",
+      "subId": 902710901,
+      "subName": "天天替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901820,
+      "name": "金角银角",
+      "subId": 901820901,
+      "subName": "金角银角替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 911820,
+      "name": "银角",
+      "subId": 911820901,
+      "subName": "银角替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 902070,
+      "name": "少年之水",
+      "subId": 902070901,
+      "subName": "少年之水替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902740,
+      "name": "疾风咒佐",
+      "subId": 902740901,
+      "subName": "疾风咒佐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908790,
+      "name": "疾风咒佐",
+      "subId": 908790901,
+      "subName": "疾风咒佐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902750,
+      "name": "忍站萨姆伊",
+      "subId": 902750901,
+      "subName": "忍站萨姆伊替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902760,
+      "name": "圣诞黑土",
+      "subId": 902760901,
+      "subName": "圣诞黑土替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902810,
+      "name": "新春雏田",
+      "subId": 902810901,
+      "subName": "新春雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902220,
+      "name": "冬日限定玖辛奈",
+      "subId": 902220901,
+      "subName": "冬日限定玖辛奈替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903560,
+      "name": "无差别鸣人",
+      "subId": 903560901,
+      "subName": "无差别鸣人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903320,
+      "name": "摩托伊",
+      "subId": 903320901,
+      "subName": "摩托伊替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902540,
+      "name": "百机千代",
+      "subId": 902540901,
+      "subName": "百机千代替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901940,
+      "name": "加藤断",
+      "subId": 901940901,
+      "subName": "加藤断替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 911940,
+      "name": "加藤断灵体",
+      "subId": 911940901,
+      "subName": "加藤断灵体替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904010,
+      "name": "百豪樱",
+      "subId": 904010901,
+      "subName": "百豪樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902370,
+      "name": "忍战宁次",
+      "subId": 902370901,
+      "subName": "忍战宁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902510,
+      "name": "漂泊再不斩",
+      "subId": 902510901,
+      "subName": "漂泊再不斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904380,
+      "name": "漂泊再不斩",
+      "subId": 904380901,
+      "subName": "漂泊再不斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902910,
+      "name": "晓创生飞段",
+      "subId": 902910901,
+      "subName": "晓创生飞段替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904040,
+      "name": "侠隐江湖纲手",
+      "subId": 904040901,
+      "subName": "侠隐江湖纲手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904150,
+      "name": "侠隐江湖纲手",
+      "subId": 904150901,
+      "subName": "侠隐江湖纲手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990940,
+      "name": "猿飞未来",
+      "subId": 990940901,
+      "subName": "猿飞未来替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 991770,
+      "name": "黑土博人传",
+      "subId": 991770901,
+      "subName": "黑土博人传替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902450,
+      "name": "死门凯",
+      "subId": 902450901,
+      "subName": "死门凯替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902780,
+      "name": "油女取根",
+      "subId": 902780901,
+      "subName": "油女取根替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990030,
+      "name": "巳月",
+      "subId": 990030901,
+      "subName": "巳月替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902840,
+      "name": "佐井",
+      "subId": 902840901,
+      "subName": "佐井替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990100,
+      "name": "梅塔尔·李",
+      "subId": 990100901,
+      "subName": "梅塔尔·李替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903810,
+      "name": "神秘面具男",
+      "subId": 903810901,
+      "subName": "神秘面具男替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903820,
+      "name": "漩涡面麻",
+      "subId": 903820901,
+      "subName": "漩涡面麻替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903170,
+      "name": "斑",
+      "subId": 903170901,
+      "subName": "斑替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903960,
+      "name": "宗师小李",
+      "subId": 903960901,
+      "subName": "宗师小李替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902290,
+      "name": "替身术_佐井",
+      "subId": 902290901,
+      "subName": "替身术_佐井",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901010,
+      "name": "波风水门秽土转生",
+      "subId": 901010901,
+      "subName": "波风水门秽土转生替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901470,
+      "name": "山城青叶",
+      "subId": 901470901,
+      "subName": "山城青叶替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902790,
+      "name": "新春鼬",
+      "subId": 902790901,
+      "subName": "新春鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902800,
+      "name": "新春志乃",
+      "subId": 902800901,
+      "subName": "新春志乃替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902960,
+      "name": "",
+      "subId": 902960901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902180,
+      "name": "鹰香燐",
+      "subId": 902180901,
+      "subName": "鹰香燐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902350,
+      "name": "忍战牙",
+      "subId": 902350901,
+      "subName": "忍战牙替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 982070,
+      "name": "少年之水",
+      "subId": 982070901,
+      "subName": "少年之水替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 982060,
+      "name": "猫儿鼬",
+      "subId": 982060901,
+      "subName": "猫儿鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 912350,
+      "name": "忍战赤丸",
+      "subId": 912350901,
+      "subName": "忍战赤丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900820,
+      "name": "替身术_兜",
+      "subId": 900820901,
+      "subName": "替身术_兜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903890,
+      "name": "照美冥",
+      "subId": 903890901,
+      "subName": "照美冥替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901610,
+      "name": "林檎雨由利",
+      "subId": 901610901,
+      "subName": "林檎雨由利替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901850,
+      "name": "黄土",
+      "subId": 901850901,
+      "subName": "黄土替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990010,
+      "name": "博人",
+      "subId": 990010901,
+      "subName": "博人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902980,
+      "name": "奇拉比",
+      "subId": 902980901,
+      "subName": "奇拉比替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902950,
+      "name": "静香",
+      "subId": 902950901,
+      "subName": "静香替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907820,
+      "name": "静香",
+      "subId": 907820901,
+      "subName": "静香替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900990,
+      "name": "金鸣",
+      "subId": 900990901,
+      "subName": "金鸣替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908720,
+      "name": "神威坐",
+      "subId": 908720901,
+      "subName": "神威坐",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903100,
+      "name": "替身术_卯月夕颜",
+      "subId": 903100901,
+      "subName": "替身术_卯月夕颜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 983100,
+      "name": "替身术_卯月夕颜",
+      "subId": 983100901,
+      "subName": "替身术_卯月夕颜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902520,
+      "name": "白",
+      "subId": 902520901,
+      "subName": "白替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903090,
+      "name": "月光疾风",
+      "subId": 903090901,
+      "subName": "月光疾风替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 983090,
+      "name": "月光疾风",
+      "subId": 983090901,
+      "subName": "月光疾风替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900900,
+      "name": "枫",
+      "subId": 900900901,
+      "subName": "枫替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901100,
+      "name": "暴怒带土",
+      "subId": 901100901,
+      "subName": "暴怒带土替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902830,
+      "name": "替身术_山中井野[忍界大战]",
+      "subId": 902830901,
+      "subName": "替身术_山中井野[忍界大战]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902010,
+      "name": "替身术_左近右近",
+      "subId": 902010901,
+      "subName": "替身术_左近右近",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903490,
+      "name": "替身术_天天[忍者少女]",
+      "subId": 903490901,
+      "subName": "替身术_天天[忍者少女]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901930,
+      "name": "半藏",
+      "subId": 901930901,
+      "subName": "半藏替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902880,
+      "name": "晓创生蝎",
+      "subId": 902880901,
+      "subName": "晓创生蝎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990090,
+      "name": "木叶丸",
+      "subId": 990090901,
+      "subName": "木叶丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908690,
+      "name": "木叶丸",
+      "subId": 908690901,
+      "subName": "木叶丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900810,
+      "name": "替身术_白面具",
+      "subId": 900810901,
+      "subName": "替身术_白面具",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901800,
+      "name": "替身术_狩",
+      "subId": 901800901,
+      "subName": "替身术_狩",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902430,
+      "name": "卡卡西",
+      "subId": 902430901,
+      "subName": "卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901480,
+      "name": "并足雷同",
+      "subId": 901480901,
+      "subName": "并足雷同替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903520,
+      "name": "冬日限定小樱",
+      "subId": 903520901,
+      "subName": "冬日限定小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904100,
+      "name": "赛事限定小樱",
+      "subId": 904100901,
+      "subName": "赛事限定小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903550,
+      "name": "新春小南",
+      "subId": 903550901,
+      "subName": "新春小南替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903540,
+      "name": "新春宁次",
+      "subId": 903540901,
+      "subName": "新春宁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990040,
+      "name": "萌黄",
+      "subId": 990040901,
+      "subName": "萌黄替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990020,
+      "name": "佐良娜",
+      "subId": 990020901,
+      "subName": "佐良娜替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903510,
+      "name": "替身术_樱[忍者少女]",
+      "subId": 903510901,
+      "subName": "替身术_樱[忍者少女]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902560,
+      "name": "罗砂",
+      "subId": 902560901,
+      "subName": "罗砂替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902480,
+      "name": "迪达拉",
+      "subId": 902480901,
+      "subName": "迪达拉替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903000,
+      "name": "少年长门",
+      "subId": 903000901,
+      "subName": "少年长门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990050,
+      "name": "结乃岩部",
+      "subId": 990050901,
+      "subName": "结乃岩部替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902820,
+      "name": "",
+      "subId": 902820901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903570,
+      "name": "",
+      "subId": 903570901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901590,
+      "name": "西瓜山河豚鬼",
+      "subId": 901590901,
+      "subName": "西瓜山河豚鬼替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900970,
+      "name": "须佐佐助",
+      "subId": 900970901,
+      "subName": "须佐佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903600,
+      "name": "替身术_飞人李洛克",
+      "subId": 903600901,
+      "subName": "替身术_飞人李洛克",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903590,
+      "name": "夕日红·",
+      "subId": 903590901,
+      "subName": "夕日红·替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903580,
+      "name": "秽土阿斯玛",
+      "subId": 903580901,
+      "subName": "秽土阿斯玛替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902700,
+      "name": "替身术_仙人兜",
+      "subId": 902700901,
+      "subName": "替身术_仙人兜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901980,
+      "name": "多由也秽土转生",
+      "subId": 901980901,
+      "subName": "多由也秽土转生替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 911980,
+      "name": "怒鬼",
+      "subId": 911980901,
+      "subName": "怒鬼替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908040,
+      "name": "冬日限定小樱",
+      "subId": 908040901,
+      "subName": "冬日限定小樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908030,
+      "name": "金鸣",
+      "subId": 908030901,
+      "subName": "金鸣替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908050,
+      "name": "替身术_泳装李洛克",
+      "subId": 908050901,
+      "subName": "替身术_泳装李洛克",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908080,
+      "name": "卡卡西",
+      "subId": 908080901,
+      "subName": "卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908090,
+      "name": "鬼灯幻月",
+      "subId": 908090901,
+      "subName": "鬼灯幻月替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908140,
+      "name": "替身术_神秘面具男",
+      "subId": 908140901,
+      "subName": "替身术_神秘面具男",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908160,
+      "name": "佐良娜",
+      "subId": 908160901,
+      "subName": "佐良娜替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908170,
+      "name": "巳月",
+      "subId": 908170901,
+      "subName": "巳月替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908180,
+      "name": "博人",
+      "subId": 908180901,
+      "subName": "博人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908070,
+      "name": "忍战凯",
+      "subId": 908070901,
+      "subName": "忍战凯替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 901020,
+      "name": "千手柱间",
+      "subId": 901020901,
+      "subName": "千手柱间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908020,
+      "name": "须佐佐助",
+      "subId": 908020901,
+      "subName": "须佐佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908130,
+      "name": "",
+      "subId": 908130901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908150,
+      "name": "",
+      "subId": 908150901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908060,
+      "name": "替身术_飞人李洛克",
+      "subId": 908060901,
+      "subName": "替身术_飞人李洛克",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 903210,
+      "name": "佩恩·天道[超]",
+      "subId": 903210901,
+      "subName": "佩恩·天道[超]替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903900,
+      "name": "替身术_伊豆野山葵",
+      "subId": 903900901,
+      "subName": "替身术_伊豆野山葵",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904170,
+      "name": "漂泊小南",
+      "subId": 904170901,
+      "subName": "漂泊小南替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903020,
+      "name": "少年大蛇丸",
+      "subId": 903020901,
+      "subName": "少年大蛇丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903610,
+      "name": "替身术_飞段[恶灵之影]",
+      "subId": 903610901,
+      "subName": "替身术_飞段[恶灵之影]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903350,
+      "name": "二位由木人",
+      "subId": 903350901,
+      "subName": "二位由木人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901870,
+      "name": "替身术_赤土",
+      "subId": 901870901,
+      "subName": "替身术_赤土",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902110,
+      "name": "川剧自来也",
+      "subId": 902110901,
+      "subName": "川剧自来也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903640,
+      "name": "迪达拉",
+      "subId": 903640901,
+      "subName": "迪达拉替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903620,
+      "name": "替身术_白面具",
+      "subId": 903620901,
+      "subName": "替身术_白面具",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903630,
+      "name": "天使小南",
+      "subId": 903630901,
+      "subName": "天使小南替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902390,
+      "name": "替身术_天天[忍界大战]",
+      "subId": 902390901,
+      "subName": "替身术_天天[忍界大战]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904240,
+      "name": "",
+      "subId": 904240901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990060,
+      "name": "替身术_伊豆野山葵",
+      "subId": 990060901,
+      "subName": "替身术_伊豆野山葵",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903290,
+      "name": "新春丁次",
+      "subId": 903290901,
+      "subName": "新春丁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903300,
+      "name": "替身术_佐井[新春限定]",
+      "subId": 903300901,
+      "subName": "替身术_佐井[新春限定]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903310,
+      "name": "替身术_新春止水",
+      "subId": 903310901,
+      "subName": "替身术_新春止水",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903010,
+      "name": "少女纲手",
+      "subId": 903010901,
+      "subName": "少女纲手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990070,
+      "name": "乌冬伊",
+      "subId": 990070901,
+      "subName": "乌冬伊替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903500,
+      "name": "女团小樱",
+      "subId": 903500901,
+      "subName": "女团小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901810,
+      "name": "奇拉比",
+      "subId": 901810901,
+      "subName": "奇拉比替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907780,
+      "name": "奇拉比",
+      "subId": 907780901,
+      "subName": "奇拉比替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903360,
+      "name": "新佩恩六道矢仓",
+      "subId": 903360901,
+      "subName": "新佩恩六道矢仓替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902990,
+      "name": "小弥彦",
+      "subId": 902990901,
+      "subName": "小弥彦替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903340,
+      "name": "替身术_武士二代",
+      "subId": 903340901,
+      "subName": "替身术_武士二代",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990080,
+      "name": "山中井阵",
+      "subId": 990080901,
+      "subName": "山中井阵替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903780,
+      "name": "卡卡西",
+      "subId": 903780901,
+      "subName": "卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903070,
+      "name": "忍战香燐",
+      "subId": 903070901,
+      "subName": "忍战香燐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903770,
+      "name": "泳装静音",
+      "subId": 903770901,
+      "subName": "泳装静音替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903760,
+      "name": "三船",
+      "subId": 903760901,
+      "subName": "三船替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903790,
+      "name": "咏春宁次",
+      "subId": 903790901,
+      "subName": "咏春宁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903800,
+      "name": "雏田",
+      "subId": 903800901,
+      "subName": "雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903840,
+      "name": "伊鲁卡",
+      "subId": 903840901,
+      "subName": "伊鲁卡替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903830,
+      "name": "替身术_丸星古介",
+      "subId": 903830901,
+      "subName": "替身术_丸星古介",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901140,
+      "name": "替身术_白面具",
+      "subId": 901140901,
+      "subName": "替身术_白面具",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902310,
+      "name": "忍战鹿丸",
+      "subId": 902310901,
+      "subName": "忍战鹿丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903480,
+      "name": "迈特戴",
+      "subId": 903480901,
+      "subName": "迈特戴替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902770,
+      "name": "山中风",
+      "subId": 902770901,
+      "subName": "山中风替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903980,
+      "name": "青年阿斯玛",
+      "subId": 903980901,
+      "subName": "青年阿斯玛替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990120,
+      "name": "尤鲁伊",
+      "subId": 990120901,
+      "subName": "尤鲁伊替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990790,
+      "name": "长十郎",
+      "subId": 990790901,
+      "subName": "长十郎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904120,
+      "name": "我爱罗",
+      "subId": 904120901,
+      "subName": "我爱罗替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 914120,
+      "name": "沙手",
+      "subId": 914120901,
+      "subName": "沙手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990110,
+      "name": "蝶蝶",
+      "subId": 990110901,
+      "subName": "蝶蝶替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903860,
+      "name": "新春黑土",
+      "subId": 903860901,
+      "subName": "新春黑土替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903460,
+      "name": "紫阳花",
+      "subId": 903460901,
+      "subName": "紫阳花替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990910,
+      "name": "达鲁伊博人传",
+      "subId": 990910901,
+      "subName": "达鲁伊博人传替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903370,
+      "name": "老紫",
+      "subId": 903370901,
+      "subName": "老紫替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902870,
+      "name": "圣诞红豆",
+      "subId": 902870901,
+      "subName": "圣诞红豆替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903880,
+      "name": "迪达拉",
+      "subId": 903880901,
+      "subName": "迪达拉替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903260,
+      "name": "密卷技_艾",
+      "subId": 903260901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990510,
+      "name": "密卷技_艾",
+      "subId": 990510901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904070,
+      "name": "密卷技_艾",
+      "subId": 904070901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904130,
+      "name": "密卷技_艾",
+      "subId": 904130901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903940,
+      "name": "花花公子佐助",
+      "subId": 903940901,
+      "subName": "花花公子佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903950,
+      "name": "替身技_帕库拉",
+      "subId": 903950901,
+      "subName": "替身技_帕库拉",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903390,
+      "name": "新佩恩羽高",
+      "subId": 903390901,
+      "subName": "新佩恩羽高替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903400,
+      "name": "新佩恩枫-替身技",
+      "subId": 903400901,
+      "subName": "新佩恩枫-替身技",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904000,
+      "name": "贰",
+      "subId": 904000901,
+      "subName": "贰替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901650,
+      "name": "替身技_鬼灯满月",
+      "subId": 901650901,
+      "subName": "替身技_鬼灯满月",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904180,
+      "name": "替身技_君麻吕",
+      "subId": 904180901,
+      "subName": "替身技_君麻吕",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904060,
+      "name": "红夜鼬",
+      "subId": 904060901,
+      "subName": "红夜鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904140,
+      "name": "新春大和",
+      "subId": 904140901,
+      "subName": "新春大和替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908190,
+      "name": "白",
+      "subId": 908190901,
+      "subName": "白替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908200,
+      "name": "漂泊再不斩",
+      "subId": 908200901,
+      "subName": "漂泊再不斩替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908210,
+      "name": "替身术_武士二代",
+      "subId": 908210901,
+      "subName": "替身术_武士二代",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909170,
+      "name": "少年卡卡西·",
+      "subId": 909170901,
+      "subName": "少年卡卡西·替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908230,
+      "name": "少年卡卡西·",
+      "subId": 908230901,
+      "subName": "少年卡卡西·替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909120,
+      "name": "佐助",
+      "subId": 909120901,
+      "subName": "佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908240,
+      "name": "佐助",
+      "subId": 908240901,
+      "subName": "佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908220,
+      "name": "少年大蛇丸",
+      "subId": 908220901,
+      "subName": "少年大蛇丸替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908250,
+      "name": "少年大蛇丸",
+      "subId": 908250901,
+      "subName": "少年大蛇丸替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908260,
+      "name": "山中井阵",
+      "subId": 908260901,
+      "subName": "山中井阵替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909260,
+      "name": "李洛克",
+      "subId": 909260901,
+      "subName": "李洛克替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908270,
+      "name": "泳装纲手",
+      "subId": 908270901,
+      "subName": "泳装纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908280,
+      "name": "小南",
+      "subId": 908280901,
+      "subName": "小南替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908290,
+      "name": "照美冥",
+      "subId": 908290901,
+      "subName": "照美冥替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908300,
+      "name": "千手柱间",
+      "subId": 908300901,
+      "subName": "千手柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908510,
+      "name": "波风水门",
+      "subId": 908510901,
+      "subName": "波风水门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908520,
+      "name": "小南",
+      "subId": 908520901,
+      "subName": "小南替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908530,
+      "name": "佩恩·天道",
+      "subId": 908530901,
+      "subName": "佩恩·天道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908540,
+      "name": "卡卡西",
+      "subId": 908540901,
+      "subName": "卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908550,
+      "name": "自来也",
+      "subId": 908550901,
+      "subName": "自来也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908560,
+      "name": "纲手",
+      "subId": 908560901,
+      "subName": "纲手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908570,
+      "name": "大蛇丸",
+      "subId": 908570901,
+      "subName": "大蛇丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908580,
+      "name": "鬼鲛",
+      "subId": 908580901,
+      "subName": "鬼鲛替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908590,
+      "name": "宇智波鼬",
+      "subId": 908590901,
+      "subName": "宇智波鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908600,
+      "name": "",
+      "subId": 908600901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908610,
+      "name": "蝎",
+      "subId": 908610901,
+      "subName": "蝎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908620,
+      "name": "角都",
+      "subId": 908620901,
+      "subName": "角都替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908630,
+      "name": "再不斩",
+      "subId": 908630901,
+      "subName": "再不斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907700,
+      "name": "迪达拉",
+      "subId": 907700901,
+      "subName": "迪达拉替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907720,
+      "name": "大蛇丸晓",
+      "subId": 907720901,
+      "subName": "大蛇丸晓替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907750,
+      "name": "替身术_萨克·镫",
+      "subId": 907750901,
+      "subName": "替身术_萨克·镫",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907760,
+      "name": "替身术_仙人兜",
+      "subId": 907760901,
+      "subName": "替身术_仙人兜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907830,
+      "name": "",
+      "subId": 907830901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907840,
+      "name": "宗师小李",
+      "subId": 907840901,
+      "subName": "宗师小李替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907850,
+      "name": "咏春宁次",
+      "subId": 907850901,
+      "subName": "咏春宁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907590,
+      "name": "宇智波鼬",
+      "subId": 907590901,
+      "subName": "宇智波鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907600,
+      "name": "",
+      "subId": 907600901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907740,
+      "name": "梅塔尔·李",
+      "subId": 907740901,
+      "subName": "梅塔尔·李替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903870,
+      "name": "新春赤土",
+      "subId": 903870901,
+      "subName": "新春赤土替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903920,
+      "name": "大野木",
+      "subId": 903920901,
+      "subName": "大野木替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903380,
+      "name": "六道汉",
+      "subId": 903380901,
+      "subName": "六道汉替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903930,
+      "name": "漂泊佩恩",
+      "subId": 903930901,
+      "subName": "漂泊佩恩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903050,
+      "name": "少年柱间",
+      "subId": 903050901,
+      "subName": "少年柱间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904200,
+      "name": "少年扉间",
+      "subId": 904200901,
+      "subName": "少年扉间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902940,
+      "name": "青年长门",
+      "subId": 902940901,
+      "subName": "青年长门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908700,
+      "name": "宇智波鼬",
+      "subId": 908700901,
+      "subName": "宇智波鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908760,
+      "name": "青",
+      "subId": 908760901,
+      "subName": "青替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908780,
+      "name": "暴怒带土",
+      "subId": 908780901,
+      "subName": "暴怒带土替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908670,
+      "name": "大蛇丸晓",
+      "subId": 908670901,
+      "subName": "大蛇丸晓替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908640,
+      "name": "鹰佐",
+      "subId": 908640901,
+      "subName": "鹰佐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903990,
+      "name": "卑留呼",
+      "subId": 903990901,
+      "subName": "卑留呼替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904160,
+      "name": "壹、叁[火之意志继承者]",
+      "subId": 904160901,
+      "subName": "壹、叁[火之意志继承者]替身术",
+      "frames": 3,
+      "seconds": 0.1
+    },
+    {
+      "ninjaId": 914160,
+      "name": "壹[火之意志继承者]",
+      "subId": 914160901,
+      "subName": "壹[火之意志继承者]替身术",
+      "frames": 3,
+      "seconds": 0.1
+    },
+    {
+      "ninjaId": 914170,
+      "name": "叁[火之意志继承者]",
+      "subId": 914170901,
+      "subName": "叁[火之意志继承者]替身术",
+      "frames": 3,
+      "seconds": 0.1
+    },
+    {
+      "ninjaId": 901510,
+      "name": "人间道",
+      "subId": 901510901,
+      "subName": "人间道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903700,
+      "name": "秽土白",
+      "subId": 903700901,
+      "subName": "秽土白替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904030,
+      "name": "红夜带土",
+      "subId": 904030901,
+      "subName": "红夜带土替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907510,
+      "name": "波风水门",
+      "subId": 907510901,
+      "subName": "波风水门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907520,
+      "name": "小南",
+      "subId": 907520901,
+      "subName": "小南替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907530,
+      "name": "佩恩·天道",
+      "subId": 907530901,
+      "subName": "佩恩·天道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907670,
+      "name": "鹰佐",
+      "subId": 907670901,
+      "subName": "鹰佐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907680,
+      "name": "金鸣",
+      "subId": 907680901,
+      "subName": "金鸣替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904110,
+      "name": "创立柱间",
+      "subId": 904110901,
+      "subName": "创立柱间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907800,
+      "name": "老紫",
+      "subId": 907800901,
+      "subName": "老紫替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 999990,
+      "name": "测试雏田",
+      "subId": 999990901,
+      "subName": "测试雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909010,
+      "name": "鸣人",
+      "subId": 909010901,
+      "subName": "鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909020,
+      "name": "疾风传鸣人",
+      "subId": 909020901,
+      "subName": "疾风传鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909030,
+      "name": "替身术_漩涡鸣人[新春限定]",
+      "subId": 909030901,
+      "subName": "替身术_漩涡鸣人[新春限定]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909040,
+      "name": "",
+      "subId": 909040901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909050,
+      "name": "替身术_鸣人[四尾]",
+      "subId": 909050901,
+      "subName": "替身术_鸣人[四尾]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909060,
+      "name": "仙人鸣人",
+      "subId": 909060901,
+      "subName": "仙人鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909070,
+      "name": "鸣人",
+      "subId": 909070901,
+      "subName": "鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909080,
+      "name": "自来也",
+      "subId": 909080901,
+      "subName": "自来也替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909110,
+      "name": "佐助",
+      "subId": 909110901,
+      "subName": "佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909130,
+      "name": "唐装佐助",
+      "subId": 909130901,
+      "subName": "唐装佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909140,
+      "name": "咒印佐助",
+      "subId": 909140901,
+      "subName": "咒印佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909150,
+      "name": "青年佐助",
+      "subId": 909150901,
+      "subName": "青年佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909160,
+      "name": "鹰佐",
+      "subId": 909160901,
+      "subName": "鹰佐替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909180,
+      "name": "暗部卡卡西",
+      "subId": 909180901,
+      "subName": "暗部卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909190,
+      "name": "新春卡卡西",
+      "subId": 909190901,
+      "subName": "新春卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909200,
+      "name": "卡卡西",
+      "subId": 909200901,
+      "subName": "卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909210,
+      "name": "神威卡卡西",
+      "subId": 909210901,
+      "subName": "神威卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909220,
+      "name": "青年我爱罗",
+      "subId": 909220901,
+      "subName": "青年我爱罗替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909230,
+      "name": "迪达拉",
+      "subId": 909230901,
+      "subName": "迪达拉替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909240,
+      "name": "木叶丸军团",
+      "subId": 909240901,
+      "subName": "木叶丸军团替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909250,
+      "name": "佩恩·天道",
+      "subId": 909250901,
+      "subName": "佩恩·天道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909270,
+      "name": "大蛇丸",
+      "subId": 909270901,
+      "subName": "大蛇丸替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 902570,
+      "name": "少年柱间",
+      "subId": 902570901,
+      "subName": "少年柱间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902580,
+      "name": "宇智波斑",
+      "subId": 902580901,
+      "subName": "宇智波斑替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902590,
+      "name": "少年柱间",
+      "subId": 902590901,
+      "subName": "少年柱间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902600,
+      "name": "少年柱间",
+      "subId": 902600901,
+      "subName": "少年柱间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903080,
+      "name": "暗部卡卡西",
+      "subId": 903080901,
+      "subName": "暗部卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907060,
+      "name": "宠物",
+      "subId": 907060901,
+      "subName": "宠物替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 907070,
+      "name": "宠物",
+      "subId": 907070901,
+      "subName": "宠物替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 907080,
+      "name": "宠物",
+      "subId": 907080901,
+      "subName": "宠物替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 907090,
+      "name": "宠物",
+      "subId": 907090901,
+      "subName": "宠物替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 902190,
+      "name": "",
+      "subId": 902190901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902650,
+      "name": "小南",
+      "subId": 902650901,
+      "subName": "小南替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902410,
+      "name": "",
+      "subId": 902410901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901890,
+      "name": "",
+      "subId": 901890901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909280,
+      "name": "宇智波鼬",
+      "subId": 909280901,
+      "subName": "宇智波鼬替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909290,
+      "name": "替身术_须佐鼬",
+      "subId": 909290901,
+      "subName": "替身术_须佐鼬",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909300,
+      "name": "小樱",
+      "subId": 909300901,
+      "subName": "小樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909310,
+      "name": "青年小樱",
+      "subId": 909310901,
+      "subName": "青年小樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909320,
+      "name": "泳装小樱",
+      "subId": 909320901,
+      "subName": "泳装小樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909330,
+      "name": "替身术_春野樱[新春限定]",
+      "subId": 909330901,
+      "subName": "替身术_春野樱[新春限定]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909340,
+      "name": "百豪樱",
+      "subId": 909340901,
+      "subName": "百豪樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909350,
+      "name": "替身术_长发樱",
+      "subId": 909350901,
+      "subName": "替身术_长发樱",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909360,
+      "name": "纲手",
+      "subId": 909360901,
+      "subName": "纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909400,
+      "name": "天天",
+      "subId": 909400901,
+      "subName": "天天替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909410,
+      "name": "替身术_天天[疾风传]",
+      "subId": 909410901,
+      "subName": "替身术_天天[疾风传]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909420,
+      "name": "替身术_圣诞天天",
+      "subId": 909420901,
+      "subName": "替身术_圣诞天天",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909430,
+      "name": "白",
+      "subId": 909430901,
+      "subName": "白替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909440,
+      "name": "照美冥",
+      "subId": 909440901,
+      "subName": "照美冥替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909500,
+      "name": "替身术_水月",
+      "subId": 909500901,
+      "subName": "替身术_水月",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909510,
+      "name": "替身术_鹰水月",
+      "subId": 909510901,
+      "subName": "替身术_鹰水月",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909520,
+      "name": "鬼鲛",
+      "subId": 909520901,
+      "subName": "鬼鲛替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909530,
+      "name": "鬼灯幻月",
+      "subId": 909530901,
+      "subName": "鬼灯幻月替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909540,
+      "name": "干柿鬼鲛",
+      "subId": 909540901,
+      "subName": "干柿鬼鲛替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 902680,
+      "name": "",
+      "subId": 902680901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904090,
+      "name": "",
+      "subId": 904090901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908390,
+      "name": "九喇嘛鸣人",
+      "subId": 908390901,
+      "subName": "九喇嘛鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908400,
+      "name": "永恒万花筒佐助",
+      "subId": 908400901,
+      "subName": "永恒万花筒佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908410,
+      "name": "百豪樱",
+      "subId": 908410901,
+      "subName": "百豪樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 900890,
+      "name": "羽高",
+      "subId": 900890901,
+      "subName": "羽高替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909660,
+      "name": "惊门凯",
+      "subId": 909660901,
+      "subName": "惊门凯替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909650,
+      "name": "替身术_李洛克[疾风传]",
+      "subId": 909650901,
+      "subName": "替身术_李洛克[疾风传]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909640,
+      "name": "替身术_醉拳李",
+      "subId": 909640901,
+      "subName": "替身术_醉拳李",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909630,
+      "name": "",
+      "subId": 909630901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909620,
+      "name": "李洛克",
+      "subId": 909620901,
+      "subName": "李洛克替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909610,
+      "name": "花火",
+      "subId": 909610901,
+      "subName": "花火替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909600,
+      "name": "花火",
+      "subId": 909600901,
+      "subName": "花火替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 901040,
+      "name": "无",
+      "subId": 901040901,
+      "subName": "无替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 911040,
+      "name": "无",
+      "subId": 911040901,
+      "subName": "无替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909670,
+      "name": "奇拉比",
+      "subId": 909670901,
+      "subName": "奇拉比替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909680,
+      "name": "奇拉比",
+      "subId": 909680901,
+      "subName": "奇拉比替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909690,
+      "name": "缓存搬运工",
+      "subId": 909690901,
+      "subName": "缓存搬运工替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909700,
+      "name": "宇智波斑",
+      "subId": 909700901,
+      "subName": "宇智波斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909710,
+      "name": "宇智波斑",
+      "subId": 909710901,
+      "subName": "宇智波斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909720,
+      "name": "木叶丸军团",
+      "subId": 909720901,
+      "subName": "木叶丸军团替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909730,
+      "name": "鹿丸",
+      "subId": 909730901,
+      "subName": "鹿丸替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980320,
+      "name": "再不斩",
+      "subId": 980320901,
+      "subName": "再不斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980330,
+      "name": "会跳的家伙失败",
+      "subId": 980330901,
+      "subName": "会跳的家伙失败",
+      "frames": 240,
+      "seconds": 8
+    },
+    {
+      "ninjaId": 950050,
+      "name": "帕克",
+      "subId": 950050901,
+      "subName": "帕克替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 950060,
+      "name": "豚豚",
+      "subId": 950060901,
+      "subName": "豚豚替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 950100,
+      "name": "赤丸",
+      "subId": 950100901,
+      "subName": "赤丸替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 908100,
+      "name": "金角银角",
+      "subId": 908100901,
+      "subName": "金角银角替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908110,
+      "name": "金角银角",
+      "subId": 908110901,
+      "subName": "金角银角替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908120,
+      "name": "金角银角",
+      "subId": 908120901,
+      "subName": "金角银角替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908010,
+      "name": "疾风咒佐",
+      "subId": 908010901,
+      "subName": "疾风咒佐替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 907640,
+      "name": "千手扉间",
+      "subId": 907640901,
+      "subName": "千手扉间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907730,
+      "name": "替身术_托斯",
+      "subId": 907730901,
+      "subName": "替身术_托斯",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907650,
+      "name": "宇智波斑",
+      "subId": 907650901,
+      "subName": "宇智波斑替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907660,
+      "name": "秽土日斩",
+      "subId": 907660901,
+      "subName": "秽土日斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907710,
+      "name": "青年我爱罗",
+      "subId": 907710901,
+      "subName": "青年我爱罗替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907610,
+      "name": "蝎",
+      "subId": 907610901,
+      "subName": "蝎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903970,
+      "name": "凯",
+      "subId": 903970901,
+      "subName": "凯替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904260,
+      "name": "最终章鹿丸",
+      "subId": 904260901,
+      "subName": "最终章鹿丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904360,
+      "name": "不动",
+      "subId": 904360901,
+      "subName": "不动替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904220,
+      "name": "",
+      "subId": 904220901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901500,
+      "name": "",
+      "subId": 901500901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907900,
+      "name": "月光疾风",
+      "subId": 907900901,
+      "subName": "月光疾风替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907910,
+      "name": "惠比寿",
+      "subId": 907910901,
+      "subName": "惠比寿替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907920,
+      "name": "",
+      "subId": 907920901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907930,
+      "name": "替身术_希",
+      "subId": 907930901,
+      "subName": "替身术_希",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907940,
+      "name": "不知火玄间",
+      "subId": 907940901,
+      "subName": "不知火玄间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 917940,
+      "name": "不知火玄间",
+      "subId": 917940901,
+      "subName": "不知火玄间替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 907950,
+      "name": "迈特凯",
+      "subId": 907950901,
+      "subName": "迈特凯替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907990,
+      "name": "三船",
+      "subId": 907990901,
+      "subName": "三船替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908000,
+      "name": "畜生道",
+      "subId": 908000901,
+      "subName": "畜生道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908800,
+      "name": "丁次",
+      "subId": 908800901,
+      "subName": "丁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908810,
+      "name": "通灵兽_犬牙",
+      "subId": 908810901,
+      "subName": "通灵兽_犬牙",
+      "frames": 600,
+      "seconds": 20
+    },
+    {
+      "ninjaId": 907860,
+      "name": "神威卡卡西",
+      "subId": 907860901,
+      "subName": "神威卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907870,
+      "name": "替身术_金·槌",
+      "subId": 907870901,
+      "subName": "替身术_金·槌",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907880,
+      "name": "小推车嗝屁",
+      "subId": 907880901,
+      "subName": "小推车嗝屁",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907890,
+      "name": "百豪纲手",
+      "subId": 907890901,
+      "subName": "百豪纲手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908330,
+      "name": "少年柱间",
+      "subId": 908330901,
+      "subName": "少年柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908340,
+      "name": "少年柱间",
+      "subId": 908340901,
+      "subName": "少年柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908430,
+      "name": "死门凯",
+      "subId": 908430901,
+      "subName": "死门凯替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908450,
+      "name": "少女纲手",
+      "subId": 908450901,
+      "subName": "少女纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908350,
+      "name": "替身术_天天[忍者少女]",
+      "subId": 908350901,
+      "subName": "替身术_天天[忍者少女]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 918040,
+      "name": "雷遁·最强之铠",
+      "subId": 918040901,
+      "subName": "雷遁·最强之铠",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900120,
+      "name": "纲手",
+      "subId": 900120901,
+      "subName": "纲手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900130,
+      "name": "迈特凯",
+      "subId": 900130901,
+      "subName": "迈特凯替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900210,
+      "name": "大蛇丸",
+      "subId": 900210901,
+      "subName": "大蛇丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900320,
+      "name": "再不斩",
+      "subId": 900320901,
+      "subName": "再不斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900400,
+      "name": "百机蝎",
+      "subId": 900400901,
+      "subName": "百机蝎替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900540,
+      "name": "替身术_须佐鼬",
+      "subId": 900540901,
+      "subName": "替身术_须佐鼬",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900570,
+      "name": "小南",
+      "subId": 900570901,
+      "subName": "小南替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900600,
+      "name": "密卷技_艾",
+      "subId": 900600901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900640,
+      "name": "木叶丸军团",
+      "subId": 900640901,
+      "subName": "木叶丸军团替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900650,
+      "name": "少年带土",
+      "subId": 900650901,
+      "subName": "少年带土替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900750,
+      "name": "夕日红·",
+      "subId": 900750901,
+      "subName": "夕日红·替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900830,
+      "name": "百豪纲手",
+      "subId": 900830901,
+      "subName": "百豪纲手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900840,
+      "name": "",
+      "subId": 900840901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900940,
+      "name": "替身术_宇智波止水",
+      "subId": 900940901,
+      "subName": "替身术_宇智波止水",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900950,
+      "name": "神威卡卡西",
+      "subId": 900950901,
+      "subName": "神威卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900980,
+      "name": "长门",
+      "subId": 900980901,
+      "subName": "长门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901000,
+      "name": "宇智波斑",
+      "subId": 901000901,
+      "subName": "宇智波斑替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901060,
+      "name": "宇智波斑",
+      "subId": 901060901,
+      "subName": "宇智波斑替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901090,
+      "name": "替身术_李洛克[疾风传]",
+      "subId": 901090901,
+      "subName": "替身术_李洛克[疾风传]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901200,
+      "name": "替身术_卯月夕颜",
+      "subId": 901200901,
+      "subName": "替身术_卯月夕颜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901440,
+      "name": "神月出云",
+      "subId": 901440901,
+      "subName": "神月出云替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901450,
+      "name": "钢子铁",
+      "subId": 901450901,
+      "subName": "钢子铁替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901520,
+      "name": "地狱道",
+      "subId": 901520901,
+      "subName": "地狱道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901640,
+      "name": "青年自来也",
+      "subId": 901640901,
+      "subName": "青年自来也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901660,
+      "name": "干柿鬼鲛",
+      "subId": 901660901,
+      "subName": "干柿鬼鲛替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901830,
+      "name": "千手扉间",
+      "subId": 901830901,
+      "subName": "千手扉间替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901900,
+      "name": "红莲",
+      "subId": 901900901,
+      "subName": "红莲替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901910,
+      "name": "大蛇丸晓",
+      "subId": 901910901,
+      "subName": "大蛇丸晓替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 901970,
+      "name": "地陆",
+      "subId": 901970901,
+      "subName": "地陆替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902140,
+      "name": "药师野乃宇",
+      "subId": 902140901,
+      "subName": "药师野乃宇替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902200,
+      "name": "青年日斩",
+      "subId": 902200901,
+      "subName": "青年日斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902300,
+      "name": "百豪樱",
+      "subId": 902300901,
+      "subName": "百豪樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902330,
+      "name": "忍战丁次",
+      "subId": 902330901,
+      "subName": "忍战丁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902380,
+      "name": "密卷技_艾",
+      "subId": 902380901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902400,
+      "name": "青年我爱罗",
+      "subId": 902400901,
+      "subName": "青年我爱罗替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902440,
+      "name": "",
+      "subId": 902440901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902490,
+      "name": "",
+      "subId": 902490901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902500,
+      "name": "秽土角都",
+      "subId": 902500901,
+      "subName": "秽土角都替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902550,
+      "name": "三代雷影",
+      "subId": 902550901,
+      "subName": "三代雷影替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902690,
+      "name": "替身术_机械鸣人",
+      "subId": 902690901,
+      "subName": "替身术_机械鸣人",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902860,
+      "name": "照美冥",
+      "subId": 902860901,
+      "subName": "照美冥替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902890,
+      "name": "",
+      "subId": 902890901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903060,
+      "name": "少年斑",
+      "subId": 903060901,
+      "subName": "少年斑替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903120,
+      "name": "九喇嘛鸣人",
+      "subId": 903120901,
+      "subName": "九喇嘛鸣人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903130,
+      "name": "永恒万花筒佐助",
+      "subId": 903130901,
+      "subName": "永恒万花筒佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903150,
+      "name": "",
+      "subId": 903150901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903160,
+      "name": "波风水门",
+      "subId": 903160901,
+      "subName": "波风水门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903200,
+      "name": "替身术[三代风影]",
+      "subId": 903200901,
+      "subName": "替身术[三代风影]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903220,
+      "name": "",
+      "subId": 903220901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903230,
+      "name": "忍战凯",
+      "subId": 903230901,
+      "subName": "忍战凯替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903240,
+      "name": "波风水门青年",
+      "subId": 903240901,
+      "subName": "波风水门青年替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903330,
+      "name": "猿飞日斩",
+      "subId": 903330901,
+      "subName": "猿飞日斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903720,
+      "name": "",
+      "subId": 903720901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903750,
+      "name": "鬼鲛超",
+      "subId": 903750901,
+      "subName": "鬼鲛超替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903850,
+      "name": "不风",
+      "subId": 903850901,
+      "subName": "不风替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 903910,
+      "name": "替身术_战损大蛇丸",
+      "subId": 903910901,
+      "subName": "替身术_战损大蛇丸",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904020,
+      "name": "替身技_中秋鸣人",
+      "subId": 904020901,
+      "subName": "替身技_中秋鸣人",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904050,
+      "name": "密卷技_艾",
+      "subId": 904050901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904080,
+      "name": "百战水门",
+      "subId": 904080901,
+      "subName": "百战水门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904190,
+      "name": "真容卡卡西",
+      "subId": 904190901,
+      "subName": "真容卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904210,
+      "name": "密卷技_艾",
+      "subId": 904210901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904230,
+      "name": "",
+      "subId": 904230901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904250,
+      "name": "密卷技_艾",
+      "subId": 904250901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904270,
+      "name": "秽土疾风",
+      "subId": 904270901,
+      "subName": "秽土疾风替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904280,
+      "name": "",
+      "subId": 904280901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904310,
+      "name": "",
+      "subId": 904310901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904320,
+      "name": "",
+      "subId": 904320901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904370,
+      "name": "夕日红·",
+      "subId": 904370901,
+      "subName": "夕日红·替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904390,
+      "name": "",
+      "subId": 904390901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904400,
+      "name": "",
+      "subId": 904400901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904420,
+      "name": "",
+      "subId": 904420901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904430,
+      "name": "密卷技_艾",
+      "subId": 904430901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904440,
+      "name": "替身术_龙马",
+      "subId": 904440901,
+      "subName": "替身术_龙马",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904450,
+      "name": "",
+      "subId": 904450901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904460,
+      "name": "",
+      "subId": 904460901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904470,
+      "name": "马基",
+      "subId": 904470901,
+      "subName": "马基替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904480,
+      "name": "",
+      "subId": 904480901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904490,
+      "name": "佐井",
+      "subId": 904490901,
+      "subName": "佐井替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904500,
+      "name": "阿三",
+      "subId": 904500901,
+      "subName": "阿三替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904530,
+      "name": "琳·",
+      "subId": 904530901,
+      "subName": "琳·替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904540,
+      "name": "密卷技_艾",
+      "subId": 904540901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904550,
+      "name": "",
+      "subId": 904550901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904560,
+      "name": "",
+      "subId": 904560901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904570,
+      "name": "",
+      "subId": 904570901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904580,
+      "name": "忍战夕颜",
+      "subId": 904580901,
+      "subName": "忍战夕颜替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904590,
+      "name": "密卷技_艾",
+      "subId": 904590901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904810,
+      "name": "密卷技_艾",
+      "subId": 904810901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904600,
+      "name": "",
+      "subId": 904600901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904620,
+      "name": "",
+      "subId": 904620901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904640,
+      "name": "",
+      "subId": 904640901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904650,
+      "name": "",
+      "subId": 904650901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904660,
+      "name": "畜生道",
+      "subId": 904660901,
+      "subName": "畜生道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904670,
+      "name": "",
+      "subId": 904670901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904680,
+      "name": "冬日静音-",
+      "subId": 904680901,
+      "subName": "冬日静音-替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904690,
+      "name": "",
+      "subId": 904690901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904720,
+      "name": "",
+      "subId": 904720901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904740,
+      "name": "",
+      "subId": 904740901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904750,
+      "name": "",
+      "subId": 904750901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905210,
+      "name": "",
+      "subId": 905210901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904760,
+      "name": "",
+      "subId": 904760901,
+      "subName": "替身",
+      "frames": 150,
+      "seconds": 5
+    },
+    {
+      "ninjaId": 904770,
+      "name": "",
+      "subId": 904770901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904790,
+      "name": "密卷技_艾",
+      "subId": 904790901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 914790,
+      "name": "密卷技_艾",
+      "subId": 914790901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 924790,
+      "name": "密卷技_艾",
+      "subId": 924790901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904800,
+      "name": "卡卡西",
+      "subId": 904800901,
+      "subName": "卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904820,
+      "name": "",
+      "subId": 904820901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904830,
+      "name": "",
+      "subId": 904830901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904840,
+      "name": "",
+      "subId": 904840901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904850,
+      "name": "",
+      "subId": 904850901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904860,
+      "name": "",
+      "subId": 904860901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904870,
+      "name": "",
+      "subId": 904870901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904880,
+      "name": "",
+      "subId": 904880901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904890,
+      "name": "新春鼬",
+      "subId": 904890901,
+      "subName": "新春鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904900,
+      "name": "新春鼬",
+      "subId": 904900901,
+      "subName": "新春鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904930,
+      "name": "神驹天天",
+      "subId": 904930901,
+      "subName": "神驹天天替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 904940,
+      "name": "",
+      "subId": 904940901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905000,
+      "name": "",
+      "subId": 905000901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905010,
+      "name": "十周年鸣佐",
+      "subId": 905010901,
+      "subName": "十周年鸣佐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905030,
+      "name": "",
+      "subId": 905030901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905040,
+      "name": "",
+      "subId": 905040901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905110,
+      "name": "",
+      "subId": 905110901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905120,
+      "name": "",
+      "subId": 905120901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905130,
+      "name": "",
+      "subId": 905130901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905170,
+      "name": "密卷技_艾",
+      "subId": 905170901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905180,
+      "name": "",
+      "subId": 905180901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905190,
+      "name": "惠比寿",
+      "subId": 905190901,
+      "subName": "惠比寿替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905220,
+      "name": "密卷技_艾",
+      "subId": 905220901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905230,
+      "name": "传说纲手",
+      "subId": 905230901,
+      "subName": "传说纲手替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905250,
+      "name": "功夫雏田",
+      "subId": 905250901,
+      "subName": "功夫雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905260,
+      "name": "功夫雏田",
+      "subId": 905260901,
+      "subName": "功夫雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905340,
+      "name": "小樱",
+      "subId": 905340901,
+      "subName": "小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905350,
+      "name": "小樱",
+      "subId": 905350901,
+      "subName": "小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905360,
+      "name": "",
+      "subId": 905360901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905370,
+      "name": "十周年鸣自",
+      "subId": 905370901,
+      "subName": "十周年鸣自替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907960,
+      "name": "人间道",
+      "subId": 907960901,
+      "subName": "人间道替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907970,
+      "name": "替身术_通草野饵人",
+      "subId": 907970901,
+      "subName": "替身术_通草野饵人",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 907980,
+      "name": "乌冬伊",
+      "subId": 907980901,
+      "subName": "乌冬伊替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908360,
+      "name": "替身术_天天[忍界大战]",
+      "subId": 908360901,
+      "subName": "替身术_天天[忍界大战]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908370,
+      "name": "",
+      "subId": 908370901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908380,
+      "name": "天天",
+      "subId": 908380901,
+      "subName": "天天替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908420,
+      "name": "迈特戴",
+      "subId": 908420901,
+      "subName": "迈特戴替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908440,
+      "name": "少年扉间",
+      "subId": 908440901,
+      "subName": "少年扉间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908820,
+      "name": "阿斯玛",
+      "subId": 908820901,
+      "subName": "阿斯玛替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908830,
+      "name": "木叶丸军团",
+      "subId": 908830901,
+      "subName": "木叶丸军团替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908840,
+      "name": "仙人自来也",
+      "subId": 908840901,
+      "subName": "仙人自来也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908850,
+      "name": "秽土日斩",
+      "subId": 908850901,
+      "subName": "秽土日斩替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908860,
+      "name": "替身术_白面具",
+      "subId": 908860901,
+      "subName": "替身术_白面具",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908870,
+      "name": "波风水门秽土转生",
+      "subId": 908870901,
+      "subName": "波风水门秽土转生替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908880,
+      "name": "千手柱间",
+      "subId": 908880901,
+      "subName": "千手柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908890,
+      "name": "长门",
+      "subId": 908890901,
+      "subName": "长门替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908900,
+      "name": "替身术_神秘面具男",
+      "subId": 908900901,
+      "subName": "替身术_神秘面具男",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908910,
+      "name": "密卷技_艾",
+      "subId": 908910901,
+      "subName": "密卷技_艾",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908920,
+      "name": "佩恩·天道",
+      "subId": 908920901,
+      "subName": "佩恩·天道替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908930,
+      "name": "替身术_仙人兜",
+      "subId": 908930901,
+      "subName": "替身术_仙人兜",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908940,
+      "name": "百豪纲手",
+      "subId": 908940901,
+      "subName": "百豪纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908950,
+      "name": "替身术_白面具",
+      "subId": 908950901,
+      "subName": "替身术_白面具",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908960,
+      "name": "",
+      "subId": 908960901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908970,
+      "name": "疾风传鸣人",
+      "subId": 908970901,
+      "subName": "疾风传鸣人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908980,
+      "name": "青年佐助",
+      "subId": 908980901,
+      "subName": "青年佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 908990,
+      "name": "疾风雏田",
+      "subId": 908990901,
+      "subName": "疾风雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909000,
+      "name": "青年宁次",
+      "subId": 909000901,
+      "subName": "青年宁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909090,
+      "name": "少年卡卡西·",
+      "subId": 909090901,
+      "subName": "少年卡卡西·替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909100,
+      "name": "少年带土",
+      "subId": 909100901,
+      "subName": "少年带土替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909370,
+      "name": "青年鹿丸",
+      "subId": 909370901,
+      "subName": "青年鹿丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909380,
+      "name": "",
+      "subId": 909380901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909450,
+      "name": "少年长门",
+      "subId": 909450901,
+      "subName": "少年长门替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909460,
+      "name": "小弥彦",
+      "subId": 909460901,
+      "subName": "小弥彦替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909470,
+      "name": "替身术_李洛克[疾风传]",
+      "subId": 909470901,
+      "subName": "替身术_李洛克[疾风传]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909480,
+      "name": "替身术_天天[疾风传]",
+      "subId": 909480901,
+      "subName": "替身术_天天[疾风传]",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909490,
+      "name": "替身术_三忍纲手",
+      "subId": 909490901,
+      "subName": "替身术_三忍纲手",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909550,
+      "name": "青年自来也",
+      "subId": 909550901,
+      "subName": "青年自来也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909560,
+      "name": "青年犬塚牙",
+      "subId": 909560901,
+      "subName": "青年犬塚牙替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909570,
+      "name": "志乃",
+      "subId": 909570901,
+      "subName": "志乃替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909580,
+      "name": "",
+      "subId": 909580901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909590,
+      "name": "青年小樱",
+      "subId": 909590901,
+      "subName": "青年小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909740,
+      "name": "少年斑",
+      "subId": 909740901,
+      "subName": "少年斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909750,
+      "name": "少年斑",
+      "subId": 909750901,
+      "subName": "少年斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909770,
+      "name": "木叶丸军团",
+      "subId": 909770901,
+      "subName": "木叶丸军团替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 909780,
+      "name": "惠比寿",
+      "subId": 909780901,
+      "subName": "惠比寿替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 910320,
+      "name": "再不斩",
+      "subId": 910320901,
+      "subName": "再不斩替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 913220,
+      "name": "",
+      "subId": 913220901,
+      "subName": "替身",
+      "frames": 30,
+      "seconds": 1
+    },
+    {
+      "ninjaId": 914320,
+      "name": "",
+      "subId": 914320901,
+      "subName": "替身",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 914570,
+      "name": "",
+      "subId": 914570901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 915000,
+      "name": "",
+      "subId": 915000901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 915010,
+      "name": "十周年鸣佐",
+      "subId": 915010901,
+      "subName": "十周年鸣佐替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 915370,
+      "name": "十周年鸣自",
+      "subId": 915370901,
+      "subName": "十周年鸣自替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 924320,
+      "name": "",
+      "subId": 924320901,
+      "subName": "替身",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 943350,
+      "name": "卡卡西",
+      "subId": 943350901,
+      "subName": "卡卡西替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980010,
+      "name": "替身术_仙人兜",
+      "subId": 980010901,
+      "subName": "替身术_仙人兜",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980020,
+      "name": "替身术_白面具",
+      "subId": 980020901,
+      "subName": "替身术_白面具",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980030,
+      "name": "替身术_白面具",
+      "subId": 980030901,
+      "subName": "替身术_白面具",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980040,
+      "name": "替身术_神秘面具男",
+      "subId": 980040901,
+      "subName": "替身术_神秘面具男",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980050,
+      "name": "九喇嘛鸣人",
+      "subId": 980050901,
+      "subName": "九喇嘛鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980060,
+      "name": "波风水门",
+      "subId": 980060901,
+      "subName": "波风水门替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980070,
+      "name": "",
+      "subId": 980070901,
+      "subName": "替身",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980080,
+      "name": "千手柱间",
+      "subId": 980080901,
+      "subName": "千手柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980090,
+      "name": "千手扉间",
+      "subId": 980090901,
+      "subName": "千手扉间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980100,
+      "name": "秽土日斩",
+      "subId": 980100901,
+      "subName": "秽土日斩替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980110,
+      "name": "永恒万花筒佐助",
+      "subId": 980110901,
+      "subName": "永恒万花筒佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980120,
+      "name": "密卷技_艾",
+      "subId": 980120901,
+      "subName": "密卷技_艾",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980130,
+      "name": "",
+      "subId": 980130901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980140,
+      "name": "",
+      "subId": 980140901,
+      "subName": "替身",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980150,
+      "name": "长门",
+      "subId": 980150901,
+      "subName": "长门替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980160,
+      "name": "和风自来也",
+      "subId": 980160901,
+      "subName": "和风自来也替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980170,
+      "name": "波风水门秽土转生",
+      "subId": 980170901,
+      "subName": "波风水门秽土转生替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980180,
+      "name": "佩恩·天道",
+      "subId": 980180901,
+      "subName": "佩恩·天道替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980190,
+      "name": "佩恩·天道[超]",
+      "subId": 980190901,
+      "subName": "佩恩·天道[超]替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980200,
+      "name": "死门凯",
+      "subId": 980200901,
+      "subName": "死门凯替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980210,
+      "name": "宇智波斑",
+      "subId": 980210901,
+      "subName": "宇智波斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980220,
+      "name": "百豪樱",
+      "subId": 980220901,
+      "subName": "百豪樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980240,
+      "name": "千手柱间",
+      "subId": 980240901,
+      "subName": "千手柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980230,
+      "name": "创立柱间",
+      "subId": 980230901,
+      "subName": "创立柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980250,
+      "name": "大筒木桃式",
+      "subId": 980250901,
+      "subName": "大筒木桃式替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980260,
+      "name": "斑",
+      "subId": 980260901,
+      "subName": "斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980270,
+      "name": "百豪纲手",
+      "subId": 980270901,
+      "subName": "百豪纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980280,
+      "name": "千手扉间",
+      "subId": 980280901,
+      "subName": "千手扉间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980290,
+      "name": "密卷技_艾",
+      "subId": 980290901,
+      "subName": "密卷技_艾",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980300,
+      "name": "红夜带土",
+      "subId": 980300901,
+      "subName": "红夜带土替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980310,
+      "name": "鹰佐",
+      "subId": 980310901,
+      "subName": "鹰佐替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980340,
+      "name": "百豪樱",
+      "subId": 980340901,
+      "subName": "百豪樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980350,
+      "name": "忍战宁次",
+      "subId": 980350901,
+      "subName": "忍战宁次替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980360,
+      "name": "新春鼬",
+      "subId": 980360901,
+      "subName": "新春鼬替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980370,
+      "name": "替身术_兜",
+      "subId": 980370901,
+      "subName": "替身术_兜",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980400,
+      "name": "宇智波鼬",
+      "subId": 980400901,
+      "subName": "宇智波鼬替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980410,
+      "name": "漂泊再不斩",
+      "subId": 980410901,
+      "subName": "漂泊再不斩替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980420,
+      "name": "青年我爱罗",
+      "subId": 980420901,
+      "subName": "青年我爱罗替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980430,
+      "name": "",
+      "subId": 980430901,
+      "subName": "替身",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980440,
+      "name": "替身术_武士二代",
+      "subId": 980440901,
+      "subName": "替身术_武士二代",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980450,
+      "name": "",
+      "subId": 980450901,
+      "subName": "替身",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980470,
+      "name": "替身术_新春止水",
+      "subId": 980470901,
+      "subName": "替身术_新春止水",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980480,
+      "name": "鬼鲛",
+      "subId": 980480901,
+      "subName": "鬼鲛替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980490,
+      "name": "密卷技_艾",
+      "subId": 980490901,
+      "subName": "密卷技_艾",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980500,
+      "name": "黑土博人传",
+      "subId": 980500901,
+      "subName": "黑土博人传替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980510,
+      "name": "神秘面具男",
+      "subId": 980510901,
+      "subName": "神秘面具男替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980520,
+      "name": "新春小南",
+      "subId": 980520901,
+      "subName": "新春小南替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980530,
+      "name": "井野",
+      "subId": 980530901,
+      "subName": "井野替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980540,
+      "name": "丁次",
+      "subId": 980540901,
+      "subName": "丁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980560,
+      "name": "李洛克",
+      "subId": 980560901,
+      "subName": "李洛克替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980580,
+      "name": "牙",
+      "subId": 980580901,
+      "subName": "牙替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980590,
+      "name": "天天",
+      "subId": 980590901,
+      "subName": "天天替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980600,
+      "name": "雏田",
+      "subId": 980600901,
+      "subName": "雏田替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980610,
+      "name": "鹿丸",
+      "subId": 980610901,
+      "subName": "鹿丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980620,
+      "name": "宁次",
+      "subId": 980620901,
+      "subName": "宁次替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980630,
+      "name": "志乃",
+      "subId": 980630901,
+      "subName": "志乃替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980640,
+      "name": "我爱罗",
+      "subId": 980640901,
+      "subName": "我爱罗替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980650,
+      "name": "君麻吕",
+      "subId": 980650901,
+      "subName": "君麻吕替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980660,
+      "name": "青年佐助",
+      "subId": 980660901,
+      "subName": "青年佐助替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980670,
+      "name": "疾风传鸣人",
+      "subId": 980670901,
+      "subName": "疾风传鸣人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980680,
+      "name": "青年小樱",
+      "subId": 980680901,
+      "subName": "青年小樱替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980690,
+      "name": "替身术_兜",
+      "subId": 980690901,
+      "subName": "替身术_兜",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980700,
+      "name": "白",
+      "subId": 980700901,
+      "subName": "白替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980710,
+      "name": "咒印君麻吕",
+      "subId": 980710901,
+      "subName": "咒印君麻吕替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980720,
+      "name": "青年鹿丸",
+      "subId": 980720901,
+      "subName": "青年鹿丸替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980740,
+      "name": "木叶丸军团",
+      "subId": 980740901,
+      "subName": "木叶丸军团替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980750,
+      "name": "",
+      "subId": 980750901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 980760,
+      "name": "猫儿鼬",
+      "subId": 980760901,
+      "subName": "猫儿鼬替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990130,
+      "name": "",
+      "subId": 990130901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990150,
+      "name": "新希",
+      "subId": 990150901,
+      "subName": "新希替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990170,
+      "name": "荒谷",
+      "subId": 990170901,
+      "subName": "荒谷替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990180,
+      "name": "鹿台",
+      "subId": 990180901,
+      "subName": "鹿台替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990500,
+      "name": "大筒木桃式",
+      "subId": 990500901,
+      "subName": "大筒木桃式替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990520,
+      "name": "",
+      "subId": 990520901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990550,
+      "name": "",
+      "subId": 990550901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990560,
+      "name": "替身术_白面具",
+      "subId": 990560901,
+      "subName": "替身术_白面具",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 990570,
+      "name": "",
+      "subId": 990570901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 991010,
+      "name": "楔二博人",
+      "subId": 991010901,
+      "subName": "楔二博人替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 991030,
+      "name": "巳月",
+      "subId": 991030901,
+      "subName": "巳月替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 995550,
+      "name": "",
+      "subId": 995550901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 902100,
+      "name": "和风自来也",
+      "subId": 902100901,
+      "subName": "和风自来也替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905380,
+      "name": "",
+      "subId": 905380901,
+      "subName": "替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905320,
+      "name": "",
+      "subId": 905320901,
+      "subName": "替身",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 900250,
+      "name": "火遁·豪火球之术",
+      "subId": 900250901,
+      "subName": "火遁·豪火球之术",
+      "frames": 360,
+      "seconds": 12
+    },
+    {
+      "ninjaId": 904950,
+      "name": "密卷技_艾",
+      "subId": 904950901,
+      "subName": "密卷技_艾",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905300,
+      "name": "后退",
+      "subId": 905300901,
+      "subName": "后退",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905270,
+      "name": "百战虎皮",
+      "subId": 905270901,
+      "subName": "百战虎皮替身术",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905390,
+      "name": "萤火之夏！",
+      "subId": 905390901,
+      "subName": "萤火之夏！",
+      "frames": 450,
+      "seconds": 15
+    },
+    {
+      "ninjaId": 905450,
+      "name": "飞段",
+      "subId": 905450901,
+      "subName": "飞段替身术",
+      "frames": 450,
+      "seconds": 15
+    }
+  ],
+  "exceptions": [
+    {
+      "ninjaId": 910410,
+      "name": "妈妈",
+      "subId": 910410901,
+      "subName": "妈妈替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 908310,
+      "name": "",
+      "subId": 908310901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908320,
+      "name": "",
+      "subId": 908320901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 911460,
+      "name": "不知火玄间",
+      "subId": 911460901,
+      "subName": "不知火玄间替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 911820,
+      "name": "银角",
+      "subId": 911820901,
+      "subName": "银角替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 908040,
+      "name": "冬日限定小樱",
+      "subId": 908040901,
+      "subName": "冬日限定小樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908030,
+      "name": "金鸣",
+      "subId": 908030901,
+      "subName": "金鸣替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908050,
+      "name": "替身术_泳装李洛克",
+      "subId": 908050901,
+      "subName": "替身术_泳装李洛克",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908080,
+      "name": "卡卡西",
+      "subId": 908080901,
+      "subName": "卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908090,
+      "name": "鬼灯幻月",
+      "subId": 908090901,
+      "subName": "鬼灯幻月替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908140,
+      "name": "替身术_神秘面具男",
+      "subId": 908140901,
+      "subName": "替身术_神秘面具男",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908160,
+      "name": "佐良娜",
+      "subId": 908160901,
+      "subName": "佐良娜替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908170,
+      "name": "巳月",
+      "subId": 908170901,
+      "subName": "巳月替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908180,
+      "name": "博人",
+      "subId": 908180901,
+      "subName": "博人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908070,
+      "name": "忍战凯",
+      "subId": 908070901,
+      "subName": "忍战凯替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908020,
+      "name": "须佐佐助",
+      "subId": 908020901,
+      "subName": "须佐佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908130,
+      "name": "",
+      "subId": 908130901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908150,
+      "name": "",
+      "subId": 908150901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908060,
+      "name": "替身术_飞人李洛克",
+      "subId": 908060901,
+      "subName": "替身术_飞人李洛克",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908190,
+      "name": "白",
+      "subId": 908190901,
+      "subName": "白替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908200,
+      "name": "漂泊再不斩",
+      "subId": 908200901,
+      "subName": "漂泊再不斩替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908210,
+      "name": "替身术_武士二代",
+      "subId": 908210901,
+      "subName": "替身术_武士二代",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909170,
+      "name": "少年卡卡西·",
+      "subId": 909170901,
+      "subName": "少年卡卡西·替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908230,
+      "name": "少年卡卡西·",
+      "subId": 908230901,
+      "subName": "少年卡卡西·替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909120,
+      "name": "佐助",
+      "subId": 909120901,
+      "subName": "佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908240,
+      "name": "佐助",
+      "subId": 908240901,
+      "subName": "佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908220,
+      "name": "少年大蛇丸",
+      "subId": 908220901,
+      "subName": "少年大蛇丸替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908250,
+      "name": "少年大蛇丸",
+      "subId": 908250901,
+      "subName": "少年大蛇丸替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908260,
+      "name": "山中井阵",
+      "subId": 908260901,
+      "subName": "山中井阵替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909260,
+      "name": "李洛克",
+      "subId": 909260901,
+      "subName": "李洛克替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908270,
+      "name": "泳装纲手",
+      "subId": 908270901,
+      "subName": "泳装纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908280,
+      "name": "小南",
+      "subId": 908280901,
+      "subName": "小南替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908290,
+      "name": "照美冥",
+      "subId": 908290901,
+      "subName": "照美冥替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908300,
+      "name": "千手柱间",
+      "subId": 908300901,
+      "subName": "千手柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 904160,
+      "name": "壹、叁[火之意志继承者]",
+      "subId": 904160901,
+      "subName": "壹、叁[火之意志继承者]替身术",
+      "frames": 3,
+      "seconds": 0.1
+    },
+    {
+      "ninjaId": 914160,
+      "name": "壹[火之意志继承者]",
+      "subId": 914160901,
+      "subName": "壹[火之意志继承者]替身术",
+      "frames": 3,
+      "seconds": 0.1
+    },
+    {
+      "ninjaId": 914170,
+      "name": "叁[火之意志继承者]",
+      "subId": 914170901,
+      "subName": "叁[火之意志继承者]替身术",
+      "frames": 3,
+      "seconds": 0.1
+    },
+    {
+      "ninjaId": 909010,
+      "name": "鸣人",
+      "subId": 909010901,
+      "subName": "鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909020,
+      "name": "疾风传鸣人",
+      "subId": 909020901,
+      "subName": "疾风传鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909030,
+      "name": "替身术_漩涡鸣人[新春限定]",
+      "subId": 909030901,
+      "subName": "替身术_漩涡鸣人[新春限定]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909040,
+      "name": "",
+      "subId": 909040901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909050,
+      "name": "替身术_鸣人[四尾]",
+      "subId": 909050901,
+      "subName": "替身术_鸣人[四尾]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909060,
+      "name": "仙人鸣人",
+      "subId": 909060901,
+      "subName": "仙人鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909070,
+      "name": "鸣人",
+      "subId": 909070901,
+      "subName": "鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909080,
+      "name": "自来也",
+      "subId": 909080901,
+      "subName": "自来也替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909130,
+      "name": "唐装佐助",
+      "subId": 909130901,
+      "subName": "唐装佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909140,
+      "name": "咒印佐助",
+      "subId": 909140901,
+      "subName": "咒印佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909150,
+      "name": "青年佐助",
+      "subId": 909150901,
+      "subName": "青年佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909160,
+      "name": "鹰佐",
+      "subId": 909160901,
+      "subName": "鹰佐替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909180,
+      "name": "暗部卡卡西",
+      "subId": 909180901,
+      "subName": "暗部卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909190,
+      "name": "新春卡卡西",
+      "subId": 909190901,
+      "subName": "新春卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909200,
+      "name": "卡卡西",
+      "subId": 909200901,
+      "subName": "卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909210,
+      "name": "神威卡卡西",
+      "subId": 909210901,
+      "subName": "神威卡卡西替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909220,
+      "name": "青年我爱罗",
+      "subId": 909220901,
+      "subName": "青年我爱罗替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909230,
+      "name": "迪达拉",
+      "subId": 909230901,
+      "subName": "迪达拉替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909240,
+      "name": "木叶丸军团",
+      "subId": 909240901,
+      "subName": "木叶丸军团替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909270,
+      "name": "大蛇丸",
+      "subId": 909270901,
+      "subName": "大蛇丸替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 907060,
+      "name": "宠物",
+      "subId": 907060901,
+      "subName": "宠物替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 907070,
+      "name": "宠物",
+      "subId": 907070901,
+      "subName": "宠物替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 907080,
+      "name": "宠物",
+      "subId": 907080901,
+      "subName": "宠物替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 907090,
+      "name": "宠物",
+      "subId": 907090901,
+      "subName": "宠物替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 909280,
+      "name": "宇智波鼬",
+      "subId": 909280901,
+      "subName": "宇智波鼬替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909300,
+      "name": "小樱",
+      "subId": 909300901,
+      "subName": "小樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909310,
+      "name": "青年小樱",
+      "subId": 909310901,
+      "subName": "青年小樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909320,
+      "name": "泳装小樱",
+      "subId": 909320901,
+      "subName": "泳装小樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909330,
+      "name": "替身术_春野樱[新春限定]",
+      "subId": 909330901,
+      "subName": "替身术_春野樱[新春限定]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909340,
+      "name": "百豪樱",
+      "subId": 909340901,
+      "subName": "百豪樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909350,
+      "name": "替身术_长发樱",
+      "subId": 909350901,
+      "subName": "替身术_长发樱",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909360,
+      "name": "纲手",
+      "subId": 909360901,
+      "subName": "纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909400,
+      "name": "天天",
+      "subId": 909400901,
+      "subName": "天天替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909420,
+      "name": "替身术_圣诞天天",
+      "subId": 909420901,
+      "subName": "替身术_圣诞天天",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909430,
+      "name": "白",
+      "subId": 909430901,
+      "subName": "白替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909440,
+      "name": "照美冥",
+      "subId": 909440901,
+      "subName": "照美冥替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909500,
+      "name": "替身术_水月",
+      "subId": 909500901,
+      "subName": "替身术_水月",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909510,
+      "name": "替身术_鹰水月",
+      "subId": 909510901,
+      "subName": "替身术_鹰水月",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909520,
+      "name": "鬼鲛",
+      "subId": 909520901,
+      "subName": "鬼鲛替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909530,
+      "name": "鬼灯幻月",
+      "subId": 909530901,
+      "subName": "鬼灯幻月替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909540,
+      "name": "干柿鬼鲛",
+      "subId": 909540901,
+      "subName": "干柿鬼鲛替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908390,
+      "name": "九喇嘛鸣人",
+      "subId": 908390901,
+      "subName": "九喇嘛鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908400,
+      "name": "永恒万花筒佐助",
+      "subId": 908400901,
+      "subName": "永恒万花筒佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908410,
+      "name": "百豪樱",
+      "subId": 908410901,
+      "subName": "百豪樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909660,
+      "name": "惊门凯",
+      "subId": 909660901,
+      "subName": "惊门凯替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909650,
+      "name": "替身术_李洛克[疾风传]",
+      "subId": 909650901,
+      "subName": "替身术_李洛克[疾风传]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909640,
+      "name": "替身术_醉拳李",
+      "subId": 909640901,
+      "subName": "替身术_醉拳李",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909630,
+      "name": "",
+      "subId": 909630901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909620,
+      "name": "李洛克",
+      "subId": 909620901,
+      "subName": "李洛克替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909610,
+      "name": "花火",
+      "subId": 909610901,
+      "subName": "花火替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909600,
+      "name": "花火",
+      "subId": 909600901,
+      "subName": "花火替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909670,
+      "name": "奇拉比",
+      "subId": 909670901,
+      "subName": "奇拉比替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909680,
+      "name": "奇拉比",
+      "subId": 909680901,
+      "subName": "奇拉比替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909690,
+      "name": "缓存搬运工",
+      "subId": 909690901,
+      "subName": "缓存搬运工替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909700,
+      "name": "宇智波斑",
+      "subId": 909700901,
+      "subName": "宇智波斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909710,
+      "name": "宇智波斑",
+      "subId": 909710901,
+      "subName": "宇智波斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909720,
+      "name": "木叶丸军团",
+      "subId": 909720901,
+      "subName": "木叶丸军团替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909730,
+      "name": "鹿丸",
+      "subId": 909730901,
+      "subName": "鹿丸替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980330,
+      "name": "会跳的家伙失败",
+      "subId": 980330901,
+      "subName": "会跳的家伙失败",
+      "frames": 240,
+      "seconds": 8
+    },
+    {
+      "ninjaId": 950050,
+      "name": "帕克",
+      "subId": 950050901,
+      "subName": "帕克替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 950060,
+      "name": "豚豚",
+      "subId": 950060901,
+      "subName": "豚豚替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 950100,
+      "name": "赤丸",
+      "subId": 950100901,
+      "subName": "赤丸替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 908100,
+      "name": "金角银角",
+      "subId": 908100901,
+      "subName": "金角银角替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908110,
+      "name": "金角银角",
+      "subId": 908110901,
+      "subName": "金角银角替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908010,
+      "name": "疾风咒佐",
+      "subId": 908010901,
+      "subName": "疾风咒佐替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 917940,
+      "name": "不知火玄间",
+      "subId": 917940901,
+      "subName": "不知火玄间替身术",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 908810,
+      "name": "通灵兽_犬牙",
+      "subId": 908810901,
+      "subName": "通灵兽_犬牙",
+      "frames": 600,
+      "seconds": 20
+    },
+    {
+      "ninjaId": 908330,
+      "name": "少年柱间",
+      "subId": 908330901,
+      "subName": "少年柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908340,
+      "name": "少年柱间",
+      "subId": 908340901,
+      "subName": "少年柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908430,
+      "name": "死门凯",
+      "subId": 908430901,
+      "subName": "死门凯替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908450,
+      "name": "少女纲手",
+      "subId": 908450901,
+      "subName": "少女纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908350,
+      "name": "替身术_天天[忍者少女]",
+      "subId": 908350901,
+      "subName": "替身术_天天[忍者少女]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 904760,
+      "name": "",
+      "subId": 904760901,
+      "subName": "替身",
+      "frames": 150,
+      "seconds": 5
+    },
+    {
+      "ninjaId": 908360,
+      "name": "替身术_天天[忍界大战]",
+      "subId": 908360901,
+      "subName": "替身术_天天[忍界大战]",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908370,
+      "name": "",
+      "subId": 908370901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908380,
+      "name": "天天",
+      "subId": 908380901,
+      "subName": "天天替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908420,
+      "name": "迈特戴",
+      "subId": 908420901,
+      "subName": "迈特戴替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908440,
+      "name": "少年扉间",
+      "subId": 908440901,
+      "subName": "少年扉间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908850,
+      "name": "秽土日斩",
+      "subId": 908850901,
+      "subName": "秽土日斩替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908860,
+      "name": "替身术_白面具",
+      "subId": 908860901,
+      "subName": "替身术_白面具",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908870,
+      "name": "波风水门秽土转生",
+      "subId": 908870901,
+      "subName": "波风水门秽土转生替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908880,
+      "name": "千手柱间",
+      "subId": 908880901,
+      "subName": "千手柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908890,
+      "name": "长门",
+      "subId": 908890901,
+      "subName": "长门替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908900,
+      "name": "替身术_神秘面具男",
+      "subId": 908900901,
+      "subName": "替身术_神秘面具男",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908910,
+      "name": "密卷技_艾",
+      "subId": 908910901,
+      "subName": "密卷技_艾",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908920,
+      "name": "佩恩·天道",
+      "subId": 908920901,
+      "subName": "佩恩·天道替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908930,
+      "name": "替身术_仙人兜",
+      "subId": 908930901,
+      "subName": "替身术_仙人兜",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908940,
+      "name": "百豪纲手",
+      "subId": 908940901,
+      "subName": "百豪纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908950,
+      "name": "替身术_白面具",
+      "subId": 908950901,
+      "subName": "替身术_白面具",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 908960,
+      "name": "",
+      "subId": 908960901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909740,
+      "name": "少年斑",
+      "subId": 909740901,
+      "subName": "少年斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 909750,
+      "name": "少年斑",
+      "subId": 909750901,
+      "subName": "少年斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 913220,
+      "name": "",
+      "subId": 913220901,
+      "subName": "替身",
+      "frames": 30,
+      "seconds": 1
+    },
+    {
+      "ninjaId": 914320,
+      "name": "",
+      "subId": 914320901,
+      "subName": "替身",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 924320,
+      "name": "",
+      "subId": 924320901,
+      "subName": "替身",
+      "frames": null,
+      "seconds": null
+    },
+    {
+      "ninjaId": 980010,
+      "name": "替身术_仙人兜",
+      "subId": 980010901,
+      "subName": "替身术_仙人兜",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980020,
+      "name": "替身术_白面具",
+      "subId": 980020901,
+      "subName": "替身术_白面具",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980030,
+      "name": "替身术_白面具",
+      "subId": 980030901,
+      "subName": "替身术_白面具",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980040,
+      "name": "替身术_神秘面具男",
+      "subId": 980040901,
+      "subName": "替身术_神秘面具男",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980050,
+      "name": "九喇嘛鸣人",
+      "subId": 980050901,
+      "subName": "九喇嘛鸣人替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980060,
+      "name": "波风水门",
+      "subId": 980060901,
+      "subName": "波风水门替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980070,
+      "name": "",
+      "subId": 980070901,
+      "subName": "替身",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980080,
+      "name": "千手柱间",
+      "subId": 980080901,
+      "subName": "千手柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980090,
+      "name": "千手扉间",
+      "subId": 980090901,
+      "subName": "千手扉间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980100,
+      "name": "秽土日斩",
+      "subId": 980100901,
+      "subName": "秽土日斩替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980110,
+      "name": "永恒万花筒佐助",
+      "subId": 980110901,
+      "subName": "永恒万花筒佐助替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980120,
+      "name": "密卷技_艾",
+      "subId": 980120901,
+      "subName": "密卷技_艾",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980130,
+      "name": "",
+      "subId": 980130901,
+      "subName": "替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980140,
+      "name": "",
+      "subId": 980140901,
+      "subName": "替身",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980150,
+      "name": "长门",
+      "subId": 980150901,
+      "subName": "长门替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980160,
+      "name": "和风自来也",
+      "subId": 980160901,
+      "subName": "和风自来也替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980170,
+      "name": "波风水门秽土转生",
+      "subId": 980170901,
+      "subName": "波风水门秽土转生替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980180,
+      "name": "佩恩·天道",
+      "subId": 980180901,
+      "subName": "佩恩·天道替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980190,
+      "name": "佩恩·天道[超]",
+      "subId": 980190901,
+      "subName": "佩恩·天道[超]替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980210,
+      "name": "宇智波斑",
+      "subId": 980210901,
+      "subName": "宇智波斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980220,
+      "name": "百豪樱",
+      "subId": 980220901,
+      "subName": "百豪樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980240,
+      "name": "千手柱间",
+      "subId": 980240901,
+      "subName": "千手柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980230,
+      "name": "创立柱间",
+      "subId": 980230901,
+      "subName": "创立柱间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980250,
+      "name": "大筒木桃式",
+      "subId": 980250901,
+      "subName": "大筒木桃式替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980260,
+      "name": "斑",
+      "subId": 980260901,
+      "subName": "斑替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980270,
+      "name": "百豪纲手",
+      "subId": 980270901,
+      "subName": "百豪纲手替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980280,
+      "name": "千手扉间",
+      "subId": 980280901,
+      "subName": "千手扉间替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980290,
+      "name": "密卷技_艾",
+      "subId": 980290901,
+      "subName": "密卷技_艾",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980300,
+      "name": "红夜带土",
+      "subId": 980300901,
+      "subName": "红夜带土替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980310,
+      "name": "鹰佐",
+      "subId": 980310901,
+      "subName": "鹰佐替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980340,
+      "name": "百豪樱",
+      "subId": 980340901,
+      "subName": "百豪樱替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980350,
+      "name": "忍战宁次",
+      "subId": 980350901,
+      "subName": "忍战宁次替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980360,
+      "name": "新春鼬",
+      "subId": 980360901,
+      "subName": "新春鼬替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980370,
+      "name": "替身术_兜",
+      "subId": 980370901,
+      "subName": "替身术_兜",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980400,
+      "name": "宇智波鼬",
+      "subId": 980400901,
+      "subName": "宇智波鼬替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980410,
+      "name": "漂泊再不斩",
+      "subId": 980410901,
+      "subName": "漂泊再不斩替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980420,
+      "name": "青年我爱罗",
+      "subId": 980420901,
+      "subName": "青年我爱罗替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980430,
+      "name": "",
+      "subId": 980430901,
+      "subName": "替身",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980440,
+      "name": "替身术_武士二代",
+      "subId": 980440901,
+      "subName": "替身术_武士二代",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980450,
+      "name": "",
+      "subId": 980450901,
+      "subName": "替身",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980470,
+      "name": "替身术_新春止水",
+      "subId": 980470901,
+      "subName": "替身术_新春止水",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980480,
+      "name": "鬼鲛",
+      "subId": 980480901,
+      "subName": "鬼鲛替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980490,
+      "name": "密卷技_艾",
+      "subId": 980490901,
+      "subName": "密卷技_艾",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980500,
+      "name": "黑土博人传",
+      "subId": 980500901,
+      "subName": "黑土博人传替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980510,
+      "name": "神秘面具男",
+      "subId": 980510901,
+      "subName": "神秘面具男替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 980520,
+      "name": "新春小南",
+      "subId": 980520901,
+      "subName": "新春小南替身术",
+      "frames": 300,
+      "seconds": 10
+    },
+    {
+      "ninjaId": 900250,
+      "name": "火遁·豪火球之术",
+      "subId": 900250901,
+      "subName": "火遁·豪火球之术",
+      "frames": 360,
+      "seconds": 12
+    }
+  ]
+}

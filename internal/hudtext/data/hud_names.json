@@ -1,0 +1,18 @@
+[
+  {
+    "name": "奈良鹿丸",
+    "catalog_base": "鹿丸",
+    "evidence": "inbox/regressions/duel-shikamaru-name-20260907.png"
+  },
+  {
+    "name": "猿飞木叶丸",
+    "catalog_base": "木叶丸",
+    "evidence": "debug/sessions/session-20260908-143709-1053886487/frames/000000133.png"
+  },
+  {
+    "name": "旗木卡卡西",
+    "catalog_base": "卡卡西",
+    "evidence": "debug/sessions/session-20260908-143709-1053886487/capture.jsonl",
+    "note": "Preserve the exact observed full spelling; this recording has no saved PNG for the Kakashi segment. Never infer other prefixes from it."
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "device": {
+    "processNames": ["MuMuNxDevice.exe", "MuMuPlayer.exe", "NemuPlayer.exe"],
+    "titlePatterns": ["MuMu"],
+    "selectionPolicy": "best-visible-client",
+    "restoreMinimized": false
+  },
+  "capture": {
+    "mumu": { "package": "com.tencent.KiHan", "instance": 0, "displayId": 0 },
+    "preferredMethods": ["mumu-sdk"],
+    "timeoutMs": 1200,
+    "hudRegion": { "x": 0, "y": 0, "width": 1, "height": 0.24 }
+  },
+  "layout": { "preferredProfile": "auto", "referenceWidth": 1920, "referenceHeight": 1080, "contentMode": "auto", "autoAspectTolerance": 0.015, "beadsPerSide": 4 },
+  "scene": { "enabled": true, "manifest": "assets/templates/manifest.json", "fightScenes": ["fight"], "endScenes": ["lobby", "result"], "holdScenes": ["vs", "queue", "pick", "ban"], "minFightScore": 0.62, "minOtherScore": 0.80, "margin": 0.05, "uncertainBelow": 0.55 },
+  "ui": { "autoTextRecognition": true, "pollIntervalMs": 16, "idlePollIntervalMs": 400, "windowWidth": 420, "windowHeight": 320, "miniWidth": 280, "miniHeight": 96, "substituteCooldownSeconds": 15, "substituteTable": "assets/game/substitutes.json", "playerSide": "auto", "rememberSide": true, "alwaysOnTop": true, "playerNames": [] },
+  "debug": { "directory": "debug", "saveOnLowConfidence": true, "minimumIntervalMs": 5000, "retentionFiles": 100 }
+}

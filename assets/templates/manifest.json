@@ -1,0 +1,289 @@
+{
+  "minimumRegions": {"result": 2},
+  "reference": {
+    "width": 1920,
+    "height": 1080
+  },
+  "templates": [
+    {
+      "id": "raw-camp-key",
+      "file": "raw_camp_key_text.png",
+      "scene": "fight",
+      "layoutProfile": "camp",
+      "threshold": 0.87,
+      "roi": {
+        "x": 0.496875,
+        "y": 0.07333333333333333,
+        "width": 0.03875,
+        "height": 0.03666666666666667
+      }
+    },
+    {
+      "id": "raw-duel-round",
+      "file": "raw_duel_round.png",
+      "mask": "raw_duel_round.mask.png",
+      "scene": "fight",
+      "layoutProfile": "duel",
+      "threshold": 0.8,
+      "roi": {
+        "x": 0.4625,
+        "y": 0.015,
+        "width": 0.08,
+        "height": 0.06
+      }
+    },
+    {
+      "id": "raw-lobby-labels",
+      "file": "raw_lobby_ninja.png",
+      "scene": "lobby",
+      "threshold": 0.88,
+      "roi": {
+        "x": 0.025,
+        "y": 0.9322222222222222,
+        "width": 0.055,
+        "height": 0.057777777777777775
+      }
+    },
+    {
+      "id": "fight-scene-key",
+      "file": "fight_scene_key.png",
+      "scene": "fight",
+      "roi": {
+        "x": 0.445,
+        "y": 0.03,
+        "width": 0.11,
+        "height": 0.075
+      },
+      "threshold": 0.72,
+      "layoutProfile": "camp"
+    },
+    {
+      "id": "fight-scene-key-alt",
+      "file": "fight_scene_key_alt.png",
+      "scene": "fight",
+      "roi": {
+        "x": 0.445,
+        "y": 0.03,
+        "width": 0.11,
+        "height": 0.075
+      },
+      "threshold": 0.72,
+      "layoutProfile": "camp"
+    },
+    {
+      "id": "fight-scene-key-alt2",
+      "file": "fight_scene_key_alt2.png",
+      "scene": "fight",
+      "roi": {
+        "x": 0.445,
+        "y": 0.03,
+        "width": 0.11,
+        "height": 0.075
+      },
+      "threshold": 0.72,
+      "layoutProfile": "camp"
+    },
+    {
+      "id": "fight-reset",
+      "file": "fight_reset.png",
+      "scene": "fight",
+      "roi": {
+        "x": 0.455,
+        "y": 0.88,
+        "width": 0.09,
+        "height": 0.09
+      },
+      "threshold": 0.72,
+      "layoutProfile": "camp"
+    },
+    {
+      "id": "fight-round",
+      "file": "fight_round.png",
+      "mask": "fight_round.mask.png",
+      "scene": "fight",
+      "roi": {
+        "x": 0.42,
+        "y": 0.08,
+        "width": 0.16,
+        "height": 0.14
+      },
+      "threshold": 0.62,
+      "layoutProfile": "duel"
+    },
+    {
+      "id": "fight-round-r1",
+      "file": "fight_round_r1.png",
+      "mask": "fight_round_r1.mask.png",
+      "scene": "fight",
+      "roi": {
+        "x": 0.42,
+        "y": 0.08,
+        "width": 0.16,
+        "height": 0.14
+      },
+      "threshold": 0.62,
+      "layoutProfile": "duel"
+    },
+    {
+      "id": "lobby-bottom",
+      "file": "lobby_bottom.png",
+      "scene": "lobby",
+      "roi": {
+        "x": 0.02,
+        "y": 0.86,
+        "width": 0.48,
+        "height": 0.13
+      },
+      "threshold": 0.8
+    },
+    {
+      "id": "vs-mark",
+      "file": "vs_mark.png",
+      "scene": "vs",
+      "roi": {
+        "x": 0.445,
+        "y": 0.72,
+        "width": 0.11,
+        "height": 0.14
+      },
+      "threshold": 0.8
+    },
+    {
+      "id": "vs-mark-alt",
+      "file": "vs_mark_alt.png",
+      "scene": "vs",
+      "roi": {
+        "x": 0.42,
+        "y": 0.62,
+        "width": 0.16,
+        "height": 0.22
+      },
+      "threshold": 0.8
+    },
+    {
+      "id": "queue-search",
+      "file": "queue_search.png",
+      "scene": "queue",
+      "roi": {
+        "x": 0.36,
+        "y": 0.42,
+        "width": 0.28,
+        "height": 0.08
+      },
+      "threshold": 0.8
+    },
+    {
+      "id": "pick-lock",
+      "file": "pick_lock.png",
+      "scene": "pick",
+      "roi": {
+        "x": 0.78,
+        "y": 0.78,
+        "width": 0.18,
+        "height": 0.08
+      },
+      "threshold": 0.8
+    },
+    {
+      "id": "result-detail",
+      "file": "result_detail.png",
+      "scene": "result",
+      "roi": {
+        "x": 0.01,
+        "y": 0.005,
+        "width": 0.16,
+        "height": 0.065
+      },
+      "threshold": 0.8
+    },
+    {
+      "id": "result-actions",
+      "file": "result_actions.png",
+      "scene": "result",
+      "roi": {
+        "x": 0.6,
+        "y": 0.005,
+        "width": 0.32,
+        "height": 0.065
+      },
+      "threshold": 0.8
+    },
+    {
+      "id": "raw-ban-title",
+      "file": "raw_ban_title.png",
+      "scene": "ban",
+      "threshold": 0.88,
+      "roi": {
+        "x": 0.38071065989847713,
+        "y": 0.22202166064981949,
+        "width": 0.2517766497461929,
+        "height": 0.10288808664259928
+      }
+    },
+    {
+      "id": "raw-ban-unlock",
+      "file": "raw_ban_unlock.png",
+      "scene": "ban",
+      "threshold": 0.88,
+      "roi": {
+        "x": 0.43756345177664974,
+        "y": 0.9061371841155235,
+        "width": 0.12081218274111676,
+        "height": 0.0703971119133574
+      }
+    },
+    {
+      "id": "substitute-control-continuity",
+      "file": "substitute_continuity.png",
+      "mask": "substitute_continuity.mask.png",
+      "scene": "fight",
+      "continuationOnly": true,
+      "threshold": 0.85,
+      "roi": {
+        "x": 0.63,
+        "y": 0.81,
+        "width": 0.09,
+        "height": 0.17
+      }
+    },
+    {
+      "id": "raw-attack-continuity",
+      "file": "raw_attack_core.png",
+      "scene": "fight",
+      "continuationOnly": true,
+      "threshold": 0.85,
+      "roi": {
+        "x": 0.8675,
+        "y": 0.7822222222222223,
+        "width": 0.05375,
+        "height": 0.10333333333333333
+      }
+    },
+    {
+      "id": "duel-lobby-ninjutsu",
+      "file": "duel_lobby_ninjutsu.png",
+      "mask": "duel_lobby_ninjutsu.mask.png",
+      "scene": "lobby",
+      "threshold": 0.86,
+      "roi": {
+        "x": 0.2005856515373353,
+        "y": 0.84375,
+        "width": 0.0951683748169839,
+        "height": 0.07161458333333333
+      }
+    },
+    {
+      "id": "duel-lobby-ranked",
+      "file": "duel_lobby_ranked.png",
+      "mask": "duel_lobby_ranked.mask.png",
+      "scene": "lobby",
+      "threshold": 0.86,
+      "roi": {
+        "x": 0.3953147877013177,
+        "y": 0.8450520833333334,
+        "width": 0.07320644216691069,
+        "height": 0.0703125
+      }
+    }
+  ]
+}

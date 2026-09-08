@@ -1,0 +1,47 @@
+[
+  {
+    "name": "油女志乃",
+    "source": "inbox\\regressions\\duel-shino-name-20260907.png",
+    "sourceSHA256": "a1cc23e47df6c39fddee0270fc57fff4bebb98a69845be87e44062d5b26056ea",
+    "box": [
+      104,
+      18,
+      174,
+      40
+    ],
+    "referenceWidth": 960,
+    "template": "internal\\ninja\\templates\\shino.png",
+    "templateSHA256": "594069ce4d7feaf46ed80ae234cc3940e767e8416ba7655532d6f99f3c514bc5",
+    "scope": "base name only; no slot, palette, account or version inference"
+  },
+  {
+    "name": "春野樱",
+    "source": "inbox\\regressions\\duel-shino-name-20260907.png",
+    "sourceSHA256": "a1cc23e47df6c39fddee0270fc57fff4bebb98a69845be87e44062d5b26056ea",
+    "box": [
+      733,
+      18,
+      785,
+      40
+    ],
+    "referenceWidth": 960,
+    "template": "internal\\ninja\\templates\\sakura.png",
+    "templateSHA256": "eb426e8c261b4d5d568769ab2b35d8b0a1b04c0dd3c424b267a520e1ca34f838",
+    "scope": "base name only; no slot, palette, account or version inference"
+  },
+  {
+    "name": "多由也",
+    "source": "inbox\\regressions\\duel-long-account-tayuya-20260907.png",
+    "sourceSHA256": "57fb4c5bb36a855ed5a819ea257f5216cc6d251e4dd008d9d9b36a37237af8cc",
+    "box": [
+      606,
+      18,
+      656,
+      40
+    ],
+    "referenceWidth": 960,
+    "template": "internal\\ninja\\templates\\tayuya.png",
+    "templateSHA256": "346a6d8dbe228049abc790f25000f5c10eab13f56a7825f015657a31c2d9bd46",
+    "scope": "base name only; no slot, palette, account or version inference"
+  }
+]
