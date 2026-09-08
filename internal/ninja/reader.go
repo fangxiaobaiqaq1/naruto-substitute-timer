@@ -61,6 +61,7 @@ func NewReader() *Reader {
 	}{
 		{"hashirama", Hashirama, 6, Warm}, {"hashirama_alt", Hashirama, 6, Warm}, {"madara", Madara, 6, Warm},
 		{"obito", Obito, 4, Purple}, {"naruto", Naruto, 4, Red}, {"naruto_right", Naruto, 4, Red},
+		{"naruto_student", NarutoStudent, 0, ""},
 	} {
 		data, err := templates.ReadFile("templates/" + spec.file + ".png")
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	NarutoStudent     = "漩涡鸣人[忍者学员]"
 	FifthMizukage     = "照美冥[五代目水影]"
 	Hashirama         = "千手柱间[木叶创立]"
 	Madara            = "宇智波斑[神驹佑祥]"
@@ -43,6 +44,8 @@ func ShortLabel(name string) string {
 		return "斑·神驹佑祥"
 	case normalize(Obito):
 		return "带土·十尾"
+	case normalize(NarutoStudent):
+		return "鸣人·忍者学员"
 	case normalize(Naruto):
 		return "鸣人·第六尾"
 	}

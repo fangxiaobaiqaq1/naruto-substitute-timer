@@ -1,0 +1,19 @@
+{
+  "scope": "Full visible ninja name and version only; no account, slot, palette or cooldown override.",
+  "box": [
+    106,
+    18,
+    254,
+    39
+  ],
+  "sourceSize": [
+    950,
+    534
+  ],
+  "template": "naruto_student.png",
+  "referenceWidth": 960,
+  "name": "漩涡鸣人[忍者学员]",
+  "source": "user screenshot 2026-09-09",
+  "sourceSHA256": "edb1bcf1e3b758ab62025410d472ce5c1e89097bf6312a26c448540590fda105",
+  "templateSHA256": "a9bc430ac08a0039102383329d1ed24e44d264dcd20ceb2132e5065ba8dcce96"
+}
