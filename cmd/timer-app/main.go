@@ -16,17 +16,10 @@ import (
 )
 
 func main() {
-	// A direct double-click of bin/timer-app.exe must use the same root
-	// configuration and relative assets as the root launcher.
+	// Resolve config beside the executable, independent of shortcut working directory.
 	if executable, err := os.Executable(); err == nil {
-		binDir := filepath.Dir(executable)
-		if strings.EqualFold(filepath.Base(binDir), "bin") {
-			root := filepath.Dir(binDir)
-			if _, err := os.Stat(filepath.Join(root, "assets", "templates", "manifest.json")); err == nil {
-				if err := os.Chdir(root); err != nil {
-					fail(err)
-				}
-			}
+		if err := os.Chdir(applicationDirectory(executable)); err != nil {
+			fail(err)
 		}
 	}
 	cfg, err := config.LoadOrCreate(config.DefaultPath)
@@ -52,4 +45,17 @@ func fail(err error) {
 		win32.MsgBoxError("替身计时器", err.Error())
 	}
 	os.Exit(1)
+}
+
+func applicationDirectory(executable string) string {
+	dir := filepath.Dir(executable)
+	if strings.EqualFold(filepath.Base(dir), "bin") {
+		root := filepath.Dir(dir)
+		for _, marker := range []string{"config.json", "config.example.json", "assets/templates/manifest.json"} {
+			if info, err := os.Stat(filepath.Join(root, marker)); err == nil && !info.IsDir() {
+				return root
+			}
+		}
+	}
+	return dir
 }

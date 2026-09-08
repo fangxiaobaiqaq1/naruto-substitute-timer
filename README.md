@@ -1,6 +1,6 @@
 # 火影忍者手游替身计时器（纯视觉）
 
-本项目以 MIT License 开源。发布版下载见 GitHub Releases 的 `v0.1`；Windows 用户解压后运行 `启动计时器.bat`。程序只读取 MuMu 窗口像素，不读取游戏内存。首次启动会根据 `config.example.json` 对应的默认值创建本地 `config.json`；请在设置中填写自己的账号名。
+本项目以 MIT License 开源。Windows 发布版见 [GitHub Releases](https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest)。v0.1.1 起，单独的 timer-app.exe 已内置场景模板、掩码和识别字典，也可下载完整 ZIP 解压运行「启动计时器.bat」。先启动 MuMu 和游戏，程序自动查找安装目录（默认实例 0）。首次启动在程序目录创建 config.json；请在设置中填写自己的账号名或手动选边。采集失败可点击「诊断」查看具体原因。程序只读取模拟器画面，不读取游戏内存。
 
 > 当前改造与运行入口见 [低延迟版本与诊断](docs/低延迟版本与诊断.md)。下文保留了早期实现记录；界面、采样周期、冷却时间和布局描述应以当前配置及源码为准。
 

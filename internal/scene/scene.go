@@ -3,11 +3,13 @@
 package scene
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"image"
 	_ "image/png"
 	"math"
+	"narutotimer/assets"
 	"os"
 	"path/filepath"
 	"sync"
@@ -84,6 +86,10 @@ func Load(cfg config.Config) (*Catalog, error) {
 		path = DefaultManifest
 	}
 	data, err := os.ReadFile(path)
+	embedded := os.IsNotExist(err) && filepath.Clean(path) == filepath.Clean(DefaultManifest)
+	if embedded {
+		data, err = assets.Templates.ReadFile("templates/manifest.json")
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -113,6 +119,20 @@ func Load(cfg config.Config) (*Catalog, error) {
 		refH = detect.LogicHeight
 	}
 	dir := filepath.Dir(path)
+	readGray := func(name string) (*image.Gray, error) {
+		if !embedded {
+			return loadGray(filepath.Join(dir, name))
+		}
+		data, err := assets.Templates.ReadFile("templates/" + filepath.ToSlash(name))
+		if err != nil {
+			return nil, err
+		}
+		img, _, err := image.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		return match.ToGray(img), nil
+	}
 	out := &Catalog{
 		minimumRegions: man.MinimumRegions,
 		cfg:            sc,
@@ -148,7 +168,7 @@ func Load(cfg config.Config) (*Catalog, error) {
 				spec.Threshold = 0.82
 			}
 		}
-		gray, err := loadGray(filepath.Join(dir, spec.File))
+		gray, err := readGray(spec.File)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -157,7 +177,7 @@ func Load(cfg config.Config) (*Catalog, error) {
 		}
 		var mask *image.Gray
 		if spec.Mask != "" {
-			mask, err = loadGray(filepath.Join(dir, spec.Mask))
+			mask, err = readGray(spec.Mask)
 			if err != nil {
 				if os.IsNotExist(err) {
 					continue

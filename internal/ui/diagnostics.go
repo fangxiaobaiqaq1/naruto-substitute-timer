@@ -191,6 +191,9 @@ func (s *session) diagnosticText() string {
 	s.diagnosticMu.Lock()
 	r, active, lastError := s.diagnosticLast, s.diagnostic != nil, s.diagnosticError
 	s.diagnosticMu.Unlock()
+	s.mu.Lock()
+	captureLost, captureStatus := s.captureLost, s.status
+	s.mu.Unlock()
 	state := "诊断关闭 · 仅本次开启，不随启动保存"
 	if r != nil {
 		v := r.Snapshot()
@@ -206,6 +209,9 @@ func (s *session) diagnosticText() string {
 		if v.LastError != "" {
 			state += "\n写入异常：" + v.LastError
 		}
+	}
+	if captureLost {
+		state += "\n采集异常：" + captureStatus
 	}
 	if !s.drawTraceAvailable {
 		state += "\n当前构建未接入绘制回调，端到端指标不可用。请用 build.bat 构建。"

@@ -51,7 +51,11 @@ func FindDLL(root string) (string, error) {
 
 func Open(o Options) (*Client, error) {
 	if o.InstallDir == "" {
-		return nil, fmt.Errorf("MuMu installDir is required")
+		root, err := DiscoverInstallation()
+		if err != nil {
+			return nil, err
+		}
+		o.InstallDir = root
 	}
 	if o.Instance < 0 || o.DisplayID < 0 {
 		return nil, fmt.Errorf("MuMu instance/displayId must be non-negative")

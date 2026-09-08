@@ -58,6 +58,7 @@ func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 	mode, _ := detect.ParseMode(cfg.Layout.ContentMode)
 	var client *mumu.Client
 	var retryAfter time.Time
+	var retryError error
 	var attemptMu sync.Mutex
 	var attempt captureAttempt
 	setAttempt := func(started time.Time, method string) {
@@ -82,13 +83,14 @@ func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 			if method == "mumu-sdk" {
 				if client == nil {
 					if time.Now().Before(retryAfter) {
-						f = Frame{Hold: true, Err: fmt.Errorf("MuMu截图接口重连等待中"), CaptureStarted: started, CaptureMethod: method}
+						f = Frame{Hold: true, Err: fmt.Errorf("MuMu截图接口重连等待中：%w", retryError), CaptureStarted: started, CaptureMethod: method}
 						continue
 					}
 					o := cfg.Capture.MuMu
 					var err error
 					client, err = mumu.Open(mumu.Options{InstallDir: o.InstallDir, DLLPath: o.DLLPath, Instance: o.Instance, DisplayID: o.DisplayID, Package: o.Package})
 					if err != nil {
+						retryError = err
 						retryAfter = time.Now().Add(5 * time.Second)
 						f = Frame{Hold: true, Err: err, CaptureStarted: started, CaptureMethod: method}
 						continue
@@ -101,6 +103,7 @@ func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 				if err != nil {
 					client.Close()
 					client = nil
+					retryError = err
 					retryAfter = time.Now().Add(time.Second)
 					f = Frame{Hold: true, Err: err, CaptureStarted: started, CaptureMethod: method}
 					continue
