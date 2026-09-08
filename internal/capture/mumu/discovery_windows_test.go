@@ -30,3 +30,19 @@ func TestDiscoverRejectsUnrelatedDirectory(t *testing.T) {
 		t.Fatalf("unexpected installation %s", got)
 	}
 }
+
+func TestDeviceAndMainResolveSameInstallation(t *testing.T) {
+	root := t.TempDir()
+	dll := filepath.Join(root, "nx_device", "15.0", "shell", "sdk", "external_renderer_ipc.dll")
+	if err := os.MkdirAll(filepath.Dir(dll), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dll, []byte("test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, executable := range []string{filepath.Join(root, "nx_main", "MuMuNxMain.exe"), filepath.Join(root, "nx_device", "15.0", "shell", "MuMuNxDevice.exe")} {
+		if got := installationFromExecutable(executable); got != root {
+			t.Fatalf("%s resolved to %s, want %s", executable, got, root)
+		}
+	}
+}

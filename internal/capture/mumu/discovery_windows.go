@@ -53,9 +53,10 @@ func DiscoverInstallation() (string, error) {
 	return "", fmt.Errorf("未找到运行中的 MuMu 截图 SDK，请启动 MuMu，或在 config.json 的 capture.mumu.installDir 中填写安装目录")
 }
 func installationFromExecutable(executable string) string {
+	var installation string
 	for dir, n := filepath.Dir(executable), 0; n < 6; n++ {
 		if _, err := FindDLL(dir); err == nil {
-			return dir
+			installation = dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -63,5 +64,5 @@ func installationFromExecutable(executable string) string {
 		}
 		dir = parent
 	}
-	return ""
+	return installation
 }
