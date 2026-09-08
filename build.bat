@@ -3,6 +3,7 @@ setlocal
 cd /d "%~dp0"
 if not exist bin mkdir bin
 if not defined GOCACHE set "GOCACHE=%CD%\bin\go-cache"
+go mod download || goto :fail
 echo Preparing native draw diagnostics
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\fyne-diagnostics\prepare.ps1 || goto :fail
 echo [1/5] timer CLI

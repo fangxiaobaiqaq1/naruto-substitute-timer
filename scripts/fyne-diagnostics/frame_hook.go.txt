@@ -1,0 +1,36 @@
+package glfw
+
+import (
+	"sync"
+	"time"
+)
+
+// This file is added to the toolkit by go -overlay, never to the module cache.
+var timerDiagnosticsFrameCallbacks sync.Map // map[*window]func(time.Time, time.Time)
+
+// SetFrameDrawCallback installs an optional diagnostic callback on this window.
+// Call it from the Fyne UI goroutine, using a closure that identifies the content
+// revision just applied. Pass nil to disable it. The callback is snapshotted
+// before repaintWindow renders and runs on that same UI goroutine only after a
+// visible window's native SwapBuffers has returned. It is persistent until
+// replaced, disabled, or the window is destroyed; consumers must count a given
+// revision once. Keep the callback short and do not block the UI goroutine.
+//
+// The completion timestamp measures native buffer submission, not physical
+// scan-out or compositor presentation. Hidden/no-viewport windows never report
+// a completed frame. Refresh and fyne.Do completion are not renderer completion.
+func (w *window) SetFrameDrawCallback(callback func(started, completed time.Time)) {
+	if callback == nil {
+		timerDiagnosticsFrameCallbacks.Delete(w)
+		return
+	}
+	timerDiagnosticsFrameCallbacks.Store(w, callback)
+}
+
+func timerDiagnosticsFrameCallback(w *window) func(time.Time, time.Time) {
+	callback, ok := timerDiagnosticsFrameCallbacks.Load(w)
+	if !ok {
+		return nil
+	}
+	return callback.(func(time.Time, time.Time))
+}

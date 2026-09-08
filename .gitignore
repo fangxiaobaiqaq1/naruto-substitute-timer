@@ -25,3 +25,19 @@ unpack/metadata/
 *.apk
 *.so
 *.dex
+
+# Local state and release staging
+/config.json
+/tmp/
+/dist/
+/bin-opencv/
+/.reasonix/
+/.zcode/
+/%SystemDrive%/
+/unpack/
+/inbox/
+/*.png
+/nul
+/assets/identity/**/*.png
+/assets/identity/*.png
+!/scripts/fyne-diagnostics/frame_hook.go.txt
