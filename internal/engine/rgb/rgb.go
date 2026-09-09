@@ -148,6 +148,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 				continue
 			}
 			redHighlight := palette == ninja.Red && redLowerBody(img, p, w, h)
+			purpleHighlight := palette == ninja.Purple && purpleGlintBody(img, p, w, h)
 			goldHighlight := (palette == "" || palette == ninja.Warm) && goldGlintBody(img, p, w, h)
 			light, dark, gold, paleGold, blue, total := 0, 0, 0, 0, 0, 0
 			for dy := -h / 2; dy <= h/2; dy++ {
@@ -161,6 +162,10 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 					}
 					c := img.RGBAAt(p.X+dx, p.Y+dy)
 					r, g, b := int(c.R), int(c.G), int(c.B)
+					if purpleHighlight && r >= 235 && b >= 235 && g >= 210 && r+12 >= g && b+12 >= g {
+						light++
+						continue
+					}
 					// The gold idle glint clips the middle to white. Accept that
 					// white only with BOTH current gold body lobes and bounded
 					// spatial contrast; not a nearby rim, bar, or cached count.

@@ -355,7 +355,7 @@ func (s *session) detectedText() string {
 		return fmt.Sprintf("第 %d 次", s.left.EventCount())
 	default:
 		// Until the player side is known, never label one side as the opponent.
-		return fmt.Sprintf("左%d / 右%d", s.left.EventCount(), s.right.EventCount())
+		return fmt.Sprintf("左%d次 / 右%d次", s.left.EventCount(), s.right.EventCount())
 	}
 }
 

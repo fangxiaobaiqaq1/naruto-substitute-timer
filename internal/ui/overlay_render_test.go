@@ -30,7 +30,7 @@ func TestOverlayRenderReadable(t *testing.T) {
 		{name: "unknown", lost: true, clock: "12.4", number: "第 1 次"},
 		{name: "second-substitute", clock: "14.9", number: "第 2 次"},
 		{name: "number-after-expiry", clock: "—", number: "第 2 次"},
-		{name: "unknown-side", unknownSide: true, clock: "—", number: "左12 / 右12"},
+		{name: "unknown-side", unknownSide: true, clock: "—", number: "左12次 / 右12次"},
 		{name: "camp-unknown-left-beans", unknownBeans: true, clock: "12.4", number: "第 1 次"},
 	} {
 		t.Run(state.name, func(t *testing.T) {

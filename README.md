@@ -1,5 +1,7 @@
 # 火影忍者手游替身计时器（纯视觉）
 
+v0.1.4 修复训练营紫豆/金豆待机扫光引起的豆数问号闪跳，已做连续原生采集验证，详见 [修复说明](docs/release-v0.1.4.md)。
+
 本项目以 MIT License 开源。Windows x64 发布版见 [GitHub Releases](https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest)。下载单独的 `timer-app.exe` 放在可写目录运行，或解压完整 ZIP 后运行「启动计时器.bat」。先启动 MuMu 和游戏，程序自动查找安装目录（默认实例 0）。首次启动在程序目录创建 `config.json`；请在设置中填写自己的账号名或手动选边。程序只读取模拟器画面，不读取游戏内存。
 
 v0.1.3 将本地 PP-OCRv4 中文识别模型、CPU 推理运行库、完整解包忍者资料库和替身表一并内置进 EXE；场景模板与掩码也继续内置。普通忍者姓名通过 OCR 与资料库核对，无需逐个收集名字截图，也无需安装 Python 或系统中文 OCR 语言包。资料库有 2490 条目录记录，含变体和内部项，不等于 2490 名可玩忍者或识别准确率保证。点击「诊断」可查看版本、OCR 后端、库数量和失败原因，排查是否启动了旧 EXE。变更与验证范围见 [v0.1.3 说明](docs/release-v0.1.3.md)。

@@ -62,7 +62,7 @@ func TestSettingsSideSelectionAppliesWithoutSave(t *testing.T) {
 	for _, tc := range []struct{ label, side, opponent, event string }{
 		{"左边", "left", "对面·右 · 忍者未确认", "第 1 次"},
 		{"右边", "right", "对面·左 · 忍者未确认", "第 2 次"},
-		{"自动认边", "", "对面·待认边", "左2 / 右1"},
+		{"自动认边", "", "对面·待认边", "左2次 / 右1次"},
 	} {
 		radio.SetSelected(tc.label)
 		if s.side != tc.side || s.tag.Text != tc.opponent || s.eventTag.Text != tc.event {

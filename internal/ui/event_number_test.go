@@ -43,7 +43,7 @@ func TestCaptureNewSubstituteAtOldClockBoundary(t *testing.T) {
 				t.Fatal("number did not follow selected opponent")
 			}
 			s.side = ""
-			if s.detectedText() != "左0 / 右2" {
+			if s.detectedText() != "左0次 / 右2次" {
 				t.Fatal("unknown player side mislabeled opponent")
 			}
 		})

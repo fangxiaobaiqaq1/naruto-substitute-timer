@@ -2,6 +2,7 @@ package rgb
 
 import (
 	"image"
+	"image/color"
 
 	"narutotimer/internal/detect"
 )
@@ -51,7 +52,11 @@ func goldGlintBody(img *image.RGBA, p detect.BeadPosition, w, h int) bool {
 			}
 			core := img.RGBAAt(p.X, y)
 			left, right := img.RGBAAt(p.X-2*w, y), img.RGBAAt(p.X+2*w, y)
-			if gold >= 2 && int(core.G)-max(int(left.G), int(right.G)) >= 32 {
+			// A white glint can brighten a gap's G as much as the filled gold
+			// body. Yellow chroma still separates that body from the pale flare.
+			yellow := func(c color.RGBA) int { return min(int(c.R), int(c.G)) - int(c.B) }
+			distinctColor := yellow(core)-max(yellow(left), yellow(right)) >= 32
+			if gold >= 2 && (int(core.G)-max(int(left.G), int(right.G)) >= 32 || distinctColor) {
 				distinct++
 			}
 		}
