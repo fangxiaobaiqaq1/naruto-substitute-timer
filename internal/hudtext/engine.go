@@ -4,6 +4,7 @@ import (
 	"context"
 	"image"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,7 +117,7 @@ func (e *Engine) work() {
 			}
 			sheet := buildSheet(request.strips)
 			ctx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
-			lines, err := e.reader.Read(ctx, sheet.image)
+			lines, err := sheet.read(ctx, e.reader)
 			cancel()
 			out := completion{job: request, err: err}
 			if err == nil {
@@ -145,9 +146,18 @@ func (e *Engine) invalidate() {
 	e.pausedAt = time.Time{}
 }
 
-func (e *Engine) backendFailed(at time.Time) {
+func (e *Engine) backendFailed(at time.Time, cause error) {
 	e.status = "unavailable"
-	e.lastError = "系统中文 OCR 暂不可用，仍使用模板/手动选择"
+	e.lastError = "本机 OCR 暂不可用，仍使用模板/手动选择"
+	if cause != nil {
+		// Keep the useful initialization/timeout reason without an unbounded
+		// runtime dump flooding the diagnostics label and capture log.
+		detail := []rune(strings.Join(strings.Fields(cause.Error()), " "))
+		if len(detail) > 320 {
+			detail = append(detail[:320], '…')
+		}
+		e.lastError += ": " + string(detail)
+	}
 	e.retryAt = at.Add(retryDelay)
 }
 
@@ -203,7 +213,7 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		case done := <-e.results:
 			e.busy = false
 			if done.err != nil && e.enabled && !e.closed {
-				e.backendFailed(at)
+				e.backendFailed(at, done.err)
 			}
 		default:
 		}
@@ -231,7 +241,7 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		e.busy = false
 		if done.err != nil {
 			// Backend health outlives scene generations; only text evidence is stale.
-			e.backendFailed(at)
+			e.backendFailed(at, done.err)
 		} else if done.job.generation == e.generation && done.job.key == key {
 			if at.Sub(done.job.at) >= 0 && at.Sub(done.job.at) <= resultMaxAge {
 				e.status = "pending"

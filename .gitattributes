@@ -1,0 +1,4 @@
+# Preserve upstream model/runtime bytes and the license hashes in provenance.json.
+internal/ocr/neuraldata/* -text
+internal/ocr/neuraldata/*LICENSE.md -whitespace
+internal/ocr/neuraldata/*NOTICES.md -whitespace

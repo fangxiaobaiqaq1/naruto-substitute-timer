@@ -7,3 +7,6 @@ import "embed"
 //
 //go:embed templates/*.png templates/manifest.json
 var Templates embed.FS
+
+//go:embed game/substitutes.json
+var SubstituteCatalog []byte

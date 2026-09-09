@@ -172,7 +172,7 @@ func (s *session) openSettings() {
 	rememberChk.OnChanged = func(checked bool) { showSettingsError(s.setRememberSide(checked), w) }
 	topChk := widget.NewCheck("窗口置顶", nil)
 	topChk.SetChecked(top)
-	textCheck := widget.NewCheck("后台识别名字（本机中文 OCR）", nil)
+	textCheck := widget.NewCheck("后台识别名字（内置本地 OCR）", nil)
 	textCheck.SetChecked(autoText)
 	textCheck.OnChanged = func(on bool) { showSettingsError(s.setTextRecognition(on), w) }
 	s.textStatusLabel = widget.NewLabel(textStatus)
@@ -280,7 +280,7 @@ func (s *session) textStatusText() string {
 	case "reading", "pending":
 		return "后台核对文字中，采豆和倒计时不等待"
 	case "unavailable":
-		return "系统中文 OCR 暂不可用，使用模板和手动选择"
+		return "本地 OCR 暂不可用，特殊豆型模板和手动选择仍可用；请到诊断查看原因"
 	default:
 		return "等候清晰对局姓名；OCR 不上传截图"
 	}

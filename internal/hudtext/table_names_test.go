@@ -21,6 +21,8 @@ func TestTableNamesSeparateCandidatesFromVerifiedVersions(t *testing.T) {
 		{[3]string{"神秘面具男(对面)", "神秘面具男(对面)", ""}, Title{Ninja: "神秘面具男", Account: "对面"}},
 		{[3]string{"猿飞木叶丸(对面)", "猿飞木叶丸(对面)", ""}, Title{Ninja: "猿飞木叶丸", Account: "对面"}},
 		{[3]string{"旗木卡卡西(对面)", "旗木卡卡西(对面)", ""}, Title{Ninja: "旗木卡卡西", Account: "对面"}},
+		{[3]string{"宇智波带土[忍界大战(对面)", "宇智波带土[忍界大战(对面)", ""}, Title{Ninja: "宇智波带土", Account: "对面"}},
+		{[3]string{"宇智波带士[忍界大战](对面)", "宇智波带士[忍界大战](对面)", ""}, Title{Account: "对面"}},
 	} {
 		if got := d.consensus(tc.raw); got != tc.want {
 			t.Errorf("%q: %+v want %+v", tc.raw, got, tc.want)

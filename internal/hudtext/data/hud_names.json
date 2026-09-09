@@ -1,5 +1,10 @@
 [
   {
+    "name": "宇智波带土",
+    "catalog_base": "暴怒带土",
+    "evidence": "User-provided duel and camp HUD screenshots 2026-09-09. Exact full HUD base spelling only; no variant inference."
+  },
+  {
     "name": "奈良鹿丸",
     "catalog_base": "鹿丸",
     "evidence": "inbox/regressions/duel-shikamaru-name-20260907.png"

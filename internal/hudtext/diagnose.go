@@ -27,7 +27,7 @@ func Diagnose(ctx context.Context, reader ocr.Recognizer, img *image.RGBA, cfg c
 		strips[i].img = match.CropRGBA(img, roi)
 	}
 	sheet := buildSheet(strips)
-	lines, err := reader.Read(ctx, sheet.image)
+	lines, err := sheet.read(ctx, reader)
 	if err != nil {
 		return report, err
 	}

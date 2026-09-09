@@ -4,7 +4,6 @@ import (
 	xdraw "golang.org/x/image/draw"
 	"image"
 	"image/draw"
-	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"testing"
 )
@@ -12,7 +11,7 @@ import (
 func TestRecentHUDAccountDoesNotDependOnNinjaName(t *testing.T) {
 	root := findRepoRoot(t)
 	t.Chdir(root)
-	book := LoadBook(config.Default())
+	book := LoadBook(accountFixtureConfig())
 	for _, file := range []string{"duel-shino-right-account-20260907.png", "duel-shino-name-20260907.png", "duel-long-account-tayuya-20260907.png", "duel-shikamaru-name-20260907.png"} {
 		img := mustPNG(t, "inbox/regressions/"+file)
 		ca, _ := detect.ResolveContentArea(img, detect.ModeAuto, detect.LogicWidth, detect.LogicHeight, .015)

@@ -107,5 +107,5 @@ func NewLive(cfg Config) (*hudtext.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return hudtext.New(inner, cfg.App, ocr.NewSystem(), identity.MineNames), nil
+	return hudtext.New(inner, cfg.App, ocr.NewLocal(), identity.MineNames), nil
 }

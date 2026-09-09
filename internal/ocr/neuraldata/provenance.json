@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "verified_on": "2026-09-09",
+  "verification": "Official PyPI archive SHA-256 checked; extracted archive members matched the shipped files byte for byte.",
+  "artifacts": [
+    {
+      "file": "recognizer.onnx",
+      "component": "PP-OCRv4 recognition model",
+      "upstream_project": "https://github.com/PaddlePaddle/PaddleOCR",
+      "distribution_project": "https://github.com/RapidAI/RapidOCR",
+      "distribution": "rapidocr-onnxruntime",
+      "distribution_version": "1.4.4",
+      "metadata_url": "https://pypi.org/pypi/rapidocr-onnxruntime/1.4.4/json",
+      "archive_url": "https://files.pythonhosted.org/packages/ba/12/1e5497183bdbe782dbb91bad1d0d2297dba4d2831b2652657f7517bfc6df/rapidocr_onnxruntime-1.4.4-py3-none-any.whl",
+      "archive_sha256": "971d7d5f223a7a808662229df1ef69893809d8457d834e6373d3854bc1782cbf",
+      "archive_member": "rapidocr_onnxruntime/models/ch_PP-OCRv4_rec_infer.onnx",
+      "size_bytes": 10857958,
+      "sha256": "48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b",
+      "modifications": "None; renamed from ch_PP-OCRv4_rec_infer.onnx.",
+      "license": "Apache-2.0",
+      "license_files": [
+        {
+          "file": "OCR-MODEL-LICENSE.md",
+          "source_url": "https://github.com/RapidAI/RapidOCR/blob/main/LICENSE",
+          "sha256": "3e0af25fdd06aa9586ae97adb00ea927ebe5a3805ac77d2d3a81ce5f55693333"
+        }
+      ]
+    },
+    {
+      "file": "onnxruntime.dll",
+      "component": "Microsoft ONNX Runtime CPU shared library",
+      "upstream_project": "https://github.com/microsoft/onnxruntime",
+      "distribution": "onnxruntime",
+      "distribution_version": "1.27.0",
+      "platform": "windows-amd64",
+      "metadata_url": "https://pypi.org/pypi/onnxruntime/1.27.0/json",
+      "archive_url": "https://files.pythonhosted.org/packages/e9/f2/1404507d76a21940e8bf46f414e3d1abd94dc888cb89a30f4a540275846f/onnxruntime-1.27.0-cp314-cp314-win_amd64.whl",
+      "archive_sha256": "49e416be0d717338b6d041b99911b716d70c397d277056450724f93bdded3fc2",
+      "archive_member": "onnxruntime/capi/onnxruntime.dll",
+      "size_bytes": 17321312,
+      "sha256": "e6de9dcd61a85c4100edafe286d3fd2639513210b81b9dd50d200c4199a06c01",
+      "modifications": "None. Only the native CPU DLL is redistributed; Python modules are not required.",
+      "license": "MIT",
+      "license_files": [
+        {
+          "file": "ONNX-RUNTIME-LICENSE.md",
+          "archive_member": "onnxruntime/LICENSE",
+          "sha256": "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674"
+        },
+        {
+          "file": "ONNX-RUNTIME-NOTICES.md",
+          "archive_member": "onnxruntime/ThirdPartyNotices.txt",
+          "sha256": "fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866"
+        }
+      ],
+      "external_runtime_requirement": {
+        "component": "Microsoft Visual C++ v14 x64 Redistributable",
+        "redistributed": false,
+        "requirement_source": "https://onnxruntime.ai/docs/install/",
+        "download_information": "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist"
+      }
+    }
+  ],
+  "go_binding": {
+    "module": "github.com/yalue/onnxruntime_go",
+    "version": "v1.24.0",
+    "source_url": "https://github.com/yalue/onnxruntime_go/tree/v1.24.0",
+    "license": "MIT"
+  }
+}

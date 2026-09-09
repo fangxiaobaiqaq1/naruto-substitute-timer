@@ -52,7 +52,7 @@ func ocrInspect(args []string) error {
 		}
 		*profile = res.LayoutProfile
 	}
-	reader := ocr.NewSystem()
+	reader := ocr.NewLocal()
 	defer reader.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -61,7 +61,7 @@ func ocrInspect(args []string) error {
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(map[string]any{"image": *file, "profile": *profile, "elapsedMs": time.Since(started).Seconds() * 1000, "report": report, "note": "Local Windows OCR only. Three visual treatments; exact consensus is not a measured accuracy guarantee. Live mode also requires two results and unchanged lettering pixels."}, "", "  ")
+	data, err := json.MarshalIndent(map[string]any{"image": *file, "profile": *profile, "elapsedMs": time.Since(started).Seconds() * 1000, "report": report, "note": "Local OCR with embedded model. Three visual treatments; exact consensus is not a measured accuracy guarantee. Live mode also requires two results and unchanged lettering pixels."}, "", "  ")
 	if err != nil {
 		return err
 	}

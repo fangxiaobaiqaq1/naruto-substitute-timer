@@ -122,10 +122,10 @@ func receive(ctx context.Context, p *processIO) (response, error) {
 	select {
 	case msg, ok := <-p.out:
 		if !ok {
-			return response{}, errors.New("system OCR helper exited")
+			return response{}, errors.New("OCR helper exited")
 		}
 		if msg.Error != "" {
-			return msg, fmt.Errorf("system OCR: %.400s", msg.Error)
+			return msg, fmt.Errorf("OCR: %.400s", msg.Error)
 		}
 		return msg, nil
 	case <-ctx.Done():
@@ -134,6 +134,14 @@ func receive(ctx context.Context, p *processIO) (response, error) {
 }
 
 func (r *processRecognizer) Read(ctx context.Context, img image.Image) (lines []Line, err error) {
+	return r.read(ctx, img, nil)
+}
+
+func (r *processRecognizer) ReadRegions(ctx context.Context, img image.Image, regions []image.Rectangle) ([]Line, error) {
+	return r.read(ctx, img, regions)
+}
+
+func (r *processRecognizer) read(ctx context.Context, img image.Image, regions []image.Rectangle) (lines []Line, err error) {
 	r.serial.Lock()
 	defer r.serial.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -165,15 +173,16 @@ func (r *processRecognizer) Read(ctx context.Context, img image.Image) (lines []
 			return nil, err
 		}
 		if !hello.Ready {
-			return nil, errors.New("system OCR unavailable")
+			return nil, errors.New("OCR helper unavailable")
 		}
 		p.ready = true
 	}
 	r.sequence++
 	request := struct {
-		ID    uint64 `json:"id"`
-		Image string `json:"image"`
-	}{r.sequence, data}
+		ID      uint64            `json:"id"`
+		Image   string            `json:"image"`
+		Regions []image.Rectangle `json:"regions,omitempty"`
+	}{r.sequence, data, regions}
 	// A helper stuck before reading stdin cannot block shutdown/capture: the
 	// write happens only here, with cancellation killing and closing its pipes.
 	writeStopped := make(chan struct{})

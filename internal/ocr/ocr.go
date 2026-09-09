@@ -26,3 +26,9 @@ type Recognizer interface {
 	Read(context.Context, image.Image) ([]Line, error)
 	Close() error
 }
+
+// RegionRecognizer reads the supplied text lines without detecting unrelated
+// scenery. Returned word coordinates stay in the original image coordinates.
+type RegionRecognizer interface {
+	ReadRegions(context.Context, image.Image, []image.Rectangle) ([]Line, error)
+}

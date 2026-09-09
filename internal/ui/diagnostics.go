@@ -14,7 +14,10 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
+	"narutotimer/internal/buildinfo"
 	"narutotimer/internal/diagnostics"
+	"narutotimer/internal/hudtext"
+	"narutotimer/internal/ocr"
 )
 
 // Recording belongs to this run, not saved settings: restarting must not
@@ -193,6 +196,7 @@ func (s *session) diagnosticText() string {
 	s.diagnosticMu.Unlock()
 	s.mu.Lock()
 	captureLost, captureStatus := s.captureLost, s.status
+	textStatus, textError := s.textStatus, s.textError
 	s.mu.Unlock()
 	state := "诊断关闭 · 仅本次开启，不随启动保存"
 	if r != nil {
@@ -212,6 +216,11 @@ func (s *session) diagnosticText() string {
 	}
 	if captureLost {
 		state += "\n采集异常：" + captureStatus
+	}
+	library := hudtext.BundledLibraryInfo()
+	state += fmt.Sprintf("\n版本 %s\n%s\n内置忍者库：%d 条资料 · %d 个名称\n文字识别状态：%s", buildinfo.Version, ocr.BackendName(), library.Records, library.Names, textStatus)
+	if textError != "" {
+		state += "\n文字识别异常：" + textError
 	}
 	if !s.drawTraceAvailable {
 		state += "\n当前构建未接入绘制回调，端到端指标不可用。请用 build.bat 构建。"

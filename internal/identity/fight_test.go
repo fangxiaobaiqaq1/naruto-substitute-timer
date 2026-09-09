@@ -15,6 +15,14 @@ import (
 	"narutotimer/internal/detect"
 )
 
+// Private capture fixtures show this account. Production defaults intentionally
+// contain no account names, so fixture ownership must be explicit in tests.
+func accountFixtureConfig() config.Config {
+	cfg := config.Default()
+	cfg.UI.PlayerNames = []string{"白方小"}
+	return cfg
+}
+
 func TestGuesserReadsBattleAccountNames(t *testing.T) {
 	root := findRepoRoot(t)
 	t.Chdir(root)
@@ -26,7 +34,7 @@ func TestGuesserReadsBattleAccountNames(t *testing.T) {
 		{"inbox/regressions/duel-second-round-20260906.png", "right"},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
-			guess := Guesser(config.Default())
+			guess := Guesser(accountFixtureConfig())
 			if guess == nil {
 				t.Fatal("missing identity guesser")
 			}
@@ -52,7 +60,7 @@ func TestGuesserForgetsOldAccountAfterSettingsChange(t *testing.T) {
 	root := findRepoRoot(t)
 	t.Chdir(root)
 	t.Cleanup(func() { SetMineNames(config.Default().UI.PlayerNames) })
-	guess := Guesser(config.Default())
+	guess := Guesser(accountFixtureConfig())
 	img := mustPNG(t, filepath.Join(root, "inbox/reject/忍者加载.png"))
 	if got := guess(img, "vs"); got.Side != "right" {
 		t.Fatalf("setup: %+v", got)
@@ -68,7 +76,7 @@ func TestGuesserIgnoresUnconfirmedScenes(t *testing.T) {
 	t.Chdir(root)
 	t.Cleanup(func() { SetMineNames(config.Default().UI.PlayerNames) })
 	for _, scene := range []string{"", "lobby", "result", "pick", "ban"} {
-		guess := Guesser(config.Default())
+		guess := Guesser(accountFixtureConfig())
 		// Even matching name pixels cannot prove a side outside VS or a battle.
 		img := mustPNG(t, filepath.Join(root, "inbox/reject/忍者加载.png"))
 		if got := guess(img, scene); got.Side != "" {
@@ -76,7 +84,7 @@ func TestGuesserIgnoresUnconfirmedScenes(t *testing.T) {
 		}
 	}
 	// Blank images should never establish identity.
-	guess := Guesser(config.Default())
+	guess := Guesser(accountFixtureConfig())
 	if got := guess(image.NewRGBA(image.Rect(0, 0, 950, 534)), "fight"); got.Side != "" {
 		t.Fatalf("blank: %+v", got)
 	}
@@ -85,7 +93,7 @@ func TestGuesserIgnoresUnconfirmedScenes(t *testing.T) {
 func TestBattleIdentityAcrossResolutionsAndContentOrigins(t *testing.T) {
 	root := findRepoRoot(t)
 	t.Chdir(root)
-	book := LoadBook(config.Default())
+	book := LoadBook(accountFixtureConfig())
 	src := mustPNG(t, filepath.Join(root, "inbox/regressions/duel-player-left-20260906.png"))
 	for _, w := range []int{640, 800, 950, 960, 1280, 1600, 1920, 2560} {
 		t.Run(fmt.Sprintf("width-%d", w), func(t *testing.T) {
@@ -117,7 +125,7 @@ func TestBattleIdentityAcrossResolutionsAndContentOrigins(t *testing.T) {
 func TestBattleIdentityRejectsMissingOrAmbiguousName(t *testing.T) {
 	root := findRepoRoot(t)
 	t.Chdir(root)
-	book := LoadBook(config.Default())
+	book := LoadBook(accountFixtureConfig())
 	for _, ambiguous := range []bool{false, true} {
 		img := mustPNG(t, filepath.Join(root, "inbox/regressions/duel-player-left-20260906.png"))
 		ca, ok := detect.ResolveContentArea(img, detect.ModeAuto, detect.LogicWidth, detect.LogicHeight, 0.015)
@@ -149,7 +157,7 @@ func TestGuesserLoadsTemplateAddedAfterStartup(t *testing.T) {
 	}
 	t.Chdir(t.TempDir())
 	t.Cleanup(func() { SetMineNames(config.Default().UI.PlayerNames) })
-	guess := Guesser(config.Default())
+	guess := Guesser(accountFixtureConfig())
 	if guess == nil {
 		t.Fatal("empty initial book must allow later setup")
 	}
@@ -179,7 +187,7 @@ func BenchmarkBattleIdentity(b *testing.B) {
 		b.Fatal(err)
 	}
 	img := matchRGBA(src)
-	book := LoadBook(config.Default())
+	book := LoadBook(accountFixtureConfig())
 	b.ResetTimer()
 	for b.Loop() {
 		ReadFight(img, book, detect.ModeAuto)
@@ -190,7 +198,7 @@ func TestGuesserUpdatesAcrossSceneAndAccountChanges(t *testing.T) {
 	root := findRepoRoot(t)
 	t.Chdir(root)
 	t.Cleanup(func() { SetMineNames(config.Default().UI.PlayerNames) })
-	guess := Guesser(config.Default())
+	guess := Guesser(accountFixtureConfig())
 	vs := mustPNG(t, filepath.Join(root, "inbox/reject/忍者加载.png"))
 	fight := mustPNG(t, filepath.Join(root, "inbox/regressions/duel-player-left-20260906.png"))
 	if got := guess(vs, "vs"); got.Side != "right" {

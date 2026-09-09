@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"io"
+	"narutotimer/assets"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,7 @@ var hudNameExpansions = func() []struct {
 func NewDictionary(path string) Dictionary {
 	d := Dictionary{}
 	d.addCatalog(bundledNinjaCatalog)
+	d.addCatalog(assets.SubstituteCatalog)
 	if path != "" {
 		d.loadCatalog(filepath.Join(filepath.Dir(path), "vision_catalog.json"))
 		d.loadCatalog(path)
@@ -105,9 +107,29 @@ func (d Dictionary) addCatalog(data []byte) {
 
 func (d Dictionary) addName(name string) {
 	base := strings.Split(compact(name), "[")[0]
-	if validHan(base, 2, 10) {
+	if validNinjaBase(base) {
 		d[base] = true
 	}
+}
+
+// Extracted names such as 萨克·镫 contain a literal interpunct. Keep it as
+// part of the exact dictionary key; neither deleting it nor substituting a
+// different punctuation mark may manufacture an identity. Catalog noise with
+// leading, trailing or consecutive punctuation is not a complete base name.
+func validNinjaBase(s string) bool {
+	count, previousHan := 0, false
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			count++
+			previousHan = true
+			continue
+		}
+		if (r != '·' && r != '・') || !previousHan {
+			return false
+		}
+		previousHan = false
+	}
+	return previousHan && count >= 2 && count <= 10
 }
 
 func validHan(s string, minimum, maximum int) bool {

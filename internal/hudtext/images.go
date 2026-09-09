@@ -1,11 +1,14 @@
 package hudtext
 
 import (
+	"context"
 	"crypto/sha256"
 	"image"
 	"image/color"
+	"image/draw"
 	"math"
 
+	xdraw "golang.org/x/image/draw"
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/match"
@@ -24,8 +27,23 @@ type row struct {
 	rect          image.Rectangle
 }
 type sheet struct {
-	image *image.Gray
-	rows  []row
+	image      *image.Gray
+	colorImage *image.RGBA
+	rows       []row
+}
+
+func (s sheet) read(ctx context.Context, reader ocr.Recognizer) ([]ocr.Line, error) {
+	if regional, ok := reader.(ocr.RegionRecognizer); ok {
+		regions := make([]image.Rectangle, len(s.rows))
+		for i, row := range s.rows {
+			regions[i] = row.rect
+		}
+		if local, ok := reader.(interface{ PrefersColorRows() bool }); ok && local.PrefersColorRows() {
+			return regional.ReadRegions(ctx, s.colorImage, regions)
+		}
+		return regional.ReadRegions(ctx, s.image, regions)
+	}
+	return reader.Read(ctx, s.image)
 }
 
 func nameRegions(img *image.RGBA, cfg config.LayoutConfig, profile string) ([2]image.Rectangle, bool) {
@@ -91,8 +109,8 @@ func lettering(img *image.RGBA, roi image.Rectangle) ([32]byte, int) {
 	return sha256.Sum256(bits), count
 }
 
-// buildSheet runs only in the OCR worker. It gives the engine three independent
-// visual treatments per side: normal luma and inverse luma at two sizes.
+// buildSheet runs only in the OCR worker. It supplies three views per side:
+// luma/inverse luma for system OCR, original/contrast color for local neural OCR.
 // Integer scaling preserves letter shapes better than an arbitrary target width.
 // Coordinates, not synthetic row labels, associate OCR lines with each crop.
 func buildSheet(strips [2]strip) sheet {
@@ -141,7 +159,24 @@ func buildSheet(strips [2]strip) sheet {
 			copy(img.Pix[(bounds.Min.Y+py)*img.Stride+bounds.Min.X:], part.Pix[py*part.Stride:(py+1)*part.Stride])
 		}
 	}
-	return sheet{image: img, rows: rows}
+	colored := image.NewRGBA(img.Bounds())
+	draw.Draw(colored, colored.Bounds(), image.White, image.Point{}, draw.Src)
+	for _, row := range rows {
+		source := strips[row.side].img
+		if row.variant == 1 {
+			adjusted := image.NewRGBA(source.Bounds())
+			for y := source.Bounds().Min.Y; y < source.Bounds().Max.Y; y++ {
+				for x := source.Bounds().Min.X; x < source.Bounds().Max.X; x++ {
+					c := source.RGBAAt(x, y)
+					contrast := func(v uint8) uint8 { return uint8(max(0, min(255, (int(v)-128)*115/100+128))) }
+					adjusted.SetRGBA(x, y, color.RGBA{contrast(c.R), contrast(c.G), contrast(c.B), 255})
+				}
+			}
+			source = adjusted
+		}
+		xdraw.NearestNeighbor.Scale(colored, row.rect, source, source.Bounds(), draw.Src, nil)
+	}
+	return sheet{image: img, colorImage: colored, rows: rows}
 }
 
 func (s sheet) texts(lines []ocr.Line) [2][variants]string {
