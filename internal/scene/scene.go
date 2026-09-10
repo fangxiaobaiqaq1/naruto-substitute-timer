@@ -32,6 +32,7 @@ type Manifest struct {
 }
 
 type TemplateSpec struct {
+	TemplateScale    float64               `json:"templateScale,omitempty"`
 	ContinuationOnly bool                  `json:"continuationOnly,omitempty"`
 	LayoutProfile    string                `json:"layoutProfile,omitempty"`
 	ID               string                `json:"id"`
@@ -75,7 +76,8 @@ type Catalog struct {
 	prepared       []preparedTemplate
 }
 
-// Load 读 manifest。文件不存在或 templates 为空时返回 (nil, nil)，由上层回退旧门闩。
+// Load 默认读取随 EXE 更新的内置资源，显式自定义路径才读取外置 manifest。
+// 自定义文件不存在或 templates 为空时返回 (nil, nil)，由上层回退旧门闩。
 func Load(cfg config.Config) (*Catalog, error) {
 	sc := cfg.Scene
 	if !sc.Enabled {
@@ -85,10 +87,15 @@ func Load(cfg config.Config) (*Catalog, error) {
 	if path == "" {
 		path = DefaultManifest
 	}
-	data, err := os.ReadFile(path)
-	embedded := os.IsNotExist(err) && filepath.Clean(path) == filepath.Clean(DefaultManifest)
+	// A leftover assets directory from an older ZIP must not override a newer EXE.
+	// Keep other paths external so custom calibration remains an explicit option.
+	embedded := filepath.Clean(path) == filepath.Clean(DefaultManifest)
+	var data []byte
+	var err error
 	if embedded {
 		data, err = assets.Templates.ReadFile("templates/manifest.json")
+	} else {
+		data, err = os.ReadFile(path)
 	}
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -153,6 +160,9 @@ func Load(cfg config.Config) (*Catalog, error) {
 		out.holdSet[id] = true
 	}
 	for _, spec := range man.Templates {
+		if spec.TemplateScale != 0 && (spec.TemplateScale < 0.5 || spec.TemplateScale > 2) {
+			return nil, fmt.Errorf("scene: template %s: templateScale must be between 0.5 and 2", spec.ID)
+		}
 		if spec.LayoutProfile != "" && spec.LayoutProfile != "camp" && spec.LayoutProfile != "duel" {
 			return nil, fmt.Errorf("scene: template %s: unsupported layoutProfile %q", spec.ID, spec.LayoutProfile)
 		}
@@ -386,8 +396,12 @@ func (c *Catalog) prepare(ca detect.ContentArea) []preparedTemplate {
 func prepareOne(ca detect.ContentArea, t template) preparedTemplate {
 	roi := mapRect(ca, t.spec.ROI)
 	out := preparedTemplate{spec: t.spec, roi: roi}
-	tw := int(math.Round(float64(t.gray.Bounds().Dx()) * float64(ca.W) / float64(t.refW)))
-	th := int(math.Round(float64(t.gray.Bounds().Dy()) * float64(ca.H) / float64(t.refH)))
+	scale := t.spec.TemplateScale
+	if scale == 0 {
+		scale = 1
+	}
+	tw := int(math.Round(float64(t.gray.Bounds().Dx()) * float64(ca.W) / float64(t.refW) * scale))
+	th := int(math.Round(float64(t.gray.Bounds().Dy()) * float64(ca.H) / float64(t.refH) * scale))
 	if tw < 4 {
 		tw = 4
 	}

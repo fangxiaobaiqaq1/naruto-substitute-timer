@@ -1,6 +1,6 @@
 # 火影忍者手游替身计时器（纯视觉）
 
-v0.1.5 补齐内置 OCR 的 VC 运行依赖，修复旧 DLL 搜索目录导致的启动失败，增加完整启动错误日志，并修复神驹斑六槽红橙豆白色扫光闪跳，详见 [修复说明](docs/release-v0.1.5.md)。
+v0.1.6 修复新版训练场「复位、音乐」工具栏导致的画面未识别，并避免旧 ZIP 场景资源覆盖新版 EXE。保留完整 OCR/VC 依赖、启动日志与神驹斑扫光修复，详见 [修复说明](docs/release-v0.1.6.md)。
 
 本项目以 MIT License 开源。Windows x64 发布版见 [GitHub Releases](https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest)。下载单独的 `timer-app.exe` 放在可写目录运行，或解压完整 ZIP 后运行「启动计时器.bat」。先启动 MuMu 和游戏，程序自动查找安装目录（默认实例 0）。首次启动在程序目录创建 `config.json`；请在设置中填写自己的账号名或手动选边。程序只读取模拟器画面，不读取游戏内存。
 
@@ -95,7 +95,7 @@ v0.1.3 将本地 PP-OCRv4 中文识别模型、CPU 推理运行库、完整解�
 
 ## 检测算法
 
-1. **场景门闩**（`internal/scene`）：先在 HUD 路标上做灰度 NCC。`assets/templates/manifest.json` 列出模板，`config.scene.fightScenes` 列出哪些算对局。匹上对局才采豆；看不清 → Hold（钟不动）；路标明显消失 → 离场。没有模板文件时回退旧的颜色密度 `ClassifyScreen`。
+1. **场景门闩**（`internal/scene`）：先在 HUD 路标上做灰度 NCC。`scene.manifest` 为空或默认相对路径 `assets/templates/manifest.json` 时，始终使用 EXE 内置的清单、模板和遮罩，升级 EXE 不会被旧 ZIP 遗留资源覆盖。需要自定义时，复制清单为其他路径（例如 `assets/templates/custom-manifest.json`），再设置 `scene.manifest`；自定义清单中的图片路径相对于清单目录读取。`config.scene.fightScenes` 列出哪些算对局。匹上对局才采豆；看不清 → Hold（钟不动）；路标明显消失 → 离场。自定义清单缺失或没有可用模板时回退旧的颜色密度 `ClassifyScreen`。
 2. **豆心采样投票**：对每颗豆的标定位置取菱形邻域逐像素分类，按 亮 / 暗 / 未知 多数胜出
 3. **颜色分类**（`internal/detect`，RGB 阈值）：
    - 亮蓝（充能完毕/可用）：R 0~229，G 120~259，B 170~259
@@ -194,7 +194,7 @@ F:\计时器\
 
 Windows x64 需要 Go 和可用的 C/C++ 编译工具链（Fyne 与本地 ONNX 绑定使用 cgo）。**运行 `build.bat`**，生成 CLI、校准工具、正式前端、调试前端和诊断工具五个 EXE 到 `bin\`。脚本会准备 Fyne 绘制诊断补丁；直接执行普通 `go build ./cmd/timer-app` 不等价，不能据此报告到真实绘制提交的端到端延迟。
 
-发布构建先在命令提示符中执行 `set TIMER_VERSION=v0.1.5`，再运行 `build.bat`；未设置时诊断页显示 `development`。本地 OCR 所需模型和 DLL 已在源码中，无需额外下载语言模型。第三方运行依赖的许可与再分发要求见 `THIRD_PARTY_NOTICES.md`。
+发布构建先在命令提示符中执行 `set TIMER_VERSION=v0.1.6`，再运行 `build.bat`；未设置时诊断页显示 `development`。本地 OCR 所需模型和 DLL 已在源码中，无需额外下载语言模型。第三方运行依赖的许可与再分发要求见 `THIRD_PARTY_NOTICES.md`。
 
 ```bash
 # CLI（调试）

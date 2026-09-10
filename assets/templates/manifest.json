@@ -6,6 +6,20 @@
   },
   "templates": [
     {
+      "id": "raw-camp-key-expanded-toolbar",
+      "file": "raw_camp_key_text.png",
+      "scene": "fight",
+      "layoutProfile": "camp",
+      "templateScale": 1.125,
+      "threshold": 0.87,
+      "roi": {
+        "x": 0.509375,
+        "y": 0.07333333333333333,
+        "width": 0.045,
+        "height": 0.03666666666666667
+      }
+    },
+    {
       "id": "raw-camp-key",
       "file": "raw_camp_key_text.png",
       "scene": "fight",
