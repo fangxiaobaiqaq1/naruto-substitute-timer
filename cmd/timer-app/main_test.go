@@ -22,3 +22,20 @@ func TestApplicationDirectory(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestInstalledAppUsesUserDataAndPortableKeepsOwnConfig(t *testing.T) {
+	root := t.TempDir()
+	data := t.TempDir()
+	t.Setenv("APPDATA", data)
+	exe := filepath.Join(root, "timer-app.exe")
+	if got, e := writableApplicationDirectory(exe); e != nil || got != root {
+		t.Fatal(got, e)
+	}
+	if e := os.WriteFile(filepath.Join(root, "installed.marker"), []byte("installed"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	got, e := writableApplicationDirectory(exe)
+	if e != nil || got != filepath.Join(data, "NarutoTimer") {
+		t.Fatal(got, e)
+	}
+}

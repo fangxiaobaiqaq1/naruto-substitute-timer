@@ -178,3 +178,19 @@ func (c *Client) Close() error {
 	c.pixels = nil
 	return c.dll.Release()
 }
+
+func (c *Client) hasGame() bool {
+	if c.opts.Package == "" {
+		return true
+	}
+	if c.display == nil {
+		return false
+	}
+	pkg, err := syscall.BytePtrFromString(c.opts.Package)
+	if err != nil {
+		return false
+	}
+	r, _, _ := c.display.Call(c.handle, uintptr(unsafe.Pointer(pkg)), 0)
+	runtime.KeepAlive(pkg)
+	return int32(r) >= 0
+}

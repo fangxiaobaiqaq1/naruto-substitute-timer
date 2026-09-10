@@ -41,6 +41,8 @@ func (t chromaTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) 
 		return panelHover
 	case theme.ColorNameForeground, theme.ColorNamePrimary, theme.ColorNameHyperlink:
 		return clockLive
+	case theme.ColorNameForegroundOnPrimary:
+		return glassBG
 	case theme.ColorNameDisabled, theme.ColorNamePlaceHolder:
 		return tagIdle
 	case theme.ColorNameInputBackground:

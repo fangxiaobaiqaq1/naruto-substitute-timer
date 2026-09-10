@@ -12,10 +12,10 @@ import (
 
 // DiscoverInstallation only considers known running MuMu executables and
 // validates their installation layout before selecting an SDK.
-func DiscoverInstallation() (string, error) {
+func DiscoverInstallations() ([]string, error) {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
-		return "", fmt.Errorf("enumerate MuMu processes: %w", err)
+		return nil, fmt.Errorf("enumerate MuMu processes: %w", err)
 	}
 	defer windows.CloseHandle(snapshot)
 	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
@@ -42,15 +42,26 @@ func DiscoverInstallation() (string, error) {
 		}
 	}
 	if err != windows.ERROR_NO_MORE_FILES {
-		return "", fmt.Errorf("enumerate MuMu processes: %w", err)
+		return nil, fmt.Errorf("enumerate MuMu processes: %w", err)
 	}
-	if len(roots) > 1 {
-		return "", fmt.Errorf("检测到多个 MuMu 安装目录，请在 config.json 的 capture.mumu.installDir 中指定")
-	}
+	var out []string
 	for _, root := range roots {
-		return root, nil
+		out = append(out, root)
 	}
-	return "", fmt.Errorf("未找到运行中的 MuMu 截图 SDK，请启动 MuMu，或在 config.json 的 capture.mumu.installDir 中填写安装目录")
+	if len(out) == 0 {
+		return nil, fmt.Errorf("请先启动 MuMu，或在设置中选择安装目录")
+	}
+	return out, nil
+}
+func DiscoverInstallation() (string, error) {
+	roots, err := DiscoverInstallations()
+	if err != nil {
+		return "", err
+	}
+	if len(roots) != 1 {
+		return "", fmt.Errorf("发现多个 MuMu 安装，请在设置中选择")
+	}
+	return roots[0], nil
 }
 func installationFromExecutable(executable string) string {
 	var installation string

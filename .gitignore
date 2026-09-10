@@ -1,43 +1,32 @@
 # 构建产物
-bin/
+/bin/
+/bin-opencv/
+/dist/
 *.exe
 *.exe~
 
-# 调试产物（截图/日志）
-debug/
-*.bmp
-*.log
-*.txt
-inbox/**/*.png
-!assets/templates/*.png
-!assets/identity/*.png
-assets/identity/seen/
-
-# 全量 APK 解包（1.9G apk + 展开树，不进 git）
-unpack/apk/
-unpack/extracted/
-unpack/apktool/
-unpack/jadx/
-unpack/native/
-unpack/unity/
-unpack/bundles/
-unpack/metadata/
-*.apk
-*.so
-*.dex
-
-# Local state and release staging
+# 本机配置、工具状态与临时目录
 /config.json
 /tmp/
-/dist/
-/bin-opencv/
 /.reasonix/
 /.zcode/
 /%SystemDrive%/
-/unpack/
+/nul
+
+# 调试图像、日志及个人姓名模板
+/debug/
 /inbox/
 /*.png
-/nul
-/assets/identity/**/*.png
-/assets/identity/*.png
+*.bmp
+*.log
+*.txt
 !/scripts/fyne-diagnostics/frame_hook.go.txt
+/assets/identity/*.png
+/assets/identity/**/*.png
+/assets/identity/seen/
+
+# APK 与解包资料（不用于常规构建）
+/unpack/
+*.apk
+*.so
+*.dex

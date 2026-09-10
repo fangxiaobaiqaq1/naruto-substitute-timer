@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 if not exist bin mkdir bin
-if not defined GOCACHE set "GOCACHE=%CD%\bin\go-cache"
+rem Use Go's default cache location; honor an explicit GOCACHE.
 if not defined TIMER_VERSION set "TIMER_VERSION=development"
 set "VERSION_FLAGS=-X narutotimer/internal/buildinfo.Version=%TIMER_VERSION%"
 go mod download || goto :fail

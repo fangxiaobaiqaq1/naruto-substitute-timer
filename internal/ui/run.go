@@ -2,8 +2,10 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"image/color"
+	"narutotimer/internal/buildinfo"
 	"os"
 	"strings"
 	"sync"
@@ -26,9 +28,17 @@ import (
 	"narutotimer/internal/win32"
 )
 
-const overlayTitle = "替身"
+var overlayTitle = "替身 · " + buildinfo.Version
 
 type session struct {
+	captureCancel  context.CancelFunc
+	captureRefresh func()
+	sourceRevision uint64
+	captureControl func(config.MuMuCaptureConfig) uint64
+	captureSource  string
+	initialAbout   bool
+	settingsTabs   *container.AppTabs
+	aboutCancel    context.CancelFunc
 	diagnosticsState
 	done                  chan struct{}
 	stopOnce              sync.Once
@@ -163,6 +173,10 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 			applyTopmost(overlayTitle, true)
 		}
 	}()
+	if s.initialAbout {
+		w.Show()
+		s.openAbout()
+	}
 	w.ShowAndRun()
 	return nil
 }
@@ -201,11 +215,13 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	set := widget.NewButton("设置", s.openSettings)
 	swap := widget.NewButton("换边", s.swapSide)
 	diag := widget.NewButton("诊断", s.openDiagnostics)
+	about := widget.NewButton("关于", s.openAbout)
+	about.Importance = widget.LowImportance
 	set.Importance = widget.LowImportance
 	swap.Importance = widget.LowImportance
 	diag.Importance = widget.LowImportance
 	glass := canvas.NewRectangle(glassBG)
-	body := container.NewBorder(nil, container.NewGridWithColumns(3, swap, set, diag), nil, nil,
+	body := container.NewBorder(nil, container.NewGridWithColumns(4, swap, set, diag, about), nil, nil,
 		container.NewVBox(
 			container.NewCenter(s.tag),
 			container.NewCenter(container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(s.eventTag))),
@@ -277,7 +293,16 @@ func (s *session) loop() {
 }
 
 func (s *session) stop() {
-	s.stopOnce.Do(func() { close(s.done); s.stopDiagnostics() })
+	s.stopOnce.Do(func() {
+		close(s.done)
+		s.stopDiagnostics()
+		if s.aboutCancel != nil {
+			s.aboutCancel()
+		}
+		if s.captureCancel != nil {
+			s.captureCancel()
+		}
+	})
 }
 
 func (s *session) stopped() bool {
@@ -397,6 +422,10 @@ func (s *session) captureOnce() {
 		s.mu.Unlock()
 		return
 	}
+	if f.SourceRevision != s.sourceRevision {
+		s.mu.Unlock()
+		return
+	}
 	s.traceFrame = trace
 	width, height := 0, 0
 	if f.Img != nil {
@@ -414,6 +443,7 @@ func (s *session) captureOnce() {
 		s.status = f.Err.Error()
 	}
 	s.scene = f.Scene
+	s.captureSource = f.CaptureMethod
 	s.textStatus, s.textError = f.TextStatus, f.TextError
 	s.captureLost = f.Err != nil
 	s.hold = f.Hold || s.captureLost

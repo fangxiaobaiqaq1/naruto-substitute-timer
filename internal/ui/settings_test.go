@@ -22,6 +22,9 @@ import (
 )
 
 func settingsRadio(root fyne.CanvasObject) *widget.RadioGroup {
+	if tabs, ok := root.(*container.AppTabs); ok {
+		return settingsRadio(tabs.Selected().Content)
+	}
 	if radio, ok := root.(*widget.RadioGroup); ok {
 		return radio
 	}

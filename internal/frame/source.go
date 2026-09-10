@@ -55,6 +55,22 @@ func AnalyzeImage(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, s
 // allowed to enter native capture: timeouts never spawn an unbounded call queue.
 // Close signals shutdown and releases the SDK once any in-flight native call ends.
 func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, func()) {
+	p, close, _ := NewSelectableSnapshotter(eng, cfg)
+	return p, close
+}
+func NewSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.MuMuCaptureConfig) uint64) {
+	var selectionMu sync.Mutex
+	selected := cfg.Capture.MuMu
+	var revision, activeRevision uint64
+	setSelection := func(next config.MuMuCaptureConfig) uint64 {
+		selectionMu.Lock()
+		selected = next
+		revision++
+		value := revision
+		selectionMu.Unlock()
+		return value
+	}
+
 	mode, _ := detect.ParseMode(cfg.Layout.ContentMode)
 	var client *mumu.Client
 	var retryAfter time.Time
@@ -76,6 +92,18 @@ func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 		methods = []string{"mumu-sdk"}
 	}
 	inner := func() Frame {
+		selectionMu.Lock()
+		next, rev := selected, revision
+		selectionMu.Unlock()
+		if rev != activeRevision {
+			if client != nil {
+				client.Close()
+				client = nil
+			}
+			cfg.Capture.MuMu = next
+			retryAfter = time.Time{}
+			activeRevision = rev
+		}
 		var f Frame
 		for _, method := range methods {
 			started := time.Now()
@@ -88,7 +116,12 @@ func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 					}
 					o := cfg.Capture.MuMu
 					var err error
-					client, err = mumu.Open(mumu.Options{InstallDir: o.InstallDir, DLLPath: o.DLLPath, Instance: o.Instance, DisplayID: o.DisplayID, Package: o.Package})
+					options := mumu.Options{InstallDir: o.InstallDir, DLLPath: o.DLLPath, Instance: o.Instance, DisplayID: o.DisplayID, Package: o.Package}
+					if o.Selection == "manual" || (o.Selection == "" && (o.Instance != 0 || o.DLLPath != "")) {
+						client, err = mumu.Open(options)
+					} else {
+						client, err = mumu.OpenAuto(options)
+					}
 					if err != nil {
 						retryError = err
 						retryAfter = time.Now().Add(5 * time.Second)
@@ -108,7 +141,7 @@ func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 					f = Frame{Hold: true, Err: err, CaptureStarted: started, CaptureMethod: method}
 					continue
 				}
-				f = AnalyzeImage(img, eng, mode, started, captured, method)
+				f = AnalyzeImage(img, eng, mode, started, captured, client.Source())
 			} else if method == "printwindow-fullcontent" {
 				f = snapshot(eng, mode)
 			} else {
@@ -130,7 +163,22 @@ func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 	if timeout <= 0 {
 		timeout = 1200 * time.Millisecond
 	}
-	return boundedProvider(inner, cleanup, timeout, currentAttempt)
+	provider, close := boundedProvider(inner, cleanup, timeout, currentAttempt)
+	guarded := func() Frame {
+		selectionMu.Lock()
+		before := revision
+		selectionMu.Unlock()
+		f := provider()
+		f.SourceRevision = before
+		selectionMu.Lock()
+		changed := before != revision
+		selectionMu.Unlock()
+		if changed {
+			return Frame{Hold: true, Err: fmt.Errorf("正在切换模拟器，请稍候")}
+		}
+		return f
+	}
+	return guarded, close, setSelection
 }
 
 type captureAttempt struct {

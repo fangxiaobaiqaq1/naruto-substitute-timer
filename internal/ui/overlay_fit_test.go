@@ -22,6 +22,9 @@ func fitNativeOverlayPreview(w fyne.Window) {
 }
 
 func overlayButton(root fyne.CanvasObject, label string) *widget.Button {
+	if tabs, ok := root.(*container.AppTabs); ok {
+		return overlayButton(tabs.Selected().Content, label)
+	}
 	if button, ok := root.(*widget.Button); ok && button.Text == label {
 		return button
 	}

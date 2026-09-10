@@ -29,6 +29,7 @@ type Bead struct {
 
 // Frame 是一次刷新得到的完整显示数据。
 type Frame struct {
+	SourceRevision      uint64 // Discards in-flight frames after a selected-instance change.
 	TextStatus          string
 	TextError           string
 	Img                 *image.RGBA // 原始截图（不带框，UI 自己画框）

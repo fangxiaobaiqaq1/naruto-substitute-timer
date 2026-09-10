@@ -49,6 +49,7 @@ type CaptureConfig struct {
 }
 
 type MuMuCaptureConfig struct {
+	Selection  string `json:"selection,omitempty"`
 	InstallDir string `json:"installDir"`
 	DLLPath    string `json:"dllPath"`
 	Instance   int    `json:"instance"`

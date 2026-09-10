@@ -15,6 +15,9 @@ func Validate(c Config) error {
 	if c.Capture.TimeoutMS <= 0 {
 		return fmt.Errorf("capture.timeoutMs: must be positive")
 	}
+	if c.Capture.MuMu.Selection != "" && c.Capture.MuMu.Selection != "auto" && c.Capture.MuMu.Selection != "manual" {
+		return fmt.Errorf("capture.mumu.selection: choose auto or manual")
+	}
 	if c.Capture.MuMu.Instance < 0 || c.Capture.MuMu.DisplayID < 0 {
 		return fmt.Errorf("capture.mumu: instance and displayId must be nonnegative")
 	}

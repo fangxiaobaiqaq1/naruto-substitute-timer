@@ -141,7 +141,17 @@ func (s *session) openSettings() {
 	if w == nil {
 		w = fyne.CurrentApp().NewWindow("替身设置")
 		s.settings = w
-		w.SetOnClosed(func() { s.settings, s.settingsSide = nil, nil; s.textStatusLabel = nil })
+		w.SetOnClosed(func() {
+			if s.captureCancel != nil {
+				s.captureCancel()
+			}
+			if s.aboutCancel != nil {
+				s.aboutCancel()
+			}
+			s.settings, s.settingsSide = nil, nil
+			s.textStatusLabel = nil
+			s.settingsTabs = nil
+		})
 	}
 	// Rebuild from current state every time, not the stale controls from the last
 	// time this window was hidden (the overlay's swap button may have changed it).
@@ -195,8 +205,22 @@ func (s *session) openSettings() {
 	)
 	diagnosticEntry := widget.NewButton("采集与延迟诊断 / 原帧录制", s.openDiagnostics)
 	bg := canvas.NewRectangle(panelBG)
-	w.SetContent(container.NewStack(bg, container.NewPadded(container.NewBorder(diagnosticEntry, save, nil, nil, container.NewVScroll(form)))))
-	w.Resize(fyne.NewSize(380, 430))
+	if s.aboutCancel != nil {
+		s.aboutCancel()
+	}
+	if s.captureCancel != nil {
+		s.captureCancel()
+	}
+	general := container.NewBorder(diagnosticEntry, save, nil, nil, container.NewVScroll(form))
+	tabs := container.NewAppTabs(container.NewTabItem("常规", general), container.NewTabItem("模拟器", s.captureControls(w)), container.NewTabItem("关于与更新", s.aboutControls(w)))
+	s.settingsTabs = tabs
+	tabs.OnSelected = func(tab *container.TabItem) {
+		if tab.Text == "模拟器" && s.captureRefresh != nil {
+			s.captureRefresh()
+		}
+	}
+	w.SetContent(container.NewStack(bg, container.NewPadded(tabs)))
+	w.Resize(fyne.NewSize(620, 640))
 	w.Show()
 	w.RequestFocus()
 }
@@ -283,5 +307,12 @@ func (s *session) textStatusText() string {
 		return "本地 OCR 暂不可用，特殊豆型模板和手动选择仍可用；请到诊断查看原因"
 	default:
 		return "等候清晰对局姓名；OCR 不上传截图"
+	}
+}
+
+func (s *session) openAbout() {
+	s.openSettings()
+	if s.settingsTabs != nil {
+		s.settingsTabs.SelectIndex(2)
 	}
 }

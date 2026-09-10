@@ -7,18 +7,37 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"narutotimer/internal/buildinfo"
 	"narutotimer/internal/config"
 	"narutotimer/internal/engine/factory"
 	"narutotimer/internal/frame"
 	"narutotimer/internal/ui"
+	"narutotimer/internal/updates"
 	"narutotimer/internal/win32"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(buildinfo.Version)
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == updates.ApplyArgument {
+		if err := updates.ApplyFile(os.Args[2]); err != nil {
+			fail(err)
+		}
+		return
+	}
+
+	go updates.PruneCache(time.Now())
 	// Resolve config beside the executable, independent of shortcut working directory.
 	if executable, err := os.Executable(); err == nil {
-		if err := os.Chdir(applicationDirectory(executable)); err != nil {
+		dir, err := writableApplicationDirectory(executable)
+		if err != nil {
+			fail(err)
+		}
+		if err := os.Chdir(dir); err != nil {
 			fail(err)
 		}
 	}
@@ -31,9 +50,9 @@ func main() {
 		fail(err)
 	}
 	defer eng.Close()
-	provider, closeCapture := frame.NewConfiguredSnapshotter(eng, cfg)
+	provider, closeCapture, controlCapture := frame.NewSelectableSnapshotter(eng, cfg)
 	defer closeCapture()
-	if err := ui.Run(cfg, provider, ui.WithTextRecognitionControl(eng.SetEnabled)); err != nil {
+	if err := ui.Run(cfg, provider, ui.WithTextRecognitionControl(eng.SetEnabled), ui.WithCaptureSelection(controlCapture), ui.WithInitialAbout(len(os.Args) == 2 && os.Args[1] == "--about")); err != nil {
 		fail(err)
 	}
 }
@@ -58,4 +77,19 @@ func applicationDirectory(executable string) string {
 		}
 	}
 	return dir
+}
+
+func writableApplicationDirectory(executable string) (string, error) {
+	dir := applicationDirectory(executable)
+	if _, err := os.Stat(filepath.Join(filepath.Dir(executable), "installed.marker")); err == nil {
+		root, err := os.UserConfigDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(root, "NarutoTimer")
+		if err = os.MkdirAll(dir, 0700); err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
 }
