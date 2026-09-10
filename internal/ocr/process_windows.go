@@ -16,10 +16,11 @@ import (
 )
 
 type response struct {
-	Ready bool   `json:"ready"`
-	ID    uint64 `json:"id"`
-	Error string `json:"error"`
-	Lines []Line `json:"lines"`
+	Ready            bool              `json:"ready"`
+	ID               uint64            `json:"id"`
+	Error            string            `json:"error"`
+	Lines            []Line            `json:"lines"`
+	RuntimeLibraries map[string]string `json:"runtime_libraries,omitempty"`
 }
 
 type processIO struct {

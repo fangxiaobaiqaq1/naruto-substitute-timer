@@ -5,7 +5,18 @@ package ocr
 import (
 	"context"
 	"image"
+	"os"
+	"path/filepath"
 )
+
+// RuntimeLogDirectory holds bounded native-startup metadata, never frames.
+func RuntimeLogDirectory() string {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(cache, "naruto-timer", "logs")
+}
 
 type Word struct {
 	Text   string  `json:"text"`

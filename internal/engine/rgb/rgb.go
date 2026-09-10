@@ -150,6 +150,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 			redHighlight := palette == ninja.Red && redLowerBody(img, p, w, h)
 			purpleHighlight := palette == ninja.Purple && purpleGlintBody(img, p, w, h)
 			goldHighlight := (palette == "" || palette == ninja.Warm) && goldGlintBody(img, p, w, h)
+			warmHighlight := palette == ninja.Warm && identified[index].Slots == 6 && warmGlintBody(img, p, w, h)
 			light, dark, gold, paleGold, blue, total := 0, 0, 0, 0, 0, 0
 			for dy := -h / 2; dy <= h/2; dy++ {
 				for dx := -w / 2; dx <= w/2; dx++ {
@@ -162,6 +163,10 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 					}
 					c := img.RGBAAt(p.X+dx, p.Y+dy)
 					r, g, b := int(c.R), int(c.G), int(c.B)
+					if warmHighlight && r >= 235 && g >= 210 && r+12 >= g && g >= b {
+						light++
+						continue
+					}
 					if purpleHighlight && r >= 235 && b >= 235 && g >= 210 && r+12 >= g && b+12 >= g {
 						light++
 						continue

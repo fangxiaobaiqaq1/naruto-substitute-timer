@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -16,7 +15,6 @@ import (
 	"math"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -37,7 +35,8 @@ const helperArgument = "--timer-local-ocr-worker-v1"
 func init() {
 	if len(os.Args) == 2 && os.Args[1] == helperArgument {
 		if err := runLocalWorker(); err != nil {
-			_ = json.NewEncoder(os.Stdout).Encode(response{Error: err.Error()})
+			writeRuntimeFailure(err)
+			_ = json.NewEncoder(os.Stdout).Encode(response{Error: runtimeErrorSummary(err)})
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -58,49 +57,22 @@ func NewLocal() Recognizer {
 	})}
 }
 
-func BackendName() string { return "本机 PP-OCRv4（模型已内置）" }
+func BackendName() string { return "本机 PP-OCRv4（模型及运行依赖已内置）" }
 
-func runLocalWorker() error {
-	// One content-addressed runtime per version; killed workers must not leave
-	// a new large temporary DLL behind on every retry.
-	cache, err := os.UserCacheDir()
+func runLocalWorker() (err error) {
+	dll, loaded, err := prepareLocalRuntime()
 	if err != nil {
 		return err
 	}
-	digest := sha256.Sum256(recognitionRuntime)
-	dir := filepath.Join(cache, "naruto-timer", "ocr", fmt.Sprintf("%x", digest))
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	dll := filepath.Join(dir, "onnxruntime.dll")
-	stored, err := os.ReadFile(dll)
-	if os.IsNotExist(err) {
-		file, e := os.CreateTemp(dir, "runtime-*.tmp")
-		if e != nil {
-			return e
+	defer loaded.close()
+	defer func() {
+		if err != nil {
+			err = &runtimeContextError{Err: err, Loaded: loaded.paths}
 		}
-		defer os.Remove(file.Name())
-		_, e = file.Write(recognitionRuntime)
-		closeErr := file.Close()
-		if e != nil {
-			return e
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if e := os.Rename(file.Name(), dll); e != nil {
-			// Another worker may have installed and loaded the same DLL.
-			other, readErr := os.ReadFile(dll)
-			if readErr != nil || sha256.Sum256(other) != digest {
-				return e
-			}
-		}
-	} else if err != nil || sha256.Sum256(stored) != digest {
-		return fmt.Errorf("OCR runtime cache checksum mismatch: %s", dll)
-	}
+	}()
 	ort.SetSharedLibraryPath(dll)
 	if err := ort.InitializeEnvironment(); err != nil {
-		return fmt.Errorf("加载内置 OCR 运行库失败（Windows 需要 Microsoft Visual C++ v14 x64 运行库）：%w", err)
+		return fmt.Errorf("初始化 ONNX 环境失败: %w", err)
 	}
 	defer ort.DestroyEnvironment()
 	options, err := ort.NewSessionOptions()
@@ -131,7 +103,8 @@ func runLocalWorker() error {
 	characters := append([]string{""}, strings.Split(strings.TrimRight(dictionary, "\r\n"), "\n")...)
 	characters = append(characters, " ")
 	encoder := json.NewEncoder(os.Stdout)
-	if err := encoder.Encode(response{Ready: true}); err != nil {
+	writeRuntimeStatus(loaded.paths)
+	if err := encoder.Encode(response{Ready: true, RuntimeLibraries: loaded.paths}); err != nil {
 		return err
 	}
 	scan := bufio.NewScanner(os.Stdin)

@@ -1,12 +1,12 @@
 # 火影忍者手游替身计时器（纯视觉）
 
-v0.1.4 修复训练营紫豆/金豆待机扫光引起的豆数问号闪跳，已做连续原生采集验证，详见 [修复说明](docs/release-v0.1.4.md)。
+v0.1.5 补齐内置 OCR 的 VC 运行依赖，修复旧 DLL 搜索目录导致的启动失败，增加完整启动错误日志，并修复神驹斑六槽红橙豆白色扫光闪跳，详见 [修复说明](docs/release-v0.1.5.md)。
 
 本项目以 MIT License 开源。Windows x64 发布版见 [GitHub Releases](https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest)。下载单独的 `timer-app.exe` 放在可写目录运行，或解压完整 ZIP 后运行「启动计时器.bat」。先启动 MuMu 和游戏，程序自动查找安装目录（默认实例 0）。首次启动在程序目录创建 `config.json`；请在设置中填写自己的账号名或手动选边。程序只读取模拟器画面，不读取游戏内存。
 
 v0.1.3 将本地 PP-OCRv4 中文识别模型、CPU 推理运行库、完整解包忍者资料库和替身表一并内置进 EXE；场景模板与掩码也继续内置。普通忍者姓名通过 OCR 与资料库核对，无需逐个收集名字截图，也无需安装 Python 或系统中文 OCR 语言包。资料库有 2490 条目录记录，含变体和内部项，不等于 2490 名可玩忍者或识别准确率保证。点击「诊断」可查看版本、OCR 后端、库数量和失败原因，排查是否启动了旧 EXE。变更与验证范围见 [v0.1.3 说明](docs/release-v0.1.3.md)。
 
-运行环境为 Windows 10/11 x64。ONNX Runtime 还需要 Microsoft Visual C++ v14 x64 运行库；缺失时请从 [Microsoft 官方下载页](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) 安装最新 x64 版本。详见 [ONNX Runtime 官方要求](https://onnxruntime.ai/docs/install/)。
+运行环境为 Windows 10/11 x64。发布版已内置 ONNX 所需的四个 Microsoft Visual C++ v14 x64 DLL，无需另外安装运行库；按整套资源的哈希释放到用户缓存，限定目录加载并核对实际模块路径。
 
 > 当前改造与运行入口见 [低延迟版本与诊断](docs/低延迟版本与诊断.md)。下文保留了早期实现记录；界面、采样周期、冷却时间和布局描述应以当前配置及源码为准。
 
@@ -194,7 +194,7 @@ F:\计时器\
 
 Windows x64 需要 Go 和可用的 C/C++ 编译工具链（Fyne 与本地 ONNX 绑定使用 cgo）。**运行 `build.bat`**，生成 CLI、校准工具、正式前端、调试前端和诊断工具五个 EXE 到 `bin\`。脚本会准备 Fyne 绘制诊断补丁；直接执行普通 `go build ./cmd/timer-app` 不等价，不能据此报告到真实绘制提交的端到端延迟。
 
-发布构建先在命令提示符中执行 `set TIMER_VERSION=v0.1.3`，再运行 `build.bat`；未设置时诊断页显示 `development`。本地 OCR 所需模型和 DLL 已在源码中，无需额外下载语言模型。
+发布构建先在命令提示符中执行 `set TIMER_VERSION=v0.1.5`，再运行 `build.bat`；未设置时诊断页显示 `development`。本地 OCR 所需模型和 DLL 已在源码中，无需额外下载语言模型。第三方运行依赖的许可与再分发要求见 `THIRD_PARTY_NOTICES.md`。
 
 ```bash
 # CLI（调试）
@@ -255,7 +255,7 @@ bin/timer-app.exe
 
 在设置中可即时开启/关闭「后台识别名字（内置本地 OCR）」。Windows x64 发布版使用内置 PP-OCRv4，采豆不等待 OCR；至少两个视图及两次不同采集时间的结果一致，且当前字形仍匹配才接受。库内姓名支持中点，例如「萨克·镫」。模型读错或缺字时仍可能显示“待确认”或“忍者未确认”，不自动替换错字、猜测忍者版本。手动选择和已有特殊豆型模板继续优先。
 
-首次使用 OCR 时，内置运行库解到当前用户缓存目录的 `naruto-timer/ocr/<SHA256>/`，同版本复用并校验哈希；图片通过本机管道处理，不联网识别。运行库无法加载或识别超时时可在「诊断」查看状态，其他检测路径继续运行。模型、运行库和第三方许可说明见 [本地 OCR 资源](internal/ocr/neuraldata/README.md)。
+首次使用 OCR 时，内置运行库解到当前用户缓存目录的 `naruto-timer/ocr/<整套文件SHA256>/`，同版本复用、校验并自动修复损坏文件；图片通过本机管道处理，不联网识别。运行库无法加载或识别超时时可在「诊断」查看状态，其他检测路径继续运行。「打开 OCR 启动日志」可查看 `%LOCALAPPDATA%/naruto-timer/logs/` 中的完整错误码、原因、程序版本和实际模块路径。仅保留最后一次失败和最新成功状态两个 JSON，不包含游戏图像。模型、运行库和第三方许可说明见 [本地 OCR 资源](internal/ocr/neuraldata/README.md)。
 
 采集日志和原帧录制可从「诊断」开启；原帧只在有效对局中保存，受队列与容量上限约束。报告分别列出采集、分析、确认、UI 投递和绘制阶段；无有效帧、未绘制结果、单个函数耗时不会作为完整端到端延迟样本。详见 [前端诊断与原帧录制](docs/前端诊断与原帧录制.md)。
 

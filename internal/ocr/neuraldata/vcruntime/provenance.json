@@ -1,0 +1,116 @@
+{
+  "name": "Microsoft Visual C++ v14 x64 runtime",
+  "version": "14.51.36247.0",
+  "source_url": "https://download.visualstudio.microsoft.com/download/pr/3984a6ef-2ffc-4c07-962e-bf9e9b862819/24a1c8dba0376d9b008ac2ba430d13c06664fc6f163511fd7866485030e289af/Microsoft.VC.14.51.CRT.Redist.X64.base.vsix",
+  "files": [
+    {
+      "path": "vcruntime140.dll",
+      "archive_member": "Contents/VC/Redist/MSVC/14.51.36231/x64/Microsoft.VC145.CRT/vcruntime140.dll",
+      "size": 178616,
+      "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7",
+      "version": "14.51.36247.0"
+    },
+    {
+      "path": "vcruntime140_1.dll",
+      "archive_member": "Contents/VC/Redist/MSVC/14.51.36231/x64/Microsoft.VC145.CRT/vcruntime140_1.dll",
+      "size": 50112,
+      "sha256": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e",
+      "version": "14.51.36247.0"
+    },
+    {
+      "path": "msvcp140.dll",
+      "archive_member": "Contents/VC/Redist/MSVC/14.51.36231/x64/Microsoft.VC145.CRT/msvcp140.dll",
+      "size": 643512,
+      "sha256": "7c26614e1d733892c2deac7e245ce115504b1d80592dd0a01b08e3e5a55f89ca",
+      "version": "14.51.36247.0"
+    },
+    {
+      "path": "msvcp140_1.dll",
+      "archive_member": "Contents/VC/Redist/MSVC/14.51.36231/x64/Microsoft.VC145.CRT/msvcp140_1.dll",
+      "size": 35768,
+      "sha256": "206c931bf90fdad8816de3b5e2ef80b2bcaa9406c89ecc05fe6fddffe251e982",
+      "version": "14.51.36247.0"
+    }
+  ],
+  "runtime_license_url": "https://visualstudio.microsoft.com/license-terms/vs2026-ga-visualcpp-v14-redist-runtime/",
+  "runtime_license_docx_url": "https://visualstudio.microsoft.com/wp-content/uploads/2025/10/Visual-C-V14-License-Redistributable_and_Runtime_ENU.docx",
+  "runtime_license_docx_sha256": "08651651a7602fc7c0e2763de0fde1ff9f868df2780597cd1775ee9d6441c783",
+  "redistribution_reference": {
+    "source_url": "https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution",
+    "retrieval": "Microsoft Learn Accept: text/markdown response",
+    "file": "VS-COMMUNITY-REDIST.md",
+    "sha256": "d6482a47e91ab904187b795d4b5e9271f9c08edd45ad648a8fa99c90b99c7aa0",
+    "covered_path": "[VisualStudioFolder]/VC/Redist (release files; debug_nonredist excluded)"
+  },
+  "note": "Microsoft Community developer license and the REDIST list provide the applicable object-code redistribution terms; the separate runtime EULA covers end-user installation/use. These Microsoft files remain proprietary and are not relicensed under MIT.",
+  "verified_on": "2026-09-10",
+  "license_files": [
+    {
+      "file": "VC-RUNTIME-LICENSE.md",
+      "source_url": "https://visualstudio.microsoft.com/wp-content/uploads/2025/10/Visual-C-V14-License-Redistributable_and_Runtime_ENU.docx",
+      "sha256": "fcd3649a1ea1ed04d849521aca4950ca3db98b3a69f542b51d94cf71f4f17b64",
+      "format": "Plain text extracted from the official DOCX; all paragraph text retained."
+    }
+  ],
+  "windows_system_dependencies": [
+    "KERNEL32.dll",
+    "api-ms-win-crt-*.dll (Windows 10/11 Universal CRT)"
+  ],
+  "validation": "Official Community developer component SHA-256 matched its catalog entry. Catalog downloaded from the official bootstrapper channel; actual and channel-declared catalog hashes are recorded separately. Four unmodified developer-component DLLs exactly match the independently verified Microsoft installer extraction; each DLL has a valid Microsoft Authenticode signature. Recursive PE imports require no further non-Windows DLL.",
+  "load_order": [
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll"
+  ],
+  "source_archive_sha256": "24a1c8dba0376d9b008ac2ba430d13c06664fc6f163511fd7866485030e289af",
+  "source_archive_size_bytes": 3397395,
+  "source_package": {
+    "id": "Microsoft.VC.14.51.CRT.Redist.X64.base",
+    "version": "14.51.36247",
+    "type": "Vsix"
+  },
+  "independent_installer_verification": {
+    "source_url": "https://download.visualstudio.microsoft.com/download/pr/ebdab8e5-1d7b-4d9f-a11b-cbb1720c3b12/843068991DAAA1F73AD9F6239BCE4D0F6A07A51F18C37EA2A867E9BECA71295C/VC_redist.x64.exe",
+    "sha256": "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c",
+    "authenticode": "Valid; Microsoft Corporation",
+    "extraction": {
+      "attached_cab_offset": 630000,
+      "attached_cab_size": 18091661,
+      "payload": "a4",
+      "payload_path": "packages/vcRuntimeMinimum_amd64/cab1.cab",
+      "payload_sha1": "21A16C194602BD649D37D0A27B21B9E60171E8B5"
+    },
+    "result": "The four DLLs in the Community developer component match the independently downloaded Microsoft runtime installer byte for byte."
+  },
+  "developer_license": {
+    "product": "Microsoft Visual Studio Community 2026",
+    "source_url": "https://visualstudio.microsoft.com/license-terms/vs2026-ga-community/",
+    "source_docx_url": "https://visualstudio.microsoft.com/wp-content/uploads/2025/10/Visual_Studio_2026-License-Community_ENU.docx",
+    "source_docx_sha256": "02ac07637f4a513a807cd3721c7620433fc483bc049d25784b0c10c54b05e1fb",
+    "file": "VS-COMMUNITY-LICENSE.md",
+    "sha256": "15d1b3e34b3a2a869bdddba585766f9901a4aaafad608aecbcf069b6032cea7c",
+    "applicable_sections": [
+      "INSTALLATION AND USE RIGHTS: Individual License / Organizational License for OSI-approved open-source applications",
+      "DISTRIBUTABLE CODE: Right to Use and Distribute; Distribution Requirements and Restrictions"
+    ],
+    "format": "All paragraph text extracted from the official DOCX; wording retained."
+  },
+  "developer_acquisition": {
+    "method": "Downloaded the official stable Community bootstrapper and its official channel/product manifests; downloaded and extracted only the identified VC developer component for this MIT open-source project. No Visual Studio installer, layout process, activation, or global runtime installation was executed.",
+    "bootstrapper_url": "https://download.visualstudio.microsoft.com/download/pr/af2bf19c-59e9-48c4-bac6-019f173389ac/1945e509688ab509608d48666c2369a7a8fcee4bc7da5f0bd248f47a241b0735/vs_Community.exe",
+    "bootstrapper_sha256": "1945e509688ab509608d48666c2369a7a8fcee4bc7da5f0bd248f47a241b0735",
+    "bootstrapper_authenticode": "Valid; Microsoft Corporation",
+    "product": "Microsoft.VisualStudio.Product.Community",
+    "product_version": "18.10.12201.205",
+    "channel_uri": "https://aka.ms/vs/18/stable/channel",
+    "channel_sha256": "36141ed4b8df0f2a4d384244db0a61b692d8ac1087cf8ec09033913aa04e17c6",
+    "catalog_url": "https://download.visualstudio.microsoft.com/download/pr/af2bf19c-59e9-48c4-bac6-019f173389ac/6ba61d1b4513900e9374bf2c17642fd2ab152377c5011bcd42a00e86bb4c172e/VisualStudio.vsman",
+    "catalog_sha256": "7efff81f77aa16060608c50d6291877462f6164562f0c4c65875affd4fa3aed9",
+    "catalog_declared_sha256": "6ba61d1b4513900e9374bf2c17642fd2ab152377c5011bcd42a00e86bb4c172e",
+    "catalog_verification_note": "The Microsoft endpoint returned a different serialized/signed catalog hash than the channel payload hint; two independent downloads matched each other. The downloaded developer VSIX SHA-256 exactly matches its catalog entry, and the extracted DLLs retain valid Microsoft signatures.",
+    "developer_package": "Microsoft.VisualCpp.CRT.Redist.X64",
+    "developer_package_version": "14.51.36247",
+    "payload_dependency": "Microsoft.VC.14.51.CRT.Redist.X64.base"
+  }
+}

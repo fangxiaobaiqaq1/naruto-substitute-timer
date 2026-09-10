@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "verified_on": "2026-09-09",
-  "verification": "Official PyPI archive SHA-256 checked; extracted archive members matched the shipped files byte for byte.",
+  "verified_on": "2026-09-10",
+  "verification": "Official source archive hashes checked; extracted archive members matched the shipped files byte for byte. Microsoft VC runtime files additionally checked for valid Microsoft Authenticode signatures.",
   "artifacts": [
     {
       "file": "recognizer.onnx",
@@ -53,11 +53,15 @@
           "sha256": "fb0af774b4d7cffc5b9d046f2aaeade2f37df2f80abf8033c95dfffcc77a8866"
         }
       ],
-      "external_runtime_requirement": {
-        "component": "Microsoft Visual C++ v14 x64 Redistributable",
-        "redistributed": false,
+      "bundled_runtime_dependency": {
+        "component": "Microsoft Visual C++ v14 x64 Runtime",
+        "version": "14.51.36247.0",
+        "redistributed": true,
+        "directory": "vcruntime",
+        "provenance": "vcruntime/provenance.json",
+        "license": "Microsoft Software License Terms; not MIT",
         "requirement_source": "https://onnxruntime.ai/docs/install/",
-        "download_information": "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist"
+        "system_requirement": "Windows 10/11 x64 with the OS-provided Universal CRT"
       }
     }
   ],

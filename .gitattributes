@@ -2,3 +2,6 @@
 internal/ocr/neuraldata/* -text
 internal/ocr/neuraldata/*LICENSE.md -whitespace
 internal/ocr/neuraldata/*NOTICES.md -whitespace
+internal/ocr/neuraldata/vcruntime/* -text
+internal/ocr/neuraldata/vcruntime/*LICENSE.md -whitespace
+internal/ocr/neuraldata/vcruntime/*REDIST.md -whitespace

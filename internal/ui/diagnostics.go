@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -339,8 +340,22 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 			dialog.ShowError(err, w)
 		}
 	})
+	openOCR := widget.NewButton("打开 OCR 启动日志", func() {
+		path := ocr.RuntimeLogDirectory()
+		if path == "" {
+			dialog.ShowError(fmt.Errorf("无法获取用户日志目录"), w)
+			return
+		}
+		err := os.MkdirAll(path, 0700)
+		if err == nil {
+			err = fyne.CurrentApp().OpenURL(&url.URL{Scheme: "file", Path: "/" + strings.ReplaceAll(path, "\\", "/")})
+		}
+		if err != nil {
+			dialog.ShowError(err, w)
+		}
+	})
 	hint := widget.NewLabel("每次采集配对识别与事件日志。仅当前帧成功识别为对局且未保持旧结果时保存画面，进场自动开始、离场自动暂停；训练场识别为对局时也可录制。大厅、匹配、选人、结算和未知状态只写有限量的轻量日志。总录制上限仍为 1 GiB：768 MiB 保存无缩放、无标注的完整原帧，另预留 256 MiB 每秒最多保存两张名字与豆区域的原像素截图。完整原帧存满后 HUD 证据可继续保存；HUD 截图不作为完整帧回放。队列或额度满会标记丢弃。关闭此窗口不会停止诊断，请点击停止按钮结束。端到端截至原生缓冲提交，不包含游戏内部或显示器延迟。")
 	hint.Wrapping = fyne.TextWrapWord
 	return container.NewVBox(widget.NewLabel("采集与延迟诊断"), record, start,
-		container.NewGridWithColumns(2, export, open), s.diagnosticLabel, hint)
+		container.NewGridWithColumns(2, export, open), openOCR, s.diagnosticLabel, hint)
 }
