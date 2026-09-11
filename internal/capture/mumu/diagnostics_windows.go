@@ -189,8 +189,8 @@ func addProbeStep(result *ProbeResult, stage string, started time.Time, detail s
 // Probe uses the exact Open/Capture implementation used by live collection. It
 // should be called from a background goroutine because a vendor SDK call can
 // block independently of the Fyne event loop.
-func Probe(options Options) ProbeResult {
-	result := ProbeResult{StartedAt: time.Now(), Requested: options}
+func Probe(options Options) (result ProbeResult) {
+	result = ProbeResult{StartedAt: time.Now(), Requested: options}
 	defer func() { result.EndedAt = time.Now() }()
 
 	started := time.Now()
