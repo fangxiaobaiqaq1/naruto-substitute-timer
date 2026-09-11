@@ -18,3 +18,31 @@ func TestParseInstancesKeepsNonzeroIDsNamesAndStoppedEntries(t *testing.T) {
 		t.Fatal(seen)
 	}
 }
+
+func TestParseInstancesKeepsSeparateRootsWithSameZeroIndex(t *testing.T) {
+	data := []byte(`{"0":{"index":"0","name":"主号","is_process_started":true},"2":{"index":2,"name":"小号","is_android_started":true}}`)
+	left, err := parseInstances(data, `D:\MuMu`)
+	if err != nil || len(left) != 2 {
+		t.Fatal(left, err)
+	}
+	right, err := parseInstances(data, `E:\MuMu`)
+	if err != nil || len(right) != 2 {
+		t.Fatal(right, err)
+	}
+	if left[0].Root == right[0].Root || left[0].Index != 0 || right[0].Index != 0 {
+		t.Fatalf("instance 0 roots were not distinct: %+v / %+v", left[0], right[0])
+	}
+	if !left[0].ProcessStarted || left[0].AndroidStarted || !left[1].AndroidStarted {
+		t.Fatalf("start states lost: %+v", left)
+	}
+}
+func TestParseInstancesPreservesManagerPIDAndStartStates(t *testing.T) {
+	data := []byte(`{"0":{"index":0,"name":"主号","is_process_started":true,"pid":4321}}`)
+	got, err := parseInstances(data, `C:\MuMu`)
+	if err != nil || len(got) != 1 {
+		t.Fatal(got, err)
+	}
+	if got[0].PID != 4321 || !got[0].ProcessStarted || !got[0].Running {
+		t.Fatalf("manager PID/start state lost: %+v", got[0])
+	}
+}

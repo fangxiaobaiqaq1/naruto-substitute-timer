@@ -4,129 +4,119 @@ package mumu
 
 import (
 	"context"
-	"encoding/json"
-	"golang.org/x/sys/windows"
-	"narutotimer/internal/win"
-	"os/exec"
+	"errors"
+	"fmt"
 	"path/filepath"
-	"regexp"
-	"strconv"
+	"sort"
 	"strings"
-	"syscall"
-	"time"
+
+	"narutotimer/internal/win"
 )
 
+// ProcessChoice is a selectable target. Its identity is Instance.Root plus
+// Instance.Index; PID is explanatory evidence and is never used as a saved
+// target because it changes when MuMu restarts.
 type ProcessChoice struct {
 	Instance
-	WindowTitle string
-	ProcessName string
+	WindowTitle string `json:"window_title,omitempty"`
+	ProcessName string `json:"process_name,omitempty"`
+	IndexSource string `json:"index_source,omitempty"`
 }
 
-func ListProcessChoices(ctx context.Context, root string) ([]ProcessChoice, error) {
-	instances, err := ListInstances(ctx, root)
-	if err != nil {
-		return nil, err
+func sameRoot(left, right string) bool {
+	return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+}
+
+// ListProcessChoices merges each currently running MuMu installation with an
+// optional manual directory hint. Two roots which each expose instance 0 return
+// two independent choices instead of overwriting each other.
+func ListProcessChoices(ctx context.Context, rootHint string) ([]ProcessChoice, error) {
+	inventory := DiscoverInventory(ctx, rootHint)
+	windows := win.FindMuMu()
+	processByPID := map[uint32]ProcessEvidence{}
+	for _, process := range inventory.Processes {
+		processByPID[process.PID] = process
 	}
-	windowsList := win.FindMuMu()
-	indexes := processInstanceIndexes(ctx)
-	var out []ProcessChoice
-	for _, item := range instances {
-		choice := ProcessChoice{Instance: item}
-		var candidates []win.Window
-		for _, w := range windowsList {
-			if !w.Visible || w.PID == 0 {
-				continue
+	var choices []ProcessChoice
+	var errs []error
+	for _, installation := range inventory.Installations {
+		if installation.Error != "" {
+			errs = append(errs, fmt.Errorf("%s: %s", installation.Root, installation.Error))
+			continue
+		}
+		for _, instance := range installation.Instances {
+			choice := ProcessChoice{Instance: instance}
+			// MuMuManager's PID is the best evidence available when Windows
+			// blocks command-line inspection. Keep it as a display/evidence
+			// value, but never use it as the persisted target identity.
+			if instance.PID > 0 {
+				choice.PID = instance.PID
+				choice.IndexSource = "MuMuManager 实例列表"
 			}
-			r := processInstallation(w.PID)
-			if !strings.EqualFold(filepath.Clean(r), filepath.Clean(item.Root)) {
-				continue
-			}
-			if index, known := indexes[w.PID]; known {
-				if index == item.Index {
-					candidates = append(candidates, w)
+			// Prefer explicit process command-line evidence when it agrees
+			// with this root and instance index.
+			for _, process := range inventory.Processes {
+				if !sameRoot(process.Root, instance.Root) {
+					continue
 				}
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(w.Title), strings.TrimSpace(item.Name)) {
-				candidates = append(candidates, w)
-			}
-		}
-		if len(candidates) == 1 {
-			choice.PID = int(candidates[0].PID)
-			choice.WindowTitle = candidates[0].Title
-			choice.ProcessName = candidates[0].ProcessName
-		}
-		// Some emulator builds append the game title. A sole running instance/window
-		// within this installation has an unambiguous mapping even then.
-		if choice.PID == 0 && item.Running {
-			same := 0
-			for _, v := range instances {
-				if v.Running && strings.EqualFold(v.Root, item.Root) {
-					same++
+				if process.Index != nil && *process.Index == instance.Index {
+					choice.PID = int(process.PID)
+					choice.ProcessName = process.Name
+					choice.IndexSource = process.IndexSource
+					break
 				}
 			}
-			if same == 1 {
-				var unique []win.Window
-				for _, w := range windowsList {
-					if w.Visible && strings.EqualFold(processInstallation(w.PID), item.Root) && !strings.Contains(strings.ToLower(w.ProcessName), "main") {
-						unique = append(unique, w)
+			if choice.PID > 0 && choice.IndexSource == "" {
+				choice.IndexSource = "MuMuManager 实例列表"
+			}
+			for _, window := range windows {
+				if !window.Visible || window.PID == 0 {
+					continue
+				}
+				process, known := processByPID[window.PID]
+				if !known || !sameRoot(process.Root, instance.Root) {
+					continue
+				}
+				if choice.PID > 0 && uint32(choice.PID) == window.PID {
+					choice.WindowTitle = window.Title
+					if choice.ProcessName == "" {
+						choice.ProcessName = window.ProcessName
 					}
+					break
 				}
-				if len(unique) == 1 {
-					choice.PID = int(unique[0].PID)
-					choice.WindowTitle = unique[0].Title
-					choice.ProcessName = unique[0].ProcessName
+				if choice.PID == 0 && process.Index != nil && *process.Index == instance.Index {
+					choice.PID = int(window.PID)
+					choice.WindowTitle = window.Title
+					choice.ProcessName = window.ProcessName
+					choice.IndexSource = process.IndexSource
+					break
+				}
+				// Names are only a display aid after the manager supplied the
+				// instance number; they never create a guessed instance.
+				if choice.PID == 0 && strings.EqualFold(strings.TrimSpace(window.Title), strings.TrimSpace(instance.Name)) {
+					choice.PID = int(window.PID)
+					choice.WindowTitle = window.Title
+					choice.ProcessName = window.ProcessName
+					choice.IndexSource = "MuMuManager 实例列表 + 窗口标题"
 				}
 			}
-		}
-		out = append(out, choice)
-	}
-	return out, nil
-}
-func processInstallation(pid uint32) string {
-	h, e := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
-	if e != nil {
-		return ""
-	}
-	defer windows.CloseHandle(h)
-	b := make([]uint16, 32768)
-	n := uint32(len(b))
-	if windows.QueryFullProcessImageName(h, 0, &b[0], &n) != nil {
-		return ""
-	}
-	return installationFromExecutable(windows.UTF16ToString(b[:n]))
-}
-
-var instanceArgument = regexp.MustCompile(`(?:^|\s)(?:-v|--vmindex|--index)(?:=|\s+)([0-9]+)(?:\s|$)`)
-
-func processInstanceIndexes(ctx context.Context) map[uint32]int {
-	out := map[uint32]int{}
-	sub, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
-	defer cancel()
-	// Read OS process metadata only for emulator UI processes, never game memory.
-	script := `@(Get-CimInstance Win32_Process -Filter "Name='MuMuNxDevice.exe' OR Name='MuMuPlayer.exe' OR Name='NemuPlayer.exe'" | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress`
-	cmd := exec.CommandContext(sub, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	var data limitedBuffer
-	cmd.Stdout = &data
-	cmd.Stderr = &limitedBuffer{}
-	if cmd.Run() != nil {
-		return out
-	}
-	var rows []struct {
-		ProcessID   uint32 `json:"ProcessId"`
-		CommandLine string `json:"CommandLine"`
-	}
-	if json.Unmarshal(data.Bytes(), &rows) != nil {
-		return out
-	}
-	for _, row := range rows {
-		m := instanceArgument.FindStringSubmatch(row.CommandLine)
-		if len(m) == 2 {
-			if n, e := strconv.Atoi(m[1]); e == nil {
-				out[row.ProcessID] = n
-			}
+			choices = append(choices, choice)
 		}
 	}
-	return out
+	sort.SliceStable(choices, func(i, j int) bool {
+		if !sameRoot(choices[i].Root, choices[j].Root) {
+			return strings.ToLower(choices[i].Root) < strings.ToLower(choices[j].Root)
+		}
+		return choices[i].Index < choices[j].Index
+	})
+	if len(choices) > 0 {
+		return choices, nil
+	}
+	for _, message := range inventory.Errors {
+		errs = append(errs, errors.New(message))
+	}
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("没有可选 MuMu 实例: %w", errors.Join(errs...))
+	}
+	return nil, errors.New("没有可选 MuMu 实例，请先启动 MuMu 或手动选择安装目录")
 }

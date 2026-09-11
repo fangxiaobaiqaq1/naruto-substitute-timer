@@ -37,7 +37,10 @@ type session struct {
 	captureRefresh func()
 	sourceRevision uint64
 	captureControl func(config.MuMuCaptureConfig) uint64
+	captureState   func() frame.CaptureState
 	captureSource  string
+	executablePath string
+	supportRoot    string
 	initialAbout   bool
 	settingsTabs   *container.AppTabs
 	aboutCancel    context.CancelFunc
@@ -128,6 +131,17 @@ func WithTextRecognitionControl(set func(bool)) Option {
 	return func(s *session) { s.textControl = set }
 }
 
+func WithCaptureState(state func() frame.CaptureState) Option {
+	return func(s *session) { s.captureState = state }
+}
+
+func WithSupportContext(executable, root string) Option {
+	return func(s *session) {
+		s.executablePath = executable
+		s.supportRoot = root
+	}
+}
+
 func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	if provider == nil {
 		return fmt.Errorf("provider 不能为 nil")
@@ -141,14 +155,15 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	w := a.NewWindow(overlayTitle)
 	w.SetMaster() // Closing the timer also quits hidden settings windows.
 	s := &session{
-		done:     make(chan struct{}),
-		cfg:      cfg,
-		cfgPath:  config.DefaultPath,
-		provider: provider,
-		remember: cfg.UI.RememberSide,
-		side:     "",
-		win:      w,
-		topmost:  cfg.UI.AlwaysOnTop,
+		done:        make(chan struct{}),
+		cfg:         cfg,
+		cfgPath:     config.DefaultPath,
+		provider:    provider,
+		supportRoot: cfg.Debug.Directory,
+		remember:    cfg.UI.RememberSide,
+		side:        "",
+		win:         w,
+		topmost:     cfg.UI.AlwaysOnTop,
 	}
 	for _, option := range options {
 		option(s)

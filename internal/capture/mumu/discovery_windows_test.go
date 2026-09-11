@@ -46,3 +46,30 @@ func TestDeviceAndMainResolveSameInstallation(t *testing.T) {
 		}
 	}
 }
+
+func TestFindDLLCandidatesUsesStablePreferenceOrder(t *testing.T) {
+	root := t.TempDir()
+	for _, relative := range []string{
+		"nx_device/15.0/shell/sdk/external_renderer_ipc.dll",
+		"nx_device/12.0/shell/sdk/external_renderer_ipc.dll",
+		"nx_main/sdk/external_renderer_ipc.dll",
+	} {
+		path := filepath.Join(root, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(relative), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := FindDLLCandidates(root)
+	if err != nil || len(files) != 3 {
+		t.Fatal(files, err)
+	}
+	if !files[0].Preferred || files[0].Path != filepath.Join(root, "nx_main", "sdk", "external_renderer_ipc.dll") {
+		t.Fatalf("unexpected first SDK: %+v", files[0])
+	}
+	if files[1].Path >= files[2].Path {
+		t.Fatalf("device SDK candidates not sorted: %+v", files)
+	}
+}

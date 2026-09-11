@@ -58,16 +58,49 @@ func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 	p, close, _ := NewSelectableSnapshotter(eng, cfg)
 	return p, close
 }
+
+// CaptureState distinguishes a saved selection from the target currently
+// applied by the native capture worker. A new revision means "requested" until
+// the worker has torn down its old SDK client and begins using the new target.
+type CaptureState struct {
+	RequestedRevision uint64                   `json:"requested_revision"`
+	AppliedRevision   uint64                   `json:"applied_revision"`
+	Requested         config.MuMuCaptureConfig `json:"requested"`
+	Applied           config.MuMuCaptureConfig `json:"applied"`
+	Source            string                   `json:"source,omitempty"`
+	LastError         string                   `json:"last_error,omitempty"`
+	UpdatedAt         time.Time                `json:"updated_at"`
+}
+
+// NewSelectableSnapshotterStateful exposes the capture-worker state needed by
+// settings and support diagnostics. The existing constructor remains available
+// for callers that only need a selection callback.
+func NewSelectableSnapshotterStateful(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.MuMuCaptureConfig) uint64, func() CaptureState) {
+	return newSelectableSnapshotter(eng, cfg, true)
+}
+
 func NewSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.MuMuCaptureConfig) uint64) {
+	provider, close, selectTarget, _ := newSelectableSnapshotter(eng, cfg, false)
+	return provider, close, selectTarget
+}
+
+func newSelectableSnapshotter(eng engine.Engine, cfg config.Config, _ bool) (Provider, func(), func(config.MuMuCaptureConfig) uint64, func() CaptureState) {
 	var selectionMu sync.Mutex
 	selected := cfg.Capture.MuMu
 	var revision, activeRevision uint64
+	var appliedConfig = cfg.Capture.MuMu
+	var stateMu sync.RWMutex
+	var lastCaptureError string
+	var stateSource string
 	setSelection := func(next config.MuMuCaptureConfig) uint64 {
 		selectionMu.Lock()
 		selected = next
 		revision++
 		value := revision
 		selectionMu.Unlock()
+		stateMu.Lock()
+		lastCaptureError = ""
+		stateMu.Unlock()
 		return value
 	}
 
@@ -101,6 +134,11 @@ func NewSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 				client = nil
 			}
 			cfg.Capture.MuMu = next
+			stateMu.Lock()
+			appliedConfig = next
+			stateSource = ""
+			lastCaptureError = ""
+			stateMu.Unlock()
 			retryAfter = time.Time{}
 			activeRevision = rev
 		}
@@ -117,17 +155,31 @@ func NewSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 					o := cfg.Capture.MuMu
 					var err error
 					options := mumu.Options{InstallDir: o.InstallDir, DLLPath: o.DLLPath, Instance: o.Instance, DisplayID: o.DisplayID, Package: o.Package}
-					if o.Selection == "manual" || (o.Selection == "" && (o.Instance != 0 || o.DLLPath != "")) {
+					// An explicit installation directory is itself a manual target,
+					// including legacy configs that predate the Selection field.
+					// Otherwise a saved root with instance 0 could be silently
+					// replaced by auto-discovery. Only an explicit "auto" selection
+					// is allowed to take the automatic path.
+					manual := o.Selection == "manual" || (o.Selection != "auto" &&
+						(o.InstallDir != "" || o.Instance != 0 || o.DLLPath != ""))
+					if manual {
 						client, err = mumu.Open(options)
 					} else {
 						client, err = mumu.OpenAuto(options)
 					}
 					if err != nil {
 						retryError = err
+						stateMu.Lock()
+						lastCaptureError = err.Error()
+						stateMu.Unlock()
 						retryAfter = time.Now().Add(5 * time.Second)
 						f = Frame{Hold: true, Err: err, CaptureStarted: started, CaptureMethod: method}
 						continue
 					}
+					stateMu.Lock()
+					stateSource = client.Source()
+					lastCaptureError = ""
+					stateMu.Unlock()
 				}
 				started = time.Now()
 				setAttempt(started, method)
@@ -137,6 +189,10 @@ func NewSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 					client.Close()
 					client = nil
 					retryError = err
+					stateMu.Lock()
+					stateSource = ""
+					lastCaptureError = err.Error()
+					stateMu.Unlock()
 					retryAfter = time.Now().Add(time.Second)
 					f = Frame{Hold: true, Err: err, CaptureStarted: started, CaptureMethod: method}
 					continue
@@ -178,7 +234,28 @@ func NewSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 		}
 		return f
 	}
-	return guarded, close, setSelection
+	state := func() CaptureState {
+		selectionMu.Lock()
+		requestedRevision := revision
+		appliedRevision := activeRevision
+		requested := selected
+		selectionMu.Unlock()
+		stateMu.RLock()
+		applied := appliedConfig
+		lastError := lastCaptureError
+		source := stateSource
+		stateMu.RUnlock()
+		return CaptureState{
+			RequestedRevision: requestedRevision,
+			AppliedRevision:   appliedRevision,
+			Requested:         requested,
+			Applied:           applied,
+			Source:            source,
+			LastError:         lastError,
+			UpdatedAt:         time.Now(),
+		}
+	}
+	return guarded, close, setSelection, state
 }
 
 type captureAttempt struct {

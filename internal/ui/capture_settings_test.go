@@ -2,10 +2,12 @@ package ui
 
 import (
 	fynetest "fyne.io/fyne/v2/test"
+	"narutotimer/internal/capture/mumu"
 	"narutotimer/internal/config"
 	"narutotimer/internal/frame"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,4 +51,42 @@ func TestStaleSelectedInstanceFrameCannotReachUIOrEventCounter(t *testing.T) {
 		t.Fatal("current instance frame discarded")
 	}
 	_ = os.Remove(s.cfgPath)
+}
+
+func TestCaptureStateTextSeparatesSavedAndAppliedTargets(t *testing.T) {
+	saved := config.MuMuCaptureConfig{Selection: "manual", InstallDir: `D:\MuMu`, Instance: 0}
+	state := frame.CaptureState{
+		RequestedRevision: 4,
+		AppliedRevision:   3,
+		Requested:         config.MuMuCaptureConfig{Selection: "manual", InstallDir: `E:\MuMu`, Instance: 2},
+		Applied:           saved,
+		LastError:         "连接 MuMu 实例失败",
+	}
+	text := captureStateText(`C:\cfg\config.json`, saved, state)
+	for _, want := range []string{"已保存：D:\\MuMu · 实例 0", "已请求应用：E:\\MuMu · 实例 2", "采集器已应用：D:\\MuMu · 实例 0", "正在切换", "最近连接/采集异常"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %q", want, text)
+		}
+	}
+}
+
+func TestCaptureProbeSelectionUsesSoleAutomaticCandidate(t *testing.T) {
+	items := []mumu.ProcessChoice{{Instance: mumu.Instance{Root: `E:\MuMu`, Index: 2, Name: "训练"}}}
+	got, err := captureProbeSelection(0, items, "", "0", config.MuMuCaptureConfig{Selection: "auto", Package: "com.tencent.KiHan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Selection != "manual" || got.InstallDir != `E:\MuMu` || got.Instance != 2 || got.Package != "com.tencent.KiHan" {
+		t.Fatalf("unexpected probe target: %+v", got)
+	}
+}
+
+func TestCaptureProbeSelectionRejectsAmbiguousAutomaticCandidates(t *testing.T) {
+	items := []mumu.ProcessChoice{
+		{Instance: mumu.Instance{Root: `D:\MuMu`, Index: 0}},
+		{Instance: mumu.Instance{Root: `E:\MuMu`, Index: 0}},
+	}
+	if _, err := captureProbeSelection(0, items, "", "0", config.MuMuCaptureConfig{Selection: "auto"}); err == nil || !strings.Contains(err.Error(), "2 个 MuMu 实例") {
+		t.Fatalf("expected ambiguity error, got %v", err)
+	}
 }

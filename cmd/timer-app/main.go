@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"narutotimer/internal/buildinfo"
+	"narutotimer/internal/capture/mumu"
 	"narutotimer/internal/config"
 	"narutotimer/internal/engine/factory"
 	"narutotimer/internal/frame"
@@ -19,6 +21,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 4 && os.Args[1] == mumu.ProbeWorkerArgument {
+		runMuMuProbeWorker(os.Args[2], os.Args[3])
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println(buildinfo.Version)
 		return
@@ -50,9 +56,15 @@ func main() {
 		fail(err)
 	}
 	defer eng.Close()
-	provider, closeCapture, controlCapture := frame.NewSelectableSnapshotter(eng, cfg)
+	provider, closeCapture, controlCapture, captureState := frame.NewSelectableSnapshotterStateful(eng, cfg)
 	defer closeCapture()
-	if err := ui.Run(cfg, provider, ui.WithTextRecognitionControl(eng.SetEnabled), ui.WithCaptureSelection(controlCapture), ui.WithInitialAbout(len(os.Args) == 2 && os.Args[1] == "--about")); err != nil {
+	executable, _ := os.Executable()
+	if err := ui.Run(cfg, provider,
+		ui.WithTextRecognitionControl(eng.SetEnabled),
+		ui.WithCaptureSelection(controlCapture),
+		ui.WithCaptureState(captureState),
+		ui.WithSupportContext(executable, cfg.Debug.Directory),
+		ui.WithInitialAbout(len(os.Args) == 2 && os.Args[1] == "--about")); err != nil {
 		fail(err)
 	}
 }
@@ -92,4 +104,26 @@ func writableApplicationDirectory(executable string) (string, error) {
 		}
 	}
 	return dir, nil
+}
+
+func runMuMuProbeWorker(requestPath, resultPath string) {
+	data, err := os.ReadFile(requestPath)
+	if err != nil {
+		fail(err)
+	}
+	var options mumu.Options
+	if err := json.Unmarshal(data, &options); err != nil {
+		fail(fmt.Errorf("读取 MuMu 自检请求: %w", err))
+	}
+	result := mumu.Probe(options)
+	data, err = json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		fail(err)
+	}
+	if err := os.WriteFile(resultPath, append(data, '\n'), 0o600); err != nil {
+		fail(err)
+	}
+	if result.Error != "" {
+		os.Exit(2)
+	}
 }

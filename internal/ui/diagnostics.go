@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,9 +17,11 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"narutotimer/internal/buildinfo"
+	"narutotimer/internal/capture/mumu"
 	"narutotimer/internal/diagnostics"
 	"narutotimer/internal/hudtext"
 	"narutotimer/internal/ocr"
+	"narutotimer/internal/support"
 )
 
 // Recording belongs to this run, not saved settings: restarting must not
@@ -29,6 +32,7 @@ type diagnosticsState struct {
 	diagnosticLast     *diagnostics.Recorder
 	diagnosticRecord   bool
 	diagnosticError    string
+	diagnosticProbe    *mumu.ProbeResult
 	diagnosticWriters  sync.WaitGroup
 	diagnosticLabel    *widget.Label // accessed on the Fyne thread
 	diagnosticWindow   fyne.Window
@@ -81,6 +85,7 @@ func (s *session) startDiagnostics(record bool) error {
 		return err
 	}
 	s.diagnostic, s.diagnosticLast, s.diagnosticError = r, r, ""
+	s.diagnosticProbe = nil
 	s.diagnosticRecord = record
 	if source, ok := s.win.(frameDrawSource); ok {
 		source.SetFrameDrawCallback(s.traceDrawn)
@@ -189,6 +194,30 @@ func (s *session) traceDrawn(started, completed time.Time) {
 		ref.mark("drawing", started)
 		ref.mark("drawn", completed)
 	}
+}
+
+func (s *session) exportSupportBundle(ctx context.Context, sessionDir string, probe *mumu.ProbeResult) (string, error) {
+	s.mu.Lock()
+	cfg := s.cfg
+	root := s.supportRoot
+	cfgPath := s.cfgPath
+	executable := s.executablePath
+	s.mu.Unlock()
+	if root == "" {
+		root = cfg.Debug.Directory
+	}
+	inventory := mumu.DiscoverInventory(ctx, cfg.Capture.MuMu.InstallDir)
+	return support.ExportBundle(ctx, support.BundleOptions{
+		Root:         root,
+		SessionDir:   sessionDir,
+		Config:       cfg,
+		ConfigPath:   cfgPath,
+		CaptureState: s.snapshotCaptureState(),
+		Version:      buildinfo.Version,
+		Executable:   executable,
+		Inventory:    inventory,
+		Probe:        probe,
+	})
 }
 
 func (s *session) diagnosticText() string {
@@ -324,6 +353,106 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 			})
 		}()
 	})
+	var probe *widget.Button
+	probe = widget.NewButton("验证 MuMu SDK", func() {
+		s.mu.Lock()
+		target := s.cfg.Capture.MuMu
+		executable := s.executablePath
+		s.mu.Unlock()
+		if executable == "" {
+			executable, _ = os.Executable()
+		}
+		probe.Disable()
+		s.diagnosticLabel.SetText("正在通过独立进程验证 MuMu SDK…")
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			result, err := support.ProbeSDK(ctx, executable, mumu.Options{
+				InstallDir: target.InstallDir, DLLPath: target.DLLPath, Instance: target.Instance,
+				DisplayID: target.DisplayID, Package: target.Package,
+			})
+			fyne.Do(func() {
+				if s.stopped() || s.diagnosticWindow != w {
+					return
+				}
+				probe.Enable()
+				if err == nil {
+					s.diagnosticMu.Lock()
+					copy := result
+					s.diagnosticProbe = &copy
+					s.diagnosticMu.Unlock()
+				}
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				if result.Error != "" {
+					dialog.ShowInformation("MuMu SDK 自检", "失败阶段："+result.FailureStage+"\n"+result.Error, w)
+					return
+				}
+				dialog.ShowInformation("MuMu SDK 自检", fmt.Sprintf("连接成功，已读取 %d × %d 图像。", result.Width, result.Height), w)
+			})
+		}()
+	})
+	var exportBundle *widget.Button
+	exportBundle = widget.NewButton("导出支持诊断包（ZIP）", func() {
+		s.diagnosticMu.Lock()
+		r := s.diagnosticLast
+		probeResult := s.diagnosticProbe
+		if probeResult != nil {
+			copy := *probeResult
+			probeResult = &copy
+		}
+		if r != nil {
+			s.diagnosticWriters.Add(1)
+		}
+		s.diagnosticMu.Unlock()
+		sessionDir := ""
+		if r != nil {
+			sessionDir = r.Snapshot().Directory
+		}
+		exportBundle.Disable()
+		go func() {
+			if r != nil {
+				defer s.diagnosticWriters.Done()
+				_, _ = r.ExportReport()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			if probeResult == nil {
+				s.mu.Lock()
+				target := s.cfg.Capture.MuMu
+				executable := s.executablePath
+				s.mu.Unlock()
+				if executable == "" {
+					executable, _ = os.Executable()
+				}
+				probeCtx, stopProbe := context.WithTimeout(ctx, 15*time.Second)
+				result, probeErr := support.ProbeSDK(probeCtx, executable, mumu.Options{
+					InstallDir: target.InstallDir, DLLPath: target.DLLPath, Instance: target.Instance,
+					DisplayID: target.DisplayID, Package: target.Package,
+				})
+				stopProbe()
+				if probeErr != nil {
+					result = mumu.ProbeResult{Requested: mumu.Options{InstallDir: target.InstallDir, DLLPath: target.DLLPath, Instance: target.Instance, DisplayID: target.DisplayID, Package: target.Package}, FailureStage: "SDK 自检子进程", Error: probeErr.Error()}
+				}
+				probeResult = &result
+			}
+			path, err := s.exportSupportBundle(ctx, sessionDir, probeResult)
+			fyne.Do(func() {
+				if s.stopped() || s.diagnosticWindow != w {
+					return
+				}
+				exportBundle.Enable()
+				if err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				dialog.ShowInformation("支持诊断包", "已保存："+path+"\n\n如需反馈，请将 ZIP 发到 BUG 反馈 QQ 群："+support.BugReportQQGroup, w)
+			})
+		}()
+	})
+
 	open := widget.NewButton("打开日志目录", func() {
 		s.diagnosticMu.Lock()
 		r := s.diagnosticLast
@@ -354,8 +483,9 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 			dialog.ShowError(err, w)
 		}
 	})
-	hint := widget.NewLabel("每次采集配对识别与事件日志。仅当前帧成功识别为对局且未保持旧结果时保存画面，进场自动开始、离场自动暂停；训练场识别为对局时也可录制。大厅、匹配、选人、结算和未知状态只写有限量的轻量日志。总录制上限仍为 1 GiB：768 MiB 保存无缩放、无标注的完整原帧，另预留 256 MiB 每秒最多保存两张名字与豆区域的原像素截图。完整原帧存满后 HUD 证据可继续保存；HUD 截图不作为完整帧回放。队列或额度满会标记丢弃。关闭此窗口不会停止诊断，请点击停止按钮结束。端到端截至原生缓冲提交，不包含游戏内部或显示器延迟。")
+	hint := widget.NewLabel("支持诊断包默认不包含原帧 PNG，会收集实际配置、MuMu 安装目录、实例编号、PID、SDK DLL 和连接阶段结果；可直接发到 BUG 反馈 QQ 群：" + support.BugReportQQGroup + "。原帧录制仍需手动开启，仅当前帧成功识别为对局时保存。关闭此窗口不会停止诊断，请点击停止按钮结束。")
 	hint.Wrapping = fyne.TextWrapWord
 	return container.NewVBox(widget.NewLabel("采集与延迟诊断"), record, start,
-		container.NewGridWithColumns(2, export, open), openOCR, s.diagnosticLabel, hint)
+		container.NewGridWithColumns(2, export, exportBundle),
+		container.NewGridWithColumns(2, probe, open), openOCR, s.diagnosticLabel, hint)
 }

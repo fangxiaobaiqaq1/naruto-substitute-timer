@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"image/color"
 	"narutotimer/internal/buildinfo"
+	"narutotimer/internal/support"
 	"narutotimer/internal/updates"
 	"net/url"
 	"strings"
@@ -246,7 +247,17 @@ func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 		}()
 	}
 	links := container.NewHBox(widget.NewButton("GitHub 仓库", func() { openProjectURL(updates.RepositoryURL, w) }), widget.NewButton("发布与下载", func() { openProjectURL(updates.RepositoryURL+"/releases", w) }))
+	copyQQ := widget.NewButton("复制群号", func() {
+		fyne.CurrentApp().Clipboard().SetContent(support.BugReportQQGroup)
+		dialog.ShowInformation("BUG 反馈", "已复制 QQ 群号："+support.BugReportQQGroup, w)
+	})
+	openDiagnostics := widget.NewButton("打开支持诊断", s.openDiagnostics)
+	feedback := sectionCard("BUG 反馈", container.NewVBox(
+		widget.NewLabel("QQ 群："+support.BugReportQQGroup),
+		widget.NewLabel("遇到 MuMu SDK、截图或多开实例问题时，请导出支持诊断包后在群内反馈。"),
+		container.NewHBox(copyQQ, openDiagnostics),
+	))
 	updateCard := sectionCard("软件更新", container.NewVBox(status, detail, progress, container.NewHBox(check, action, cancelButton)))
 	history := sectionCard("更新日志", container.NewVBox(picker, date, notes))
-	return container.NewVScroll(container.NewVBox(container.NewPadded(container.NewVBox(title, subtitle, version)), updateCard, history, sectionCard("关于项目", container.NewVBox(widget.NewLabel("原创代码采用 MIT 许可；第三方组件保留各自许可。"), links))))
+	return container.NewVScroll(container.NewVBox(container.NewPadded(container.NewVBox(title, subtitle, version)), feedback, updateCard, history, sectionCard("关于项目", container.NewVBox(widget.NewLabel("原创代码采用 MIT 许可；第三方组件保留各自许可。"), links))))
 }

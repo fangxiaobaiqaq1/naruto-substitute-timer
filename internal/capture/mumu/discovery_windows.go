@@ -5,7 +5,9 @@ package mumu
 import (
 	"fmt"
 	"golang.org/x/sys/windows"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unsafe"
 )
@@ -48,6 +50,7 @@ func DiscoverInstallations() ([]string, error) {
 	for _, root := range roots {
 		out = append(out, root)
 	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i]) < strings.ToLower(out[j]) })
 	if len(out) == 0 {
 		return nil, fmt.Errorf("请先启动 MuMu，或在设置中选择安装目录")
 	}
@@ -64,10 +67,14 @@ func DiscoverInstallation() (string, error) {
 	return roots[0], nil
 }
 func installationFromExecutable(executable string) string {
-	var installation string
 	for dir, n := filepath.Dir(executable), 0; n < 6; n++ {
-		if _, err := FindDLL(dir); err == nil {
-			installation = dir
+		mainDir := filepath.Join(dir, "nx_main")
+		deviceDir := filepath.Join(dir, "nx_device")
+		if info, err := os.Stat(mainDir); err == nil && info.IsDir() {
+			return dir
+		}
+		if info, err := os.Stat(deviceDir); err == nil && info.IsDir() {
+			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -75,5 +82,5 @@ func installationFromExecutable(executable string) string {
 		}
 		dir = parent
 	}
-	return installation
+	return ""
 }

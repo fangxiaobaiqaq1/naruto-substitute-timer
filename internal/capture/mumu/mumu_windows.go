@@ -5,9 +5,9 @@
 package mumu
 
 import (
+	"errors"
 	"fmt"
 	"image"
-	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -16,11 +16,11 @@ import (
 )
 
 type Options struct {
-	InstallDir string
-	DLLPath    string
-	Instance   int
-	DisplayID  int
-	Package    string
+	InstallDir string `json:"install_dir"`
+	DLLPath    string `json:"dll_path,omitempty"`
+	Instance   int    `json:"instance"`
+	DisplayID  int    `json:"display_id"`
+	Package    string `json:"package,omitempty"`
 }
 
 type Client struct {
@@ -29,83 +29,97 @@ type Client struct {
 	capture, disconnect, display *syscall.Proc
 	handle                       uintptr
 	opts                         Options
+	dllPath                      string
 	pixels                       []byte
 }
 
-// FindDLL searches only inside the user-selected installation, not the current
-// working directory or PATH. SDK ABI reference:
-// https://github.com/MaaXYZ/EmulatorExtras/tree/main/Mumu/external_renderer_ipc
+func nativeCallError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errno, ok := err.(syscall.Errno); ok && errno == 0 {
+		return ""
+	}
+	return err.Error()
+}
+
+// FindDLL searches inside the selected installation. Candidate enumeration is
+// deterministic even if multiple device-version SDK copies exist.
 func FindDLL(root string) (string, error) {
-	for _, rel := range []string{"nx_main/sdk/external_renderer_ipc.dll", "shell/sdk/external_renderer_ipc.dll"} {
-		p := filepath.Join(root, filepath.FromSlash(rel))
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
-		}
+	candidates, err := FindDLLCandidates(root)
+	if err != nil {
+		return "", stageError(ProbeStageFindSDK, err)
 	}
-	paths, _ := filepath.Glob(filepath.Join(root, "nx_device", "*", "shell", "sdk", "external_renderer_ipc.dll"))
-	if len(paths) > 0 {
-		return paths[len(paths)-1], nil
-	}
-	return "", fmt.Errorf("MuMu screenshot SDK not found under %q", root)
+	return candidates[0].Path, nil
 }
 
 func Open(o Options) (*Client, error) {
 	if o.InstallDir == "" {
 		root, err := DiscoverInstallation()
 		if err != nil {
-			return nil, err
+			return nil, stageError(ProbeStageResolveRoot, err)
 		}
 		o.InstallDir = root
 	}
 	if o.Instance < 0 || o.DisplayID < 0 {
-		return nil, fmt.Errorf("MuMu instance/displayId must be non-negative")
+		return nil, stageError(ProbeStageResolveRoot, fmt.Errorf("MuMu instance/displayId must be non-negative"))
 	}
 	root, err := filepath.Abs(o.InstallDir)
 	if err != nil {
-		return nil, err
+		return nil, stageError(ProbeStageResolveRoot, err)
 	}
-	o.InstallDir = root
-	p := o.DLLPath
-	if p == "" {
-		p, err = FindDLL(root)
+	o.InstallDir = filepath.Clean(root)
+	path := o.DLLPath
+	if path == "" {
+		path, err = FindDLL(o.InstallDir)
 		if err != nil {
 			return nil, err
 		}
 	}
-	p, err = filepath.Abs(p)
+	path, err = filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return nil, stageError(ProbeStageFindSDK, err)
 	}
-	dll, err := syscall.LoadDLL(p)
+	dll, err := syscall.LoadDLL(path)
 	if err != nil {
-		return nil, fmt.Errorf("load MuMu screenshot SDK: %w", err)
+		return nil, stageError(ProbeStageLoadSDK, fmt.Errorf("load MuMu screenshot SDK: %w", err))
 	}
-	c := &Client{dll: dll, opts: o}
+	client := &Client{dll: dll, opts: o, dllPath: path}
 	connect, err := dll.FindProc("nemu_connect")
 	if err == nil {
-		c.capture, err = dll.FindProc("nemu_capture_display")
+		client.capture, err = dll.FindProc("nemu_capture_display")
 	}
 	if err == nil {
-		c.disconnect, err = dll.FindProc("nemu_disconnect")
+		client.disconnect, err = dll.FindProc("nemu_disconnect")
 	}
 	if err != nil {
-		dll.Release()
-		return nil, err
+		_ = dll.Release()
+		return nil, stageError(ProbeStageExports, err)
 	}
-	c.display, _ = dll.FindProc("nemu_get_display_id")
-	path, err := syscall.UTF16PtrFromString(root)
+	client.display, _ = dll.FindProc("nemu_get_display_id")
+	utf16Path, err := syscall.UTF16PtrFromString(o.InstallDir)
 	if err != nil {
-		dll.Release()
-		return nil, err
+		_ = dll.Release()
+		return nil, stageError(ProbeStageResolveRoot, err)
 	}
-	h, _, _ := connect.Call(uintptr(unsafe.Pointer(path)), uintptr(o.Instance))
-	runtime.KeepAlive(path)
-	if int32(h) <= 0 {
-		dll.Release()
-		return nil, fmt.Errorf("MuMu SDK could not connect to instance %d in %s", o.Instance, root)
+	handle, _, callErr := connect.Call(uintptr(unsafe.Pointer(utf16Path)), uintptr(o.Instance))
+	runtime.KeepAlive(utf16Path)
+	if int32(handle) <= 0 {
+		_ = dll.Release()
+		detail := fmt.Sprintf("MuMu SDK could not connect to instance %d in %s; api_return=%d", o.Instance, o.InstallDir, int32(handle))
+		if nativeErr := nativeCallError(callErr); nativeErr != "" {
+			detail += "; win32_last_error=" + nativeErr
+		}
+		return nil, stageError(ProbeStageConnect, errors.New(detail))
 	}
-	c.handle = h
-	return c, nil
+	client.handle = handle
+	return client, nil
+}
+
+func (c *Client) DLLPath() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.dllPath
 }
 
 // Capture returns an owned top-down RGBA image. The SDK has no source frame
@@ -114,57 +128,65 @@ func (c *Client) Capture() (*image.RGBA, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.handle == 0 {
-		return nil, fmt.Errorf("MuMu capture is closed")
+		return nil, stageError(ProbeStageConnect, fmt.Errorf("MuMu capture is closed"))
 	}
 	id := c.opts.DisplayID
 	if c.opts.Package != "" && c.display != nil {
 		pkg, err := syscall.BytePtrFromString(c.opts.Package)
 		if err != nil {
-			return nil, err
+			return nil, stageError(ProbeStageDisplay, err)
 		}
-		r, _, _ := c.display.Call(c.handle, uintptr(unsafe.Pointer(pkg)), 0)
+		result, _, _ := c.display.Call(c.handle, uintptr(unsafe.Pointer(pkg)), 0)
 		runtime.KeepAlive(pkg)
-		if int32(r) < 0 {
-			return nil, fmt.Errorf("MuMu display for %q is unavailable", c.opts.Package)
+		if int32(result) < 0 {
+			return nil, stageError(ProbeStageDisplay, fmt.Errorf("MuMu display for %q is unavailable", c.opts.Package))
 		}
-		id = int(int32(r))
+		id = int(int32(result))
 	}
-	var w, h int32
-	r, _, _ := c.capture.Call(c.handle, uintptr(id), 0, uintptr(unsafe.Pointer(&w)), uintptr(unsafe.Pointer(&h)), 0)
-	if int32(r) != 0 {
-		return nil, fmt.Errorf("MuMu capture dimensions: code %d", int32(r))
+	var width, height int32
+	result, _, callErr := c.capture.Call(c.handle, uintptr(id), 0, uintptr(unsafe.Pointer(&width)), uintptr(unsafe.Pointer(&height)), 0)
+	if int32(result) != 0 {
+		detail := fmt.Sprintf("MuMu capture dimensions: api_return=%d", int32(result))
+		if nativeErr := nativeCallError(callErr); nativeErr != "" {
+			detail += "; win32_last_error=" + nativeErr
+		}
+		return nil, stageError(ProbeStageDimensions, errors.New(detail))
 	}
-	if w < 1 || h < 1 || w > 8192 || h > 8192 || int64(w)*int64(h) > 16777216 {
-		return nil, fmt.Errorf("invalid MuMu capture size %dx%d", w, h)
+	if width < 1 || height < 1 || width > 8192 || height > 8192 || int64(width)*int64(height) > 16777216 {
+		return nil, stageError(ProbeStageDimensions, fmt.Errorf("invalid MuMu capture size %dx%d", width, height))
 	}
-	n := int(w) * int(h) * 4
-	if cap(c.pixels) < n {
-		c.pixels = make([]byte, n)
+	size := int(width) * int(height) * 4
+	if cap(c.pixels) < size {
+		c.pixels = make([]byte, size)
 	} else {
-		c.pixels = c.pixels[:n]
+		c.pixels = c.pixels[:size]
 	}
-	wantW, wantH := w, h
-	r, _, _ = c.capture.Call(c.handle, uintptr(id), uintptr(n), uintptr(unsafe.Pointer(&w)), uintptr(unsafe.Pointer(&h)), uintptr(unsafe.Pointer(&c.pixels[0])))
+	wantedWidth, wantedHeight := width, height
+	result, _, callErr = c.capture.Call(c.handle, uintptr(id), uintptr(size), uintptr(unsafe.Pointer(&width)), uintptr(unsafe.Pointer(&height)), uintptr(unsafe.Pointer(&c.pixels[0])))
 	runtime.KeepAlive(c.pixels)
-	if int32(r) != 0 {
-		return nil, fmt.Errorf("MuMu capture pixels: code %d", int32(r))
+	if int32(result) != 0 {
+		detail := fmt.Sprintf("MuMu capture pixels: api_return=%d", int32(result))
+		if nativeErr := nativeCallError(callErr); nativeErr != "" {
+			detail += "; win32_last_error=" + nativeErr
+		}
+		return nil, stageError(ProbeStagePixels, errors.New(detail))
 	}
-	if w != wantW || h != wantH {
-		return nil, fmt.Errorf("MuMu display resized during capture")
+	if width != wantedWidth || height != wantedHeight {
+		return nil, stageError(ProbeStagePixels, fmt.Errorf("MuMu display resized during capture"))
 	}
-	return fromBottomUpRGBA(c.pixels, int(w), int(h)), nil
+	return fromBottomUpRGBA(c.pixels, int(width), int(height)), nil
 }
 
-func fromBottomUpRGBA(src []byte, w, h int) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	stride := w * 4
-	for y := 0; y < h; y++ {
-		copy(img.Pix[y*stride:(y+1)*stride], src[(h-1-y)*stride:(h-y)*stride])
+func fromBottomUpRGBA(src []byte, width, height int) *image.RGBA {
+	image := image.NewRGBA(image.Rect(0, 0, width, height))
+	stride := width * 4
+	for y := 0; y < height; y++ {
+		copy(image.Pix[y*stride:(y+1)*stride], src[(height-1-y)*stride:(height-y)*stride])
 	}
-	for i := 3; i < len(img.Pix); i += 4 {
-		img.Pix[i] = 255
+	for index := 3; index < len(image.Pix); index += 4 {
+		image.Pix[index] = 255
 	}
-	return img
+	return image
 }
 
 func (c *Client) Close() error {
@@ -190,7 +212,7 @@ func (c *Client) hasGame() bool {
 	if err != nil {
 		return false
 	}
-	r, _, _ := c.display.Call(c.handle, uintptr(unsafe.Pointer(pkg)), 0)
+	value, _, _ := c.display.Call(c.handle, uintptr(unsafe.Pointer(pkg)), 0)
 	runtime.KeepAlive(pkg)
-	return int32(r) >= 0
+	return int32(value) >= 0
 }

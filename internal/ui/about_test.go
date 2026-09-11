@@ -60,3 +60,15 @@ func TestAboutAndCaptureTabsRenderAndSelectDatedHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestAboutShowsBugFeedbackQQGroup(t *testing.T) {
+	a := fynetest.NewApp()
+	t.Cleanup(a.Quit)
+	s := &session{cfg: config.Default(), cfgPath: filepath.Join(t.TempDir(), "config.json"), done: make(chan struct{})}
+	s.win = fynetest.NewTempWindow(t, s.overlayContent())
+	s.openAbout()
+	defer s.settings.Close()
+	if overlayButton(s.settings.Content(), "复制群号") == nil {
+		t.Fatal("bug feedback group copy button missing")
+	}
+}
