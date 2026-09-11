@@ -132,6 +132,15 @@ func version(v string) ([3]uint64, bool) {
 	}
 	return out, true
 }
+
+// IsReleaseVersion reports whether a version can safely participate in the
+// signed GitHub release workflow. Development builds can still view releases
+// manually, but do not perform background network checks.
+func IsReleaseVersion(v string) bool {
+	_, ok := version(v)
+	return ok
+}
+
 func Compare(remote, local string) (int, error) {
 	r, ok := version(remote)
 	if !ok {

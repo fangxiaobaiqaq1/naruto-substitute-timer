@@ -62,7 +62,8 @@ func changelogText(body string) *widget.RichText {
 func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.aboutCancel = cancel
-	client := updates.NewClient()
+	updatesService := s.updateFeeds()
+	client := updates.NewClient() // downloads keep their existing dedicated timeout and redirect policy
 	title := canvas.NewText("替身计时器", clockIdle)
 	title.TextSize = 28
 	title.TextStyle.Bold = true
@@ -148,7 +149,12 @@ func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 			detail.SetText("上次检查：" + f.Checked.Local().Format("2006-01-02 15:04"))
 		}
 	}
-	if f, err := updates.CachedFeed(); err == nil {
+	s.mu.Lock()
+	automaticFeed := s.updateFeed
+	s.mu.Unlock()
+	if automaticFeed.Latest.Tag != "" {
+		applyFeed(automaticFeed, false)
+	} else if f, err := updates.CachedFeed(); err == nil {
 		applyFeed(f, true)
 	}
 	check.OnTapped = func() {
@@ -159,10 +165,7 @@ func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 		go func() {
 			request, c := context.WithTimeout(ctx, 25*time.Second)
 			defer c()
-			f, err := client.Check(request)
-			if err == nil {
-				_ = updates.SaveFeed(f)
-			}
+			f, err := updatesService.Check(request)
 			fyne.Do(func() {
 				if ctx.Err() != nil {
 					return

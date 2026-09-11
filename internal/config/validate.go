@@ -146,6 +146,12 @@ func Validate(c Config) error {
 	if c.UI.SubstituteCooldownSeconds <= 0 {
 		return fmt.Errorf("ui.substituteCooldownSeconds: must be positive")
 	}
+	if c.UI.WindowOpacity < 0.40 || c.UI.WindowOpacity > 1.00 {
+		return fmt.Errorf("ui.windowOpacity: must be in [0.40,1.00]")
+	}
+	if c.UI.FontScale < 0.80 || c.UI.FontScale > 1.60 {
+		return fmt.Errorf("ui.fontScale: must be in [0.80,1.60]")
+	}
 	switch c.UI.PlayerSide {
 	case "ask", "left", "right", "auto":
 	default:

@@ -36,6 +36,19 @@ func TestVersionComparison(t *testing.T) {
 		}
 	}
 }
+func TestIsReleaseVersion(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		want    bool
+	}{
+		{"v0.2.1", true}, {"0.2", true}, {"development", false}, {"v1.2.3-beta", false}, {"v1.2.3.4", false},
+	} {
+		if got := IsReleaseVersion(tc.version); got != tc.want {
+			t.Fatalf("IsReleaseVersion(%q) = %v, want %v", tc.version, got, tc.want)
+		}
+	}
+}
+
 func TestFeedFiltersDraftAndPrereleaseAndPreservesDates(t *testing.T) {
 	r := testRelease([]byte("test"))
 	pre := r

@@ -160,6 +160,9 @@ func (s *session) openSettings() {
 	ninjaText := s.cfg.UI.NinjaQuery
 	mode, remember, top := s.cfg.UI.PlayerSide, s.remember, s.topmost
 	autoText := s.cfg.UI.AutoTextRecognition
+	autoUpdates := s.cfg.UI.AutoCheckUpdates
+	opacity, fontScale := s.cfg.UI.WindowOpacity, s.cfg.UI.FontScale
+	appearanceError := s.appearanceError
 	textStatus := s.textStatusText()
 	s.mu.Unlock()
 
@@ -185,6 +188,54 @@ func (s *session) openSettings() {
 	textCheck := widget.NewCheck("后台识别名字（内置本地 OCR）", nil)
 	textCheck.SetChecked(autoText)
 	textCheck.OnChanged = func(on bool) { showSettingsError(s.setTextRecognition(on), w) }
+
+	autoUpdateCheck := widget.NewCheck("自动检查软件更新", nil)
+	autoUpdateCheck.SetChecked(autoUpdates)
+	autoUpdateCheck.OnChanged = func(on bool) { showSettingsError(s.setAutoCheckUpdates(on), w) }
+	updateHint := widget.NewLabel("启动约10秒后检查；之后最多每6小时检查一次。只显示提醒，不会自动下载、重启或打断对局。")
+	updateHint.Wrapping = fyne.TextWrapWord
+
+	opacityText := widget.NewLabel("")
+	fontScaleText := widget.NewLabel("")
+	appearanceNote := widget.NewLabel(appearanceError)
+	appearanceNote.Wrapping = fyne.TextWrapWord
+	opacitySlider := widget.NewSlider(minimumOverlayOpacity, maximumOverlayOpacity)
+	opacitySlider.Step = 0.05
+	opacitySlider.SetValue(opacity)
+	fontScaleSlider := widget.NewSlider(minimumOverlayScale, maximumOverlayScale)
+	fontScaleSlider.Step = 0.10
+	fontScaleSlider.SetValue(fontScale)
+	updateAppearanceLabels := func() {
+		opacityText.SetText(fmt.Sprintf("窗口不透明度：%.0f%%", opacitySlider.Value*100))
+		fontScaleText.SetText(fmt.Sprintf("计时浮窗字号：%.0f%%", fontScaleSlider.Value*100))
+	}
+	previewAppearance := func() {
+		if err := s.previewAppearance(opacitySlider.Value, fontScaleSlider.Value); err != nil {
+			appearanceNote.SetText("未应用：" + err.Error())
+			return
+		}
+		appearanceNote.SetText("")
+	}
+	opacitySlider.OnChanged = func(float64) { updateAppearanceLabels(); previewAppearance() }
+	fontScaleSlider.OnChanged = func(float64) { updateAppearanceLabels(); previewAppearance() }
+	commitAppearance := func(float64) {
+		if err := s.previewAppearance(opacitySlider.Value, fontScaleSlider.Value); err != nil {
+			dialog.ShowError(err, w)
+			return
+		}
+		showSettingsError(s.saveAppearance(), w)
+	}
+	opacitySlider.OnChangeEnded = commitAppearance
+	fontScaleSlider.OnChangeEnded = commitAppearance
+	resetAppearance := widget.NewButton("恢复默认外观", func() {
+		opacitySlider.SetValue(1)
+		fontScaleSlider.SetValue(1)
+		updateAppearanceLabels()
+		previewAppearance()
+		showSettingsError(s.saveAppearance(), w)
+	})
+	updateAppearanceLabels()
+
 	s.textStatusLabel = widget.NewLabel(textStatus)
 	s.textStatusLabel.Wrapping = fyne.TextWrapWord
 	hint := widget.NewLabel("认边方式点选即生效。选择的是我方，浮窗计时的是另一边；自动尚未认出时显示待认边。")
@@ -202,6 +253,10 @@ func (s *session) openSettings() {
 		widget.NewLabel("我的名字"), nameEntry, textCheck, s.textStatusLabel,
 		widget.NewLabel("指定对面忍者（留空自动识别）"), ninjaEntry,
 		widget.NewLabel("仅照美冥［五代目水影］同时显示15秒/10秒"), topChk,
+		widget.NewSeparator(), widget.NewLabel("外观与更新"),
+		opacityText, opacitySlider, fontScaleText, fontScaleSlider, resetAppearance,
+		widget.NewLabel("透明度只应用于计时浮窗；设置和更新窗口始终保持不透明。字号会立即预览并自动留出所需空间。"), appearanceNote,
+		autoUpdateCheck, updateHint,
 	)
 	diagnosticEntry := widget.NewButton("采集与延迟诊断 / 原帧录制", s.openDiagnostics)
 	bg := canvas.NewRectangle(panelBG)

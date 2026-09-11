@@ -188,20 +188,26 @@ func (c Config) DebugOn() bool {
 }
 
 type UIConfig struct {
-	AutoTextRecognition       bool     `json:"autoTextRecognition"`
-	PollIntervalMS            int      `json:"pollIntervalMs"`
-	IdlePollIntervalMS        int      `json:"idlePollIntervalMs"`
-	WindowWidth               int      `json:"windowWidth"`
-	WindowHeight              int      `json:"windowHeight"`
-	MiniWidth                 int      `json:"miniWidth"`
-	MiniHeight                int      `json:"miniHeight"`
-	SubstituteCooldownSeconds float64  `json:"substituteCooldownSeconds"` // Legacy setting retained for compatibility; current timer policy is 15s.
-	SubstituteTable           string   `json:"substituteTable"`           // Historical data, not authoritative for live cooldown selection.
-	NinjaQuery                string   `json:"ninjaQuery"`                // Full opponent variant override; empty means visual recognition.
-	PlayerSide                string   `json:"playerSide"`
-	RememberSide              bool     `json:"rememberSide"`
-	AlwaysOnTop               bool     `json:"alwaysOnTop"`
-	PlayerNames               []string `json:"playerNames"`
+	AutoTextRecognition       bool    `json:"autoTextRecognition"`
+	PollIntervalMS            int     `json:"pollIntervalMs"`
+	IdlePollIntervalMS        int     `json:"idlePollIntervalMs"`
+	WindowWidth               int     `json:"windowWidth"`
+	WindowHeight              int     `json:"windowHeight"`
+	MiniWidth                 int     `json:"miniWidth"`
+	MiniHeight                int     `json:"miniHeight"`
+	SubstituteCooldownSeconds float64 `json:"substituteCooldownSeconds"` // Legacy setting retained for compatibility; current timer policy is 15s.
+	SubstituteTable           string  `json:"substituteTable"`           // Historical data, not authoritative for live cooldown selection.
+	NinjaQuery                string  `json:"ninjaQuery"`                // Full opponent variant override; empty means visual recognition.
+	PlayerSide                string  `json:"playerSide"`
+	RememberSide              bool    `json:"rememberSide"`
+	AlwaysOnTop               bool    `json:"alwaysOnTop"`
+	// AutoCheckUpdates only checks and notifies. Downloads and restarts always require a user action.
+	AutoCheckUpdates bool `json:"autoCheckUpdates"`
+	// WindowOpacity applies only to the compact timer overlay, in [0.40, 1.00].
+	WindowOpacity float64 `json:"windowOpacity"`
+	// FontScale scales compact-overlay text, in [0.80, 1.60].
+	FontScale   float64  `json:"fontScale"`
+	PlayerNames []string `json:"playerNames"`
 }
 
 func Default() Config {
@@ -286,6 +292,9 @@ func Default() Config {
 			AutoTextRecognition:       true,
 			RememberSide:              true,
 			AlwaysOnTop:               true,
+			AutoCheckUpdates:          true,
+			WindowOpacity:             1,
+			FontScale:                 1,
 			// Keep the published default neutral. Users can add their own names
 			// in config.json or through the settings window.
 			PlayerNames: []string{},

@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	timerapp "narutotimer/internal/app"
@@ -25,6 +26,7 @@ import (
 	"narutotimer/internal/frame"
 	"narutotimer/internal/identity"
 	"narutotimer/internal/ninja"
+	"narutotimer/internal/updates"
 	"narutotimer/internal/win32"
 )
 
@@ -39,6 +41,10 @@ type session struct {
 	initialAbout   bool
 	settingsTabs   *container.AppTabs
 	aboutCancel    context.CancelFunc
+	updateCancel   context.CancelFunc
+	updateService  *updates.FeedService
+	updateFeed     updates.Feed
+	updateNotice   string
 	diagnosticsState
 	done                  chan struct{}
 	stopOnce              sync.Once
@@ -97,18 +103,23 @@ type session struct {
 	clockRevision   uint64
 	overlayRevision uint64
 
-	overlay      *fyne.Container
-	win          fyne.Window
-	settings     fyne.Window
-	settingsSide *widget.RadioGroup
-	cd           *canvas.Text
-	altCD        *canvas.Text
-	primaryLabel *canvas.Text
-	alternateBox *fyne.Container
-	eventTag     *canvas.Text
-	tag          *canvas.Text
-	info         *canvas.Text
-	topmost      bool
+	overlay            *fyne.Container
+	win                fyne.Window
+	settings           fyne.Window
+	settingsSide       *widget.RadioGroup
+	cd                 *canvas.Text
+	altCD              *canvas.Text
+	primaryLabel       *canvas.Text
+	alternateBox       *fyne.Container
+	alternateLabel     *canvas.Text
+	alternateSeparator *canvas.Text
+	eventTag           *canvas.Text
+	tag                *canvas.Text
+	info               *canvas.Text
+	updateButton       *widget.Button
+	topmost            bool
+	overlayOpacity     func(fyne.Window, float64) error // test seam for native HWND application
+	appearanceError    string
 }
 
 type Option func(*session)
@@ -156,22 +167,21 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 		}
 	}
 	w.SetPadded(false)
-	w.Resize(fyne.NewSize(float32(max(220, cfg.UI.MiniWidth)), float32(max(118, cfg.UI.MiniHeight+24))))
+	s.fitOverlayWindow()
 	w.SetFixedSize(true)
 	w.CenterOnScreen()
 	go s.loop()
+	s.startAutomaticUpdateChecks()
 	go func() {
 		if !s.wait(250 * time.Millisecond) {
 			return
 		}
-		// 整窗和主题背景都保持不透明，避免底下的游戏或文字干扰读秒。
-		win32.ApplyWindowAlpha(overlayTitle, 255)
-		s.mu.Lock()
-		top := s.topmost
-		s.mu.Unlock()
-		if top {
-			applyTopmost(overlayTitle, true)
-		}
+		fyne.Do(func() {
+			if s.stopped() {
+				return
+			}
+			s.applyInitialWindowAppearance()
+		})
 	}()
 	if s.initialAbout {
 		w.Show()
@@ -182,46 +192,54 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 }
 
 func (s *session) overlayContent() fyne.CanvasObject {
+	s.mu.Lock()
+	scale := s.cfg.UI.FontScale
+	s.mu.Unlock()
+	scale = normalizedOverlayScale(scale)
 	s.cd = canvas.NewText("—", clockIdle)
-	s.cd.TextSize = 44
+	s.cd.TextSize = overlayTextSize(44, scale)
 	s.cd.TextStyle = fyne.TextStyle{Bold: true}
 	s.cd.Alignment = fyne.TextAlignCenter
 	s.primaryLabel = canvas.NewText("15秒", tagIdle)
-	s.primaryLabel.TextSize = 10
+	s.primaryLabel.TextSize = overlayTextSize(10, scale)
 	s.primaryLabel.Alignment = fyne.TextAlignCenter
 	s.primaryLabel.Hide()
 	s.altCD = canvas.NewText("—", clockIdle)
-	s.altCD.TextSize = 32
+	s.altCD.TextSize = overlayTextSize(32, scale)
 	s.altCD.TextStyle = fyne.TextStyle{Bold: true}
 	s.altCD.Alignment = fyne.TextAlignCenter
-	altLabel := canvas.NewText("10秒", tagIdle)
-	altLabel.TextSize = 10
-	altLabel.Alignment = fyne.TextAlignCenter
-	separator := canvas.NewText(" / ", tagIdle)
-	separator.TextSize = 24
-	s.alternateBox = container.NewHBox(container.NewCenter(separator), container.NewVBox(altLabel, s.altCD))
+	s.alternateLabel = canvas.NewText("10秒", tagIdle)
+	s.alternateLabel.TextSize = overlayTextSize(10, scale)
+	s.alternateLabel.Alignment = fyne.TextAlignCenter
+	s.alternateSeparator = canvas.NewText(" / ", tagIdle)
+	s.alternateSeparator.TextSize = overlayTextSize(24, scale)
+	s.alternateBox = container.NewHBox(container.NewCenter(s.alternateSeparator), container.NewVBox(s.alternateLabel, s.altCD))
 	s.alternateBox.Hide()
 	primaryBox := container.NewVBox(s.primaryLabel, s.cd)
 	s.eventTag = canvas.NewText("第 0 次", tagIdle)
-	s.eventTag.TextSize = 13
+	s.eventTag.TextSize = overlayTextSize(13, scale)
 	s.eventTag.TextStyle = fyne.TextStyle{Bold: true}
 	s.tag = canvas.NewText("对面·待认边", tagIdle)
-	s.tag.TextSize = 13
+	s.tag.TextSize = overlayTextSize(13, scale)
 	s.tag.Alignment = fyne.TextAlignCenter
 	s.info = canvas.NewText("等待画面", tagIdle)
-	s.info.TextSize = 11
+	s.info.TextSize = overlayTextSize(11, scale)
 	s.info.Alignment = fyne.TextAlignCenter
 
 	set := widget.NewButton("设置", s.openSettings)
 	swap := widget.NewButton("换边", s.swapSide)
 	diag := widget.NewButton("诊断", s.openDiagnostics)
 	about := widget.NewButton("关于", s.openAbout)
+	s.updateButton = widget.NewButtonWithIcon("发现新版本", theme.DownloadIcon(), s.openAbout)
+	s.updateButton.Importance = widget.HighImportance
+	s.updateButton.Hide()
 	about.Importance = widget.LowImportance
 	set.Importance = widget.LowImportance
 	swap.Importance = widget.LowImportance
 	diag.Importance = widget.LowImportance
 	glass := canvas.NewRectangle(glassBG)
-	body := container.NewBorder(nil, container.NewGridWithColumns(4, swap, set, diag, about), nil, nil,
+	footer := container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about))
+	body := container.NewBorder(nil, footer, nil, nil,
 		container.NewVBox(
 			container.NewCenter(s.tag),
 			container.NewCenter(container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(s.eventTag))),
@@ -296,11 +314,21 @@ func (s *session) stop() {
 	s.stopOnce.Do(func() {
 		close(s.done)
 		s.stopDiagnostics()
-		if s.aboutCancel != nil {
-			s.aboutCancel()
+		s.mu.Lock()
+		aboutCancel, captureCancel := s.aboutCancel, s.captureCancel
+		updateCancel, updateService := s.updateCancel, s.updateService
+		s.mu.Unlock()
+		if aboutCancel != nil {
+			aboutCancel()
 		}
-		if s.captureCancel != nil {
-			s.captureCancel()
+		if captureCancel != nil {
+			captureCancel()
+		}
+		if updateCancel != nil {
+			updateCancel()
+		}
+		if updateService != nil {
+			updateService.Close()
 		}
 	})
 }
@@ -800,14 +828,17 @@ func (s *session) refreshClockAt(now time.Time) {
 		layoutChanged := false
 		if s.alternateBox != nil {
 			layoutChanged = s.alternateBox.Visible() != dual || s.altCD.Text != altText
+			s.mu.Lock()
+			scale := s.cfg.UI.FontScale
+			s.mu.Unlock()
 			if dual {
 				s.primaryLabel.Show()
 				s.alternateBox.Show()
-				s.cd.TextSize = 32
+				s.cd.TextSize = overlayTextSize(32, scale)
 			} else {
 				s.primaryLabel.Hide()
 				s.alternateBox.Hide()
-				s.cd.TextSize = 44
+				s.cd.TextSize = overlayTextSize(44, scale)
 			}
 			s.altCD.Text, s.altCD.Color = altText, altColor
 			s.altCD.Refresh()
@@ -829,6 +860,7 @@ func (s *session) refreshClockAt(now time.Time) {
 		// Going from "—" to a multi-digit clock must also recompute its row layout.
 		if s.overlay != nil && (layoutChanged || s.cd.MinSize() != clockSize || (s.eventTag != nil && s.eventTag.MinSize() != badgeSize)) {
 			s.overlay.Refresh()
+			s.fitOverlayWindow()
 		}
 		if trace.recorder != nil && trace.id != 0 {
 			trace.recorder.CarryEvents(trace.id, leftEvent, rightEvent)
@@ -912,6 +944,7 @@ func (s *session) refreshOverlay() {
 		}
 		if layoutChanged && s.overlay != nil {
 			s.overlay.Refresh()
+			s.fitOverlayWindow()
 		}
 		s.traceApplied(trace, true)
 		s.refreshDiagnosticLabel()
@@ -1080,6 +1113,101 @@ func applyTopmost(title string, on bool) {
 	}
 	win32.ProcSetWindowPos.Call(hwnd, h, 0, 0, 0, 0,
 		uintptr(win32.SWPNoMove|win32.SWPNoSize|win32.SWPNoActivate))
+}
+
+func (s *session) updateFeeds() *updates.FeedService {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updateService == nil {
+		s.updateService = updates.NewFeedService(updates.NewClient())
+	}
+	return s.updateService
+}
+
+func (s *session) startAutomaticUpdateChecks() {
+	s.mu.Lock()
+	if !s.cfg.UI.AutoCheckUpdates || !updates.IsReleaseVersion(buildinfo.Version) || s.updateCancel != nil || s.stopOnceDoneLocked() {
+		s.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.updateCancel = cancel
+	service := s.updateService
+	if service == nil {
+		service = updates.NewFeedService(updates.NewClient())
+		s.updateService = service
+	}
+	s.mu.Unlock()
+	go updates.Monitor{
+		Checker:      service,
+		LocalVersion: buildinfo.Version,
+		OnResult: func(result updates.MonitorResult) {
+			s.handleAutomaticUpdateResult(result)
+		},
+	}.Run(ctx)
+}
+
+func (s *session) stopAutomaticUpdateChecks() {
+	s.mu.Lock()
+	cancel := s.updateCancel
+	s.updateCancel = nil
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// stopOnceDoneLocked is intentionally cheap. The channel closes before this
+// check can race with a UI option change, so no new monitor survives shutdown.
+func (s *session) stopOnceDoneLocked() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) handleAutomaticUpdateResult(result updates.MonitorResult) {
+	if result.Err != nil || !result.Notify || s.stopped() {
+		return
+	}
+	fyne.Do(func() {
+		if s.stopped() || s.updateButton == nil {
+			return
+		}
+		s.mu.Lock()
+		if s.updateNotice == result.Feed.Latest.Tag {
+			s.mu.Unlock()
+			return
+		}
+		s.updateFeed = result.Feed
+		s.updateNotice = result.Feed.Latest.Tag
+		s.mu.Unlock()
+		s.updateButton.SetText("发现新版本 " + result.Feed.Latest.Tag)
+		s.updateButton.Show()
+		if s.overlay != nil {
+			s.overlay.Refresh()
+		}
+		s.fitOverlayWindow()
+	})
+}
+
+func (s *session) applyInitialWindowAppearance() {
+	s.mu.Lock()
+	opacity, top := s.cfg.UI.WindowOpacity, s.topmost
+	s.mu.Unlock()
+	if opacity < 1 {
+		if err := s.nativeOverlayOpacity(opacity); err != nil {
+			s.mu.Lock()
+			s.appearanceError = "窗口透明度未应用：" + err.Error()
+			s.mu.Unlock()
+			s.debugf("apply window opacity: %v", err)
+		}
+	}
+	if top {
+		applyTopmost(overlayTitle, true)
+	}
 }
 
 func max(a, b int) int {

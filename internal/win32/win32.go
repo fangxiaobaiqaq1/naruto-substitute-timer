@@ -13,9 +13,10 @@ import (
 // ---------- DLL 与函数 ----------
 
 var (
-	User32  = syscall.NewLazyDLL("user32.dll")
-	Gdi32   = syscall.NewLazyDLL("gdi32.dll")
-	Msimg32 = syscall.NewLazyDLL("msimg32.dll")
+	User32   = syscall.NewLazyDLL("user32.dll")
+	Kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	Gdi32    = syscall.NewLazyDLL("gdi32.dll")
+	Msimg32  = syscall.NewLazyDLL("msimg32.dll")
 
 	ProcSetProcessDPIAware         = User32.NewProc("SetProcessDPIAware")
 	ProcRegisterClassExW           = User32.NewProc("RegisterClassExW")
@@ -46,7 +47,8 @@ var (
 	ProcSetWindowLongPtrW          = User32.NewProc("SetWindowLongPtrW")
 	ProcSetLayeredWindowAttributes = User32.NewProc("SetLayeredWindowAttributes")
 
-	ProcGetModuleHandleW = syscall.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW")
+	ProcGetModuleHandleW = Kernel32.NewProc("GetModuleHandleW")
+	ProcSetLastError     = Kernel32.NewProc("SetLastError")
 
 	ProcGetStockObject         = Gdi32.NewProc("GetStockObject")
 	ProcCreateSolidBrush       = Gdi32.NewProc("CreateSolidBrush")
@@ -352,7 +354,56 @@ func HasConsole() bool {
 	return r != 0
 }
 
-// ApplyWindowAlpha 整窗半透明，但像素仍接收鼠标。不要用色键：Fyne 的 OpenGL 黑底会被抠穿，点击全穿透。
+// SetWindowOpacity changes one known native window. It deliberately uses the
+// HWND supplied by Fyne instead of a title lookup, so another timer instance
+// cannot accidentally receive the setting. Color-key transparency is never
+// used: the OpenGL canvas must remain clickable.
+func SetWindowOpacity(hwnd uintptr, opacity float64) error {
+	if hwnd == 0 {
+		return fmt.Errorf("window handle is unavailable")
+	}
+	if opacity <= 0 || opacity > 1.00 {
+		return fmt.Errorf("opacity %.2f is outside (0,1.00]", opacity)
+	}
+	// Get/SetWindowLongPtrW may validly return zero. Clear LastError first so
+	// that zero can be distinguished from a real Win32 failure.
+	ProcSetLastError.Call(0)
+	style, _, callErr := ProcGetWindowLongPtrW.Call(hwnd, GWLExStyle)
+	if style == 0 && callErr != nil && callErr != syscall.Errno(0) {
+		return fmt.Errorf("read window style: %w", callErr)
+	}
+	next := style
+	if opacity < 1 {
+		next |= WSExLayered
+	} else {
+		next &^= WSExLayered
+	}
+	if next != style {
+		ProcSetLastError.Call(0)
+		previous, _, callErr := ProcSetWindowLongPtrW.Call(hwnd, GWLExStyle, next)
+		if previous == 0 && callErr != nil && callErr != syscall.Errno(0) {
+			return fmt.Errorf("update window style: %w", callErr)
+		}
+	}
+	if opacity == 1 {
+		return nil
+	}
+	alpha := byte(opacity*255 + 0.5)
+	if alpha == 0 {
+		alpha = 1
+	}
+	ok, _, callErr := ProcSetLayeredWindowAttributes.Call(hwnd, 0, uintptr(alpha), LWAAlpha)
+	if ok == 0 {
+		if callErr == nil || callErr == syscall.Errno(0) {
+			return fmt.Errorf("set window opacity failed")
+		}
+		return fmt.Errorf("set window opacity: %w", callErr)
+	}
+	return nil
+}
+
+// ApplyWindowAlpha remains for the older Win32 callers. New Fyne code must use
+// SetWindowOpacity with its actual HWND rather than a globally searchable title.
 func ApplyWindowAlpha(title string, alpha byte) {
 	ptr, err := syscall.UTF16PtrFromString(title)
 	if err != nil {
@@ -362,12 +413,10 @@ func ApplyWindowAlpha(title string, alpha byte) {
 	if hwnd == 0 {
 		return
 	}
-	style, _, _ := ProcGetWindowLongPtrW.Call(hwnd, GWLExStyle)
-	ProcSetWindowLongPtrW.Call(hwnd, GWLExStyle, style|WSExLayered)
 	if alpha == 0 {
 		alpha = 1
 	}
-	ProcSetLayeredWindowAttributes.Call(hwnd, 0, uintptr(alpha), LWAAlpha)
+	_ = SetWindowOpacity(hwnd, float64(alpha)/255)
 }
 
 // MsgBoxError 弹错误对话框（GUI 模式下代替 stderr 输出）。
