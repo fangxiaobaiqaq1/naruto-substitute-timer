@@ -17,10 +17,12 @@ import (
 	"narutotimer/internal/frame"
 	"narutotimer/internal/ui"
 	"narutotimer/internal/updates"
+	"narutotimer/internal/win"
 	"narutotimer/internal/win32"
 )
 
 func main() {
+	win.EnablePerMonitorDPIAwareness()
 	if len(os.Args) == 4 && os.Args[1] == mumu.ProbeWorkerArgument {
 		runMuMuProbeWorker(os.Args[2], os.Args[3])
 		return

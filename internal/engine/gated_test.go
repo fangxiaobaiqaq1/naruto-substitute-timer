@@ -87,6 +87,15 @@ func TestGatedNotFightSkipsBeads(t *testing.T) {
 	}
 }
 
+func TestGatedPropagatesVerifiedRoundOpening(t *testing.T) {
+	inner := &stubInner{name: "rgb", beads: 4}
+	g := NewGated(stubGate{d: GateDecision{Kind: GateFight, SceneID: "fight", LayoutProfile: "duel", RoundOpening: true}}, inner)
+	got := g.Analyze(image.NewRGBA(image.Rect(0, 0, 8, 8)))
+	if !got.Fighting || !got.RoundOpening {
+		t.Fatalf("round opening metadata was dropped by gate: %+v", got)
+	}
+}
+
 func TestGatedFightSamplesAndMarksEmptyUncertain(t *testing.T) {
 	inner := &stubInner{name: "rgb", beads: 0}
 	g := NewGated(stubGate{d: GateDecision{Kind: GateFight, SceneID: "fight", Confidence: 0.91}}, inner)

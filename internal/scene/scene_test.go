@@ -41,6 +41,28 @@ func TestCatalogFightWins(t *testing.T) {
 	}
 }
 
+func TestCatalogAcceptedOpeningMarkerSetsRoundOpening(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 192, 108))
+	fill(img, img.Bounds(), color.RGBA{R: 40, G: 40, B: 50, A: 255})
+	mark := image.Rect(80, 8, 112, 28)
+	paintMark(img, mark)
+	cat := testCatalog(img, mark, "fight")
+	cat.templates[0].spec.LayoutProfile = "duel"
+	cat.templates[0].spec.RoundOpening = true
+	got := cat.Decide(img)
+	if got.Kind != engine.GateFight || got.LayoutProfile != "duel" || !got.RoundOpening {
+		t.Fatalf("accepted opening marker was not propagated: %+v", got)
+	}
+	// Prepared templates snapshot their specification for a given geometry.
+	// Build a fresh catalog so this verifies an ordinary fight marker rather
+	// than mutating a template after its prepared snapshot was cached.
+	ordinary := testCatalog(img, mark, "fight")
+	ordinary.templates[0].spec.LayoutProfile = "duel"
+	if got := ordinary.Decide(img); got.RoundOpening {
+		t.Fatalf("ordinary fight template became an opening marker: %+v", got)
+	}
+}
+
 func TestCatalogOtherWins(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 192, 108))
 	fill(img, img.Bounds(), color.RGBA{R: 40, G: 40, B: 50, A: 255})

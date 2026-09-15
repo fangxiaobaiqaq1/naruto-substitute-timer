@@ -72,3 +72,27 @@ func TestResolveContentAreaDoesNotTreatOneToolbarAsCenteredBars(t *testing.T) {
 		t.Fatal("explicit letterbox ignored")
 	}
 }
+
+func TestClassifyScreenUsesPixelBackedLetterboxTransform(t *testing.T) {
+	bounds := image.Rect(0, 0, 1024, 768)
+	content := image.Rect(0, 96, 1024, 672)
+	img := image.NewRGBA(bounds)
+	draw.Draw(img, content, image.NewUniform(color.RGBA{50, 100, 150, 255}), image.Point{}, draw.Src)
+	// Put game-like bead colors at the normalized HUD positions inside the
+	// centered 16:9 content. The old size-only transform sampled the wrong y.
+	ca, ok := ResolveContentArea(img, ModeAuto, LogicWidth, LogicHeight, .015)
+	if !ok {
+		t.Fatal("content area not resolved")
+	}
+	for _, r := range [][4]float64{
+		{.08, .07, .26, .06},
+		{.80, .07, .16, .06},
+	} {
+		x0, y0 := ca.Map(r[0]*LogicWidth, r[1]*LogicHeight)
+		x1, y1 := ca.Map((r[0]+r[2])*LogicWidth, (r[1]+r[3])*LogicHeight)
+		draw.Draw(img, image.Rect(x0, y0, x1, y1), image.NewUniform(color.RGBA{30, 170, 220, 255}), image.Point{}, draw.Src)
+	}
+	if got := ClassifyScreen(img, ModeAuto); got != ScreenFighting {
+		t.Fatalf("letterbox game HUD classified as %v", got)
+	}
+}

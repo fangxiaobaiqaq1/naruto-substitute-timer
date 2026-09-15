@@ -210,6 +210,21 @@ func (c *SideClock) Reset() {
 	c.clearPending()
 }
 
+// ResetRound clears the visual baseline and any clock that belonged to the
+// prior round, but deliberately keeps the match-wide event number and serial.
+// The overlay's "第 N 次" counts confirmed opponent substitutes in the match;
+// a new round must not fabricate another event or make that count jump back.
+func (c *SideClock) ResetRound() {
+	c.inheritedReturn = false
+	c.lastReady = 0
+	c.hasPrev = false
+	c.ends = c.ends[:0]
+	c.observedAt = time.Time{}
+	c.validAt = time.Time{}
+	c.lastEventEnd = time.Time{}
+	c.clearPending()
+}
+
 // ResyncObservation forgets the old visual baseline after capture geometry or
 // source changes. Existing cooldowns keep running; the next trusted frame only
 // establishes the new baseline, so remapping pixels cannot invent a bean drop.

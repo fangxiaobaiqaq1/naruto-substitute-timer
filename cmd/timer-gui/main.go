@@ -11,9 +11,11 @@ import (
 	"narutotimer/internal/engine/factory"
 	"narutotimer/internal/frame"
 	"narutotimer/internal/gui"
+	"narutotimer/internal/win"
 )
 
 func main() {
+	win.EnablePerMonitorDPIAwareness()
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "timer-gui:", err)
 		os.Exit(1)

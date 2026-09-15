@@ -23,6 +23,7 @@ type GateDecision struct {
 	SceneID       string
 	Confidence    float64
 	LayoutProfile string
+	RoundOpening  bool
 }
 
 // Gate 只负责「这帧是不是对局」，不采豆。
@@ -161,13 +162,14 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 	// 大厅/结算：明确不在对局，不采豆。
 	if d.Kind == GateNotFight {
 		return Result{
-			Name:       g.name + "+gate",
-			Fighting:   false,
-			Scene:      d.SceneID,
-			GateScore:  d.Confidence,
-			PlayerSide: id.Side,
-			PlayerName: id.Mine,
-			OppName:    id.Opp,
+			Name:         g.name + "+gate",
+			Fighting:     false,
+			Scene:        d.SceneID,
+			GateScore:    d.Confidence,
+			RoundOpening: d.RoundOpening,
+			PlayerSide:   id.Side,
+			PlayerName:   id.Mine,
+			OppName:      id.Opp,
 		}
 	}
 
@@ -184,6 +186,7 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 	res.Name += "+gate"
 	res.Scene = d.SceneID
 	res.GateScore = d.Confidence
+	res.RoundOpening = d.RoundOpening
 	res.PlayerSide = id.Side
 	res.PlayerName = id.Mine
 	res.OppName = id.Opp

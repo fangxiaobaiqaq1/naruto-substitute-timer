@@ -34,6 +34,7 @@ type sample struct {
 }
 
 func main() {
+	win.EnablePerMonitorDPIAwareness()
 	var err error
 	if len(os.Args) < 2 {
 		err = fmt.Errorf("usage: timer-lab capture [flags] | replay [flags] | observe [flags] | ocr -image <screenshot> [flags]")

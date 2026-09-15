@@ -132,8 +132,8 @@ func TestBackgroundOCRNeedsTwoResultsAndCurrentPixels(t *testing.T) {
 	}
 	regions, _ := nameRegions(img, e.cfg.Layout, "duel")
 	draw.Draw(img, regions[1], image.NewUniform(color.RGBA{10, 10, 10, 255}), image.Point{}, draw.Src)
-	if got := e.AnalyzeAt(img, at.Add(502*time.Millisecond)); got.PlayerSide != "" || got.RightNinja != "" {
-		t.Fatalf("old text survived changed pixels: %+v", got)
+	if got := e.AnalyzeAt(img, at.Add(502*time.Millisecond)); got.PlayerSide != "right" || got.PlayerName != "" || got.OppName != "对面账号" || got.RightNinja != "" {
+		t.Fatalf("visible non-mine account did not safely infer the hidden side: %+v", got)
 	}
 }
 

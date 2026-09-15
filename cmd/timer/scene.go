@@ -55,14 +55,14 @@ func cmdScene(args []string) error {
 		}
 	}
 	d := gate.Decide(img)
-	fmt.Printf("结论: %s  scene=%s  conf=%.3f\n", kindName(d.Kind), d.SceneID, d.Confidence)
+	fmt.Printf("结论: %s  scene=%s  conf=%.3f  opening=%v\n", kindName(d.Kind), d.SceneID, d.Confidence, d.RoundOpening)
 	eng, err := factory.New(factory.FromApp(cfg))
 	if err != nil {
 		return err
 	}
 	res := eng.Analyze(img)
-	fmt.Printf("引擎: fighting=%v uncertain=%v beads=%d scene=%s score=%.3f\n",
-		res.Fighting, res.Uncertain, len(res.Beads), res.Scene, res.GateScore)
+	fmt.Printf("引擎: fighting=%v uncertain=%v opening=%v beads=%d scene=%s score=%.3f\n",
+		res.Fighting, res.Uncertain, res.RoundOpening, len(res.Beads), res.Scene, res.GateScore)
 	if guess := identity.Guesser(cfg); guess != nil {
 		r := guess(img, d.SceneID)
 		if r.Side != "" || r.Mine != "" || r.Opp != "" {

@@ -81,3 +81,24 @@ func TestUnknownAndOneFrameSettingCannotConfirmRoundDifference(t *testing.T) {
 		t.Fatal("round calibration changed configured post-return confirmation latency")
 	}
 }
+
+func TestResetRoundClearsCooldownButKeepsMatchEventNumber(t *testing.T) {
+	c, at := inheritedClock()
+	if c.EventCount() != 1 || !c.Active() {
+		t.Fatal("setup event missing")
+	}
+	_, serial := c.LastEvent()
+	c.ResetRound()
+	if c.EventCount() != 1 || c.Active() || c.LastReady() != 0 {
+		t.Fatalf("round reset did not isolate clock while preserving count: events=%d active=%v ready=%d", c.EventCount(), c.Active(), c.LastReady())
+	}
+	c.Observe(4, true, at.Add(time.Second), 15*time.Second, 2)
+	c.Observe(3, true, at.Add(1020*time.Millisecond), 15*time.Second, 2)
+	c.Observe(3, true, at.Add(1040*time.Millisecond), 15*time.Second, 2)
+	if c.EventCount() != 2 || !c.Active() {
+		t.Fatalf("post-round event was not counted: events=%d active=%v", c.EventCount(), c.Active())
+	}
+	if _, got := c.LastEvent(); got != serial+1 {
+		t.Fatalf("event serial did not remain match-monotonic: got %d want %d", got, serial+1)
+	}
+}

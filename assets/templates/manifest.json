@@ -47,6 +47,38 @@
       }
     },
     {
+      "id": "raw-duel-opening-60",
+      "file": "raw_duel_opening_60.png",
+      "mask": "raw_duel_opening_60.mask.png",
+      "scene": "fight",
+      "layoutProfile": "duel",
+      "roundOpening": true,
+      "threshold": 0.74,
+      "roi": {
+        "x": 0.42,
+        "y": 0.02,
+        "width": 0.16,
+        "height": 0.18
+      },
+      "templateScale": 0.975
+    },
+    {
+      "id": "raw-duel-opening-60-alt",
+      "file": "raw_duel_opening_60.png",
+      "mask": "raw_duel_opening_60.mask.png",
+      "scene": "fight",
+      "layoutProfile": "duel",
+      "roundOpening": true,
+      "threshold": 0.74,
+      "roi": {
+        "x": 0.42,
+        "y": 0.02,
+        "width": 0.16,
+        "height": 0.18
+      },
+      "templateScale": 1.025
+    },
+    {
       "id": "raw-lobby-labels",
       "file": "raw_lobby_ninja.png",
       "scene": "lobby",

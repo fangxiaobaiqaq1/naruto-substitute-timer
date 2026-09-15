@@ -38,6 +38,7 @@ type Frame struct {
 	Fighting            bool
 	Engine              string
 	LayoutProfile       string
+	RoundOpening        bool
 	Hold                bool
 	Scene               string
 	LeftNinja           string
@@ -156,6 +157,7 @@ func fillFromEngine(f *Frame, w win.Window, img *image.RGBA, res engine.Result) 
 	f.Engine = res.Name
 	f.TextStatus, f.TextError = res.TextStatus, res.TextError
 	f.LayoutProfile = res.LayoutProfile
+	f.RoundOpening = res.RoundOpening
 	f.Scene = res.Scene
 	f.LeftNinja, f.RightNinja = res.LeftNinja, res.RightNinja
 	f.LeftNinjaCandidate, f.RightNinjaCandidate = res.LeftNinjaCandidate, res.RightNinjaCandidate

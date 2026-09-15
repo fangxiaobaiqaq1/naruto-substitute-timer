@@ -4,6 +4,7 @@ import (
 	"context"
 	"image"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +83,7 @@ type Engine struct {
 	key                   frameKey
 	haveKey               bool
 	lastAt, nextAt        time.Time
+	namesKey              string    // Exact configured account list used by accepted OCR evidence.
 	pausedAt              time.Time // Nonzero only during a bounded same-scene hold.
 	retryAt               time.Time // backend failure, independent of scene generation
 	sides                 [2]sideState
@@ -103,6 +105,24 @@ func New(inner engine.Engine, cfg config.Config, reader ocr.Recognizer, names fu
 	e.wg.Add(1)
 	go e.work()
 	return e
+}
+
+// configuredNames returns a stable, exact snapshot. Settings can change while
+// OCR work is in flight; an old accepted account must never be reinterpreted as
+// an opponent simply because the configured "my names" list changed.
+func configuredNames(names []string) ([]string, string) {
+	set := map[string]bool{}
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			set[name] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out, strings.Join(out, "\x00")
 }
 
 func (e *Engine) work() {
@@ -190,6 +210,13 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	defer e.mu.Unlock()
 	if at.IsZero() {
 		at = time.Now()
+	}
+	names, namesKey := configuredNames(e.names())
+	if namesKey != e.namesKey {
+		// Evidence belongs to the configured account list that produced it.
+		// Clear old OCR results before treating a non-mine account as "opponent".
+		e.invalidate()
+		e.namesKey = namesKey
 	}
 	if !e.lastAt.IsZero() && at.Before(e.lastAt) {
 		e.invalidate()
@@ -282,16 +309,25 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	}
 	// Account matching remains exact and unique. OCR words are not commands,
 	// fuzzy identities, aliases, or permission to override a template/manual side.
-	if res.PlayerSide == "" {
-		mine := [2]bool{}
-		for _, name := range e.names() {
-			for i, title := range known {
-				if name != "" && name == title.Account {
-					mine[i] = true
-				}
-			}
+	// When our own title is covered, one verified account that is NOT in the
+	// configured list proves that it belongs to the opponent, so our side is the
+	// opposite one. The account has already passed two OCR variants and current
+	// glyph-pixel validation; a single raw OCR word never gets this authority.
+	if res.PlayerSide == "" && len(names) > 0 {
+		mineNames := map[string]bool{}
+		for _, name := range names {
+			mineNames[name] = true
 		}
-		if mine[0] != mine[1] {
+		mine, other := [2]bool{}, [2]bool{}
+		for i, title := range known {
+			if title.Account == "" {
+				continue
+			}
+			mine[i] = mineNames[title.Account]
+			other[i] = !mine[i]
+		}
+		switch {
+		case mine[0] != mine[1]:
 			i := 0
 			res.PlayerSide = "left"
 			if mine[1] {
@@ -299,12 +335,24 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 				res.PlayerSide = "right"
 			}
 			res.PlayerName = known[i].Account
+			opp := 1 - i
+			if other[opp] {
+				res.OppName = known[opp].Account
+			}
 			used = true
-			// Unconfigured opponent account OCR is diagnostic only: a plausible
-			// repeated misreading must not be promoted to a named known identity.
+		case other[0] != other[1]:
+			// The known account is confirmed non-mine, so the unnamed side is us.
+			i := 0
+			res.PlayerSide = "right"
+			if other[1] {
+				i = 1
+				res.PlayerSide = "left"
+			}
+			res.OppName = known[i].Account
+			used = true
 		}
 	}
-	needs := res.LeftNinja == "" || res.RightNinja == "" || (len(e.names()) > 0 && res.PlayerSide == "")
+	needs := res.LeftNinja == "" || res.RightNinja == "" || (len(names) > 0 && res.PlayerSide == "")
 	// Derive UI status from CURRENT evidence/work. A remembered "ready" is not
 	// evidence after the glyphs disappear, and an old error must not hide retry.
 	switch {

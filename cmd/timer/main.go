@@ -22,6 +22,7 @@ import (
 // 子命令 scene / crop 在 scene.go。
 
 func main() {
+	win.EnablePerMonitorDPIAwareness()
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)

@@ -9,18 +9,23 @@ import (
 var (
 	user32 = syscall.NewLazyDLL("user32.dll")
 
-	procEnumWindows            = user32.NewProc("EnumWindows")
-	procIsWindowVisible        = user32.NewProc("IsWindowVisible")
-	procIsWindow               = user32.NewProc("IsWindow")
-	procGetWindowTextW         = user32.NewProc("GetWindowTextW")
-	procGetClassNameW          = user32.NewProc("GetClassNameW")
-	procGetWindowThreadProcess = user32.NewProc("GetWindowThreadProcessId")
-	procGetClientRect          = user32.NewProc("GetClientRect")
-	procClientToScreen         = user32.NewProc("ClientToScreen")
-	procGetWindowRect          = user32.NewProc("GetWindowRect")
-	procGetWindowLongW         = user32.NewProc("GetWindowLongW")
-	procShowWindow             = user32.NewProc("ShowWindow")
-	procSetForegroundWindow    = user32.NewProc("SetForegroundWindow")
+	procEnumWindows                   = user32.NewProc("EnumWindows")
+	procIsWindowVisible               = user32.NewProc("IsWindowVisible")
+	procIsWindow                      = user32.NewProc("IsWindow")
+	procGetWindowTextW                = user32.NewProc("GetWindowTextW")
+	procGetClassNameW                 = user32.NewProc("GetClassNameW")
+	procGetWindowThreadProcess        = user32.NewProc("GetWindowThreadProcessId")
+	procGetClientRect                 = user32.NewProc("GetClientRect")
+	procClientToScreen                = user32.NewProc("ClientToScreen")
+	procGetWindowRect                 = user32.NewProc("GetWindowRect")
+	procGetWindowLongW                = user32.NewProc("GetWindowLongW")
+	procShowWindow                    = user32.NewProc("ShowWindow")
+	procSetForegroundWindow           = user32.NewProc("SetForegroundWindow")
+	procSetProcessDPIAware            = user32.NewProc("SetProcessDPIAware")
+	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+
+	shcore                     = syscall.NewLazyDLL("shcore.dll")
+	procSetProcessDpiAwareness = shcore.NewProc("SetProcessDpiAwareness")
 
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 
@@ -125,6 +130,35 @@ func ClientScreenRect(hwnd uintptr) (Rect, error) {
 		Right:  pt.X + cr.Width(),
 		Bottom: pt.Y + cr.Height(),
 	}, nil
+}
+
+// EnablePerMonitorDPIAwareness opts the process out of Windows DPI coordinate
+// virtualization before any UI or capture window is created. MuMu may be on a
+// monitor whose scale differs from the primary monitor; without this, the
+// window/client rectangles and PrintWindow bitmap can be expressed in different
+// coordinate spaces, shifting calibrated HUD coordinates. All calls are
+// best-effort for older Windows versions and for hosts that already chose a DPI
+// awareness context.
+func EnablePerMonitorDPIAwareness() {
+	// The newer procedures are absent on older Windows. LazyProc.Call would
+	// panic when Find fails, so check availability before every best-effort API.
+	// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is the signed HANDLE -4.
+	if procSetProcessDpiAwarenessContext.Find() == nil {
+		if r, _, _ := procSetProcessDpiAwarenessContext.Call(^uintptr(3)); r != 0 {
+			return
+		}
+	}
+	// PROCESS_PER_MONITOR_DPI_AWARE = 2. SetProcessDpiAwareness returns an
+	// HRESULT, where zero is S_OK.
+	if procSetProcessDpiAwareness.Find() == nil {
+		if r, _, _ := procSetProcessDpiAwareness.Call(2); r == 0 {
+			return
+		}
+	}
+	// Windows 7-compatible fallback (system-DPI aware).
+	if procSetProcessDPIAware.Find() == nil {
+		procSetProcessDPIAware.Call()
+	}
 }
 
 const (

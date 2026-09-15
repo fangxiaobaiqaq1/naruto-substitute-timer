@@ -256,28 +256,40 @@ func readNames(img *image.RGBA, book []Named, mode detect.ContentMode, rois side
 		return out
 	}
 	mine := mineOf(book)
-	// An opponent (or an unlabeled seen crop) is never a fallback for "me".
+	// A configured mine name is the strongest evidence. When that strip is
+	// obscured, a confident, non-mine name on exactly one side is still useful:
+	// it identifies the opponent, so our side is the other side. This prevents
+	// a masked player name from making the timer choose a random side.
 	if len(mine) == 0 {
 		return out
 	}
-	leftHit := bestHit(img, ca, rois.Left, mine, maxWidth)
-	rightHit := bestHit(img, ca, rois.Right, mine, maxWidth)
+	others := othersOf(book)
+	leftMine := bestHit(img, ca, rois.Left, mine, maxWidth)
+	rightMine := bestHit(img, ca, rois.Right, mine, maxWidth)
+	leftOpp := bestHit(img, ca, rois.Left, others, maxWidth)
+	rightOpp := bestHit(img, ca, rois.Right, others, maxWidth)
 	switch {
-	case leftHit.Score >= threshold && leftHit.Score >= rightHit.Score+minGap:
-		out.Side, out.Mine = "left", leftHit.Name
-	case rightHit.Score >= threshold && rightHit.Score >= leftHit.Score+minGap:
-		out.Side, out.Mine = "right", rightHit.Name
+	case leftMine.Score >= threshold && leftMine.Score >= rightMine.Score+minGap:
+		out.Side, out.Mine = "left", leftMine.Name
+	case rightMine.Score >= threshold && rightMine.Score >= leftMine.Score+minGap:
+		out.Side, out.Mine = "right", rightMine.Name
+	case leftOpp.Score >= threshold && leftOpp.Score >= rightOpp.Score+minGap:
+		// The left name is definitely not in the configured mine list.
+		out.Side, out.Opp = "right", leftOpp.Name
+	case rightOpp.Score >= threshold && rightOpp.Score >= leftOpp.Score+minGap:
+		out.Side, out.Opp = "left", rightOpp.Name
 	}
 	if out.Side == "" {
 		return out
 	}
-	oppROI := rois.Right
-	if out.Side == "right" {
-		oppROI = rois.Left
-	}
-	oppHit := bestHit(img, ca, oppROI, othersOf(book), maxWidth)
-	if oppHit.Score >= threshold {
-		out.Opp = oppHit.Name
+	if out.Opp == "" {
+		oppHit := rightOpp
+		if out.Side == "right" {
+			oppHit = leftOpp
+		}
+		if oppHit.Score >= threshold {
+			out.Opp = oppHit.Name
+		}
 	}
 	return out
 }

@@ -51,6 +51,7 @@ type Result struct {
 	LayoutProfile       string  // Actual coordinate profile used by the inner engine.
 	Scene               string  // 门闩给出的场景 id，可空
 	GateScore           float64 // 门闩最高分，可空
+	RoundOpening        bool    // Current frame carries the verified round-opening timer/HUD marker.
 	LeftNinja           string
 	RightNinja          string
 	LeftNinjaCandidate  string // Display-only table match, never special-rule evidence.

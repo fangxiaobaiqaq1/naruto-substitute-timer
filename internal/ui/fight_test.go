@@ -10,6 +10,73 @@ import (
 	"narutotimer/internal/frame"
 )
 
+func TestVerifiedRoundOpeningSurvivesObscuredBeans(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	frames := []frame.Frame{
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(4, 4), CapturedAt: base},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(3, 4), CapturedAt: base.Add(20 * time.Millisecond)},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(3, 4), CapturedAt: base.Add(40 * time.Millisecond)},
+		// The marker is visible even though one bean strip is obscured.
+		{Fighting: true, Hold: true, Scene: "fight", LayoutProfile: "duel", RoundOpening: true, Beads: testBeads(-1, 4), CapturedAt: base.Add(time.Second)},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", RoundOpening: true, Beads: testBeads(3, 4), CapturedAt: base.Add(1020 * time.Millisecond)},
+	}
+	s := testSession(frames)
+	for range frames {
+		s.captureOnce()
+	}
+	if s.left.EventCount() != 1 || s.left.Active() || s.left.LastReady() != 3 {
+		t.Fatalf("obscured opening did not reset/calibrate round: events=%d active=%v ready=%d", s.left.EventCount(), s.left.Active(), s.left.LastReady())
+	}
+}
+
+func TestVerifiedRoundOpeningResetsPriorRoundAndBaselinesOpeningBeans(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	frames := []frame.Frame{
+		// Previous round: a real left substitute has already been counted.
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(4, 4), CapturedAt: base},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(3, 4), CapturedAt: base.Add(20 * time.Millisecond)},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(3, 4), CapturedAt: base.Add(40 * time.Millisecond)},
+		// The verified round marker starts the next round. Its animation may
+		// oscillate the visible count, but it must not start a clock.
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", RoundOpening: true, Beads: testBeads(4, 4), CapturedAt: base.Add(time.Second)},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", RoundOpening: true, Beads: testBeads(3, 4), CapturedAt: base.Add(1020 * time.Millisecond)},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", RoundOpening: false, Beads: testBeads(3, 4), CapturedAt: base.Add(1400 * time.Millisecond)},
+		// A post-opening real drop still uses its first observed timestamp.
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(2, 4), CapturedAt: base.Add(1420 * time.Millisecond)},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(2, 4), CapturedAt: base.Add(1440 * time.Millisecond)},
+	}
+	s := testSession(frames)
+	for range frames {
+		s.captureOnce()
+	}
+	if s.left.EventCount() != 2 || !s.left.Active() || s.right.EventCount() != 0 {
+		t.Fatalf("new round retained or fabricated counters: left=%d right=%d ready=%d", s.left.EventCount(), s.right.EventCount(), s.left.LastReady())
+	}
+	if got, _ := s.left.LastEvent(); !got.Equal(base.Add(1420 * time.Millisecond)) {
+		t.Fatalf("post-opening substitute started at %v, want %v", got, base.Add(1420*time.Millisecond))
+	}
+}
+
+func TestFirstCompleteFightFrameOnlyEstablishesBaseline(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	frames := []frame.Frame{
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(3, 4), CapturedAt: base},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(3, 4), CapturedAt: base.Add(20 * time.Millisecond)},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(2, 4), CapturedAt: base.Add(40 * time.Millisecond)},
+		{Fighting: true, Scene: "fight", LayoutProfile: "duel", Beads: testBeads(2, 4), CapturedAt: base.Add(60 * time.Millisecond)},
+	}
+	s := testSession(frames)
+	for range frames {
+		s.captureOnce()
+	}
+	if s.left.EventCount() != 1 || !s.left.Active() {
+		t.Fatalf("first fight frame was treated as a drop: events=%d active=%v ready=%d", s.left.EventCount(), s.left.Active(), s.left.LastReady())
+	}
+	if got, _ := s.left.LastEvent(); !got.Equal(base.Add(40 * time.Millisecond)) {
+		t.Fatalf("real post-baseline drop started at %v, want %v", got, base.Add(40*time.Millisecond))
+	}
+}
+
 func TestApplyFightResetsClocksAfterLeave(t *testing.T) {
 	s := &session{cfg: config.Default()}
 	s.cfg.Tracking.EnterFightFrames = 1

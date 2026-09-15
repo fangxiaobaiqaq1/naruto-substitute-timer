@@ -26,6 +26,7 @@ type replayResult struct {
 	Image         string  `json:"image,omitempty"`
 	Scene         string  `json:"scene"`
 	LayoutProfile string  `json:"layoutProfile,omitempty"`
+	RoundOpening  bool    `json:"roundOpening,omitempty"`
 	Engine        string  `json:"engine"`
 	Hold          bool    `json:"hold"`
 	Duplicate     bool    `json:"duplicate"`
@@ -163,6 +164,7 @@ func replay(args []string) error {
 		costs = append(costs, r.AnalyzeMS)
 		r.Scene, r.Engine, r.Hold = fr.Scene, fr.Engine, fr.Hold
 		r.LayoutProfile = fr.LayoutProfile
+		r.RoundOpening = fr.RoundOpening
 		r.Left = knownCount(fr.Beads, 'L', fr.Slots(true, cfg.Layout.BeadsPerSide))
 		r.Right = knownCount(fr.Beads, 'R', fr.Slots(false, cfg.Layout.BeadsPerSide))
 		if fr.Err != nil {
@@ -228,6 +230,9 @@ type replayTracker struct {
 	left, right           app.SideClock
 	fighting, holdFreeze  bool
 	inheritOnReturn       bool
+	roundBaseline         bool
+	roundOpeningActive    bool
+	roundOpeningSeenAt    time.Time
 	syncLeft, syncRight   bool
 	fightHits, leaveHits  int
 	sceneObservedAt       time.Time
@@ -255,12 +260,62 @@ func (t *replayTracker) invalidate(at time.Time) {
 	t.right.InvalidateObservation(at)
 }
 
+const replayRoundOpeningMarkerGap = 250 * time.Millisecond
+
+func replayFrameTime(at time.Time) time.Time {
+	if at.IsZero() {
+		return time.Now()
+	}
+	return at
+}
+
+func (t *replayTracker) beginVerifiedRound() {
+	t.left.ResetRound()
+	t.right.ResetRound()
+	t.syncLeft, t.syncRight = false, false
+	t.inheritOnReturn = false
+	t.holdFreeze = false
+	t.roundBaseline = true
+}
+
+func (t *replayTracker) clearRoundOpening() {
+	t.roundBaseline = false
+	t.roundOpeningActive = false
+	t.roundOpeningSeenAt = time.Time{}
+}
+
+// observeRoundOpening mirrors the live session: while the verified "第 N 回 / 60"
+// marker is present, beans are calibration evidence only. Once it clears, one
+// complete frame becomes the final baseline before normal drop confirmation.
+func (t *replayTracker) observeRoundOpening(f frame.Frame) {
+	at := replayFrameTime(f.CapturedAt)
+	if f.Fighting && f.RoundOpening {
+		if !t.roundOpeningActive {
+			t.beginVerifiedRound()
+		} else {
+			t.roundBaseline = true
+		}
+		t.roundOpeningActive = true
+		t.roundOpeningSeenAt = at
+		return
+	}
+	if f.Hold || f.Err != nil || !f.Fighting || !t.roundOpeningActive {
+		return
+	}
+	if at.Sub(t.roundOpeningSeenAt) <= replayRoundOpeningMarkerGap {
+		return
+	}
+	t.roundOpeningActive = false
+	t.roundBaseline = true
+}
+
 func (t *replayTracker) resyncAfterRecordingGap() {
 	t.left.ResyncObservation()
 	t.right.ResyncObservation()
 	t.fightHits, t.leaveHits = 0, 0
 	t.syncLeft, t.syncRight = false, false
 	t.inheritOnReturn = false
+	t.clearRoundOpening()
 }
 
 func (t *replayTracker) observe(f frame.Frame) []replayEvent {
@@ -272,6 +327,9 @@ func (t *replayTracker) observe(f frame.Frame) []replayEvent {
 		t.left.ResyncObservation()
 		t.right.ResyncObservation()
 	}
+	// A verified opening marker can coexist with unknown/obscured beans. It is
+	// still a round boundary, just like the live UI path.
+	t.observeRoundOpening(f)
 	if f.Hold || f.Err != nil {
 		if f.Err != nil && (t.holdFreeze || t.syncLeft || t.syncRight) {
 			t.left.ResyncObservation()
@@ -290,6 +348,7 @@ func (t *replayTracker) observe(f frame.Frame) []replayEvent {
 			t.left.Reset()
 			t.right.Reset()
 			t.fighting, t.holdFreeze = false, false
+			t.clearRoundOpening()
 			t.fightHits, t.leaveHits = 0, 0
 			t.syncLeft, t.syncRight = false, false
 		}
@@ -311,6 +370,22 @@ func (t *replayTracker) observe(f frame.Frame) []replayEvent {
 		return nil
 	}
 	if f.Duplicate {
+		return nil
+	}
+	if t.roundBaseline {
+		if left == nil {
+			t.left.InvalidateObservation(f.CapturedAt)
+		} else {
+			t.left.SyncReady(*left)
+		}
+		if right == nil {
+			t.right.InvalidateObservation(f.CapturedAt)
+		} else {
+			t.right.SyncReady(*right)
+		}
+		if !t.roundOpeningActive && left != nil && right != nil {
+			t.roundBaseline = false
+		}
 		return nil
 	}
 	var events []replayEvent
@@ -376,6 +451,7 @@ func (t *replayTracker) applyScene(f frame.Frame, left, right *int) {
 			t.leaveHits++
 			if t.leaveHits >= max(10, t.cfg.Tracking.LeaveFightFrames) {
 				t.fighting = false
+				t.clearRoundOpening()
 				t.left.Reset()
 				t.right.Reset()
 				t.syncLeft, t.syncRight = false, false

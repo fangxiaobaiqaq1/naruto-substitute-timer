@@ -81,6 +81,10 @@ func TestPausedAcceptedTextStillChecksCurrentPixelsAndBoundaries(t *testing.T) {
 				if got.RightNinja != "山中井野" || got.PlayerSide != "right" {
 					t.Fatalf("unchanged fields lost: %+v", got)
 				}
+			} else if kind == "erased text" {
+				if got.RightNinja != "" || got.PlayerSide != "right" || got.PlayerName != "" || got.OppName != "对面账号" {
+					t.Fatalf("visible opponent did not infer the hidden side: %+v", got)
+				}
 			} else if got.RightNinja != "" || got.PlayerSide != "" {
 				t.Fatalf("old field crossed %s: %+v", kind, got)
 			}

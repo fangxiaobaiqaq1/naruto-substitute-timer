@@ -34,6 +34,7 @@ type Manifest struct {
 type TemplateSpec struct {
 	TemplateScale    float64               `json:"templateScale,omitempty"`
 	ContinuationOnly bool                  `json:"continuationOnly,omitempty"`
+	RoundOpening     bool                  `json:"roundOpening,omitempty"`
 	LayoutProfile    string                `json:"layoutProfile,omitempty"`
 	ID               string                `json:"id"`
 	File             string                `json:"file"`
@@ -166,6 +167,9 @@ func Load(cfg config.Config) (*Catalog, error) {
 		if spec.LayoutProfile != "" && spec.LayoutProfile != "camp" && spec.LayoutProfile != "duel" {
 			return nil, fmt.Errorf("scene: template %s: unsupported layoutProfile %q", spec.ID, spec.LayoutProfile)
 		}
+		if spec.RoundOpening && (!out.fightSet[spec.Scene] || spec.LayoutProfile == "") {
+			return nil, fmt.Errorf("scene: template %s: roundOpening requires a fight scene and layout profile", spec.ID)
+		}
 		if spec.ID == "" || spec.File == "" || spec.Scene == "" {
 			return nil, fmt.Errorf("scene: template missing id/file/scene")
 		}
@@ -245,6 +249,8 @@ func (c *Catalog) Decide(img *image.RGBA) engine.GateDecision {
 	otherRegions := map[string][]image.Rectangle{}
 	var fightID, otherID string
 	var fightLayout string
+	var openingScore float64
+	var openingLayout string
 	for _, t := range c.prepare(ca) {
 		if t.spec.ContinuationOnly {
 			continue
@@ -256,6 +262,9 @@ func (c *Catalog) Decide(img *image.RGBA) engine.GateDecision {
 		}
 		if c.fightSet[t.spec.Scene] {
 			profileScores[t.spec.LayoutProfile] = max(profileScores[t.spec.LayoutProfile], hit.Value)
+			if t.spec.RoundOpening && hit.Value > openingScore {
+				openingScore, openingLayout = hit.Value, t.spec.LayoutProfile
+			}
 			if hit.Value > bestFight {
 				bestFight, fightID, fightLayout = hit.Value, t.spec.Scene, t.spec.LayoutProfile
 			}
@@ -295,7 +304,16 @@ func (c *Catalog) Decide(img *image.RGBA) engine.GateDecision {
 				return engine.GateDecision{Kind: engine.GateUncertain, Confidence: bestFight}
 			}
 		}
-		return engine.GateDecision{Kind: engine.GateFight, SceneID: fightID, Confidence: bestFight, LayoutProfile: fightLayout}
+		return engine.GateDecision{
+			Kind:          engine.GateFight,
+			SceneID:       fightID,
+			Confidence:    bestFight,
+			LayoutProfile: fightLayout,
+			// The opening marker is a second accepted fight template, not a
+			// heuristic inferred from bean colors. Do not apply it to a different
+			// calibrated HUD profile.
+			RoundOpening: openingScore > 0 && openingLayout == fightLayout,
+		}
 	}
 	// Result/selection overlays can leave the round label visible behind them.
 	// Two separate accepted page controls establish the foreground page even

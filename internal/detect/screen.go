@@ -64,8 +64,14 @@ func ClassifyScreen(img *image.RGBA, mode ContentMode) ScreenState {
 		return ScreenBlank
 	}
 
+	// Use the same pixel-backed content transform as the bead/name engines.
+	// ComputeContentArea assumes the whole capture is game content and is
+	// therefore wrong for black bars, window scaling and non-zero origins.
+	ca, supported := ResolveContentArea(img, mode, LogicWidth, LogicHeight, 0.015)
+	if !supported {
+		return ScreenUnknown
+	}
 	// 豆子行：略放宽，避免标题栏/缩放把豆挤出旧的 80~98 窄带。
-	ca := ComputeContentArea(bounds.Dx(), bounds.Dy(), mode)
 	y0 := ca.Y + ca.H*70/LogicHeight
 	y1 := ca.Y + ca.H*130/LogicHeight
 	xL0 := ca.X + ca.W*80/LogicWidth

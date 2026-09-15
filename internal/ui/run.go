@@ -67,6 +67,9 @@ type session struct {
 	sceneObservedAt     time.Time
 	holdFreeze          bool
 	inheritOnReturn     bool
+	roundBaseline       bool // A verified round-opening marker temporarily makes beans baseline-only.
+	roundOpeningActive  bool // Opening marker can briefly disappear behind animation effects.
+	roundOpeningSeenAt  time.Time
 	syncLeft            bool
 	syncRight           bool
 	scene               string
@@ -490,6 +493,9 @@ func (s *session) captureOnce() {
 	s.textStatus, s.textError = f.TextStatus, f.TextError
 	s.captureLost = f.Err != nil
 	s.hold = f.Hold || s.captureLost
+	// Detect a verified round-opening marker even when bean cores are briefly
+	// obscured by the opening animation. It is scene evidence, not a bean vote.
+	s.observeRoundOpening(f)
 	// 豆数只展示这次可信对局画面的观测。旧豆不能冒充当前豆；
 	// 已确认的冷却独立保存在 SideClock 中，不受显示清空影响。
 	if f.Fighting && f.Err == nil {
@@ -524,6 +530,7 @@ func (s *session) captureOnce() {
 			s.left.Reset()
 			s.right.Reset()
 			s.fighting, s.holdFreeze = false, false
+			s.clearRoundOpening()
 			s.fightHits, s.leaveHits = 0, 0
 			s.syncLeft, s.syncRight = false, false
 		}
@@ -577,6 +584,68 @@ func (s *session) invalidateObservation(capturedAt time.Time) {
 	s.right.InvalidateObservation(capturedAt)
 }
 
+const roundOpeningMarkerGap = 250 * time.Millisecond
+
+func frameTime(at time.Time) time.Time {
+	if at.IsZero() {
+		return time.Now()
+	}
+	return at
+}
+
+func (s *session) beginVerifiedRound() {
+	// A real "第 N 回 / 60" marker is stronger than VS/character-swap
+	// continuity. Cooldowns belong to the just-finished round and cannot leak
+	// into the new one, but the displayed event number remains match-wide.
+	s.left.ResetRound()
+	s.right.ResetRound()
+	s.syncLeft, s.syncRight = false, false
+	s.inheritOnReturn = false
+	s.holdFreeze = false
+	s.roundBaseline = true
+}
+
+func (s *session) armRoundBaseline() { s.roundBaseline = true }
+
+func (s *session) clearRoundBaseline() { s.roundBaseline = false }
+
+func (s *session) clearRoundOpening() {
+	s.roundOpeningActive = false
+	s.roundOpeningSeenAt = time.Time{}
+	s.clearRoundBaseline()
+}
+
+// observeRoundOpening turns the real "第 N 回 / 60" marker into a short-lived
+// observation boundary. It stays active while 60 is visibly present, rather
+// than using a fixed time from the first frame: large resolutions, capture FPS
+// and the game animation duration all vary across machines.
+func (s *session) observeRoundOpening(f frame.Frame) {
+	at := frameTime(f.CapturedAt)
+	if f.Fighting && f.RoundOpening {
+		if !s.roundOpeningActive {
+			s.beginVerifiedRound()
+		} else {
+			s.armRoundBaseline()
+		}
+		s.roundOpeningActive = true
+		s.roundOpeningSeenAt = at
+		return
+	}
+	// An unknown/capture-hold frame is not evidence that the marker vanished.
+	if f.Hold || f.Err != nil || !f.Fighting || !s.roundOpeningActive {
+		return
+	}
+	// A skill/banner can hide the marker for one sampled frame. Do not let that
+	// single gap turn a 3→4→3 opening animation into a substitute use.
+	if at.Sub(s.roundOpeningSeenAt) <= roundOpeningMarkerGap {
+		return
+	}
+	// The marker has genuinely gone. Consume one complete current HUD frame as
+	// a final baseline, then normal drop confirmation resumes on the next frame.
+	s.roundOpeningActive = false
+	s.armRoundBaseline()
+}
+
 func (s *session) observeBeads(f frame.Frame) {
 	// The same pixels may be polled repeatedly, especially at reduced source FPS.
 	if f.Duplicate {
@@ -591,7 +660,34 @@ func (s *session) observeBeads(f frame.Frame) {
 	lc, rc := countReady(f.Beads)
 	cd := s.cooldown()
 	need := s.cfg.Tracking.MinimumConfirmFrames
-	if sideObservable(f.Beads, true) && len(sideBeads(f.Beads, true)) == s.expectedSlots(true) {
+	leftObserved := sideObservable(f.Beads, true) && len(sideBeads(f.Beads, true)) == s.expectedSlots(true)
+	rightObserved := sideObservable(f.Beads, false) && len(sideBeads(f.Beads, false)) == s.expectedSlots(false)
+
+	// A round-opening fade can make an empty slot briefly look available. While
+	// the verified 60-second opening marker remains visible, beans are baseline
+	// evidence only, so an opening 3→4→3 (or a special ninja skin's equivalent)
+	// cannot become a cooldown. When the marker clears, one complete bilateral
+	// HUD supplies the final baseline before normal confirmation resumes.
+	if s.roundBaseline {
+		if leftObserved {
+			s.left.SyncReady(lc)
+		} else {
+			s.left.InvalidateObservation(f.CapturedAt)
+		}
+		if rightObserved {
+			s.right.SyncReady(rc)
+		} else {
+			s.right.InvalidateObservation(f.CapturedAt)
+		}
+		// Keep synchronizing while the real 60 marker is present. Once it has
+		// cleared, one complete bilateral frame establishes the final baseline.
+		if !s.roundOpeningActive && leftObserved && rightObserved {
+			s.clearRoundBaseline()
+		}
+		return
+	}
+
+	if leftObserved {
 		if s.syncLeft {
 			if s.inheritOnReturn {
 				s.syncLeft = !s.left.ResumeInheritedObservation(f.CapturedAt)
@@ -604,7 +700,7 @@ func (s *session) observeBeads(f frame.Frame) {
 	} else {
 		s.left.InvalidateObservation(f.CapturedAt)
 	}
-	if sideObservable(f.Beads, false) && len(sideBeads(f.Beads, false)) == s.expectedSlots(false) {
+	if rightObserved {
 		if s.syncRight {
 			if s.inheritOnReturn {
 				s.syncRight = !s.right.ResumeInheritedObservation(f.CapturedAt)
@@ -685,6 +781,7 @@ func (s *session) applyFight(raw bool) {
 		s.leaveHits++
 		if s.leaveHits >= leaveN {
 			s.fighting = false
+			s.clearRoundOpening()
 			s.left.Reset()
 			s.right.Reset()
 			s.syncLeft, s.syncRight = false, false

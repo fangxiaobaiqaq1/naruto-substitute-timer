@@ -2,6 +2,8 @@ package identity
 
 import (
 	"image"
+	"image/color"
+	"image/draw"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,6 +42,27 @@ func TestReadFindsOpponentOnVS(t *testing.T) {
 	got := Read(img, book, detect.ModeAuto)
 	if got.Side != "right" || got.Mine != "白方小" || got.Opp != "宇智波无名" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestReadUsesVisibleOpponentWhenMineNameIsObscured(t *testing.T) {
+	root := findRepoRoot(t)
+	t.Chdir(root)
+	img := mustPNG(t, filepath.Join(root, "inbox", "reject", "忍者加载.png"))
+	book := []Named{
+		{Name: "白方小", Image: mustPNG(t, filepath.Join(root, "assets", "identity", "白方小.png")), Mine: true},
+		{Name: "宇智波无名", Image: mustPNG(t, filepath.Join(root, "assets", "identity", "宇智波无名.png"))},
+	}
+	ca, ok := detect.ResolveContentArea(img, detect.ModeAuto, detect.LogicWidth, detect.LogicHeight, .015)
+	if !ok {
+		t.Fatal("invalid fixture area")
+	}
+	// This fixture places the configured player on the right. Hide only that
+	// strip; the visible non-mine name on the left must still establish the side.
+	draw.Draw(img, mapRect(ca, DefaultROIs.Right), image.NewUniform(color.RGBA{20, 20, 20, 255}), image.Point{}, draw.Src)
+	got := Read(img, book, detect.ModeAuto)
+	if got.Side != "right" || got.Opp != "宇智波无名" {
+		t.Fatalf("visible opponent should infer our side, got %+v", got)
 	}
 }
 
