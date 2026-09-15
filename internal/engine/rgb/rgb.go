@@ -128,12 +128,59 @@ func sampleCalibrated(img *image.RGBA, positions []detect.BeadPosition, area det
 	return sampleCalibratedSpecial(img, positions, area, cfg, [2]ninja.Readout{})
 }
 
+// sampleUnverifiedSpecial reads only strong, current-frame evidence during a
+// brief special-name gap. It never reuses an old count. Dark cores remain
+// observable for every skin; a bright result is allowed only for Obito's
+// saturated purple body and still has to pass the current-frame wash guard.
+func sampleUnverifiedSpecial(img *image.RGBA, p detect.BeadPosition, w, h, guard int, palette ninja.Palette) (detect.BeadState, float64) {
+	if img == nil || w <= 0 || h <= 0 {
+		return detect.StateUnknown, 0
+	}
+	dark, purple, total := 0, 0, 0
+	for dy := -h / 2; dy <= h/2; dy++ {
+		for dx := -w / 2; dx <= w/2; dx++ {
+			if !detect.InBeadDiamond(0, 0, w, h, dx, dy) {
+				continue
+			}
+			point := image.Pt(p.X+dx, p.Y+dy)
+			if !point.In(img.Bounds()) {
+				continue
+			}
+			total++
+			c := img.RGBAAt(point.X, point.Y)
+			r, g, b := int(c.R), int(c.G), int(c.B)
+			if (detect.DarkRange.Contains(r, g, b) && b-r >= 15 && b-g >= 8) ||
+				(palette == ninja.Purple && specialPixel(ninja.Purple, r, g, b) == detect.StateDark) {
+				dark++
+			}
+			if palette == ninja.Purple && specialPixel(ninja.Purple, r, g, b) == detect.StateLight {
+				purple++
+			}
+		}
+	}
+	if total == 0 {
+		return detect.StateUnknown, 0
+	}
+	darkConfidence := float64(dark) / float64(total)
+	if darkConfidence >= 0.60 {
+		return detect.StateDark, darkConfidence
+	}
+	purpleConfidence := float64(purple) / float64(total)
+	if palette == ninja.Purple && purpleConfidence >= 0.60 && !specialWash(img, p, ninja.Purple, max(3, guard)) {
+		return detect.StateLight, purpleConfidence
+	}
+	return detect.StateUnknown, max(darkConfidence, purpleConfidence)
+}
+
 func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, identified [2]ninja.Readout) []engine.BeadInfo {
 	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*float64(area.W)/detect.LogicWidth)))
 	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*float64(area.H)/detect.LogicHeight)))
 	var out []engine.BeadInfo
 	for index, side := range []engine.Side{engine.Left, engine.Right} {
 		palette := identified[index].Palette
+		if identified[index].Unverified {
+			palette = identified[index].PaletteHint
+		}
 		var states []detect.BeadState
 		start := len(out)
 		for _, p := range positions {
@@ -141,10 +188,13 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 				continue
 			}
 			if identified[index].Unverified {
-				// Preserve the known row shape through a brief name gap, but no
-				// cached color/count may vote or appear as a current observation.
-				states = append(states, detect.StateUnknown)
-				out = append(out, engine.BeadInfo{X: p.X, Y: p.Y, Label: label(side, p.Idx), Unknown: true})
+				// Keep the row topology, but decide each bean from this frame only.
+				// The hint permits only Obito's strongly purple body; broad effects,
+				// white flares, gold and red all remain unknown until the name returns.
+				guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
+				st, conf := sampleUnverifiedSpecial(img, p, w, h, guard, identified[index].PaletteHint)
+				states = append(states, st)
+				out = append(out, engine.BeadInfo{X: p.X, Y: p.Y, Label: label(side, p.Idx), Lit: st == detect.StateLight, Unknown: st == detect.StateUnknown, Conf: conf})
 				continue
 			}
 			redHighlight := palette == ninja.Red && redLowerBody(img, p, w, h)

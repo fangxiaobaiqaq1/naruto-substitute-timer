@@ -85,7 +85,7 @@ func TestUnverifiedNameRetainsOnlyBoundedTopology(t *testing.T) {
 	at := time.Unix(1700000000, 0)
 	tracker.Read(r, img, roi, 1, at)
 	got := tracker.Read(r, blank, roi, 1, at.Add(16*time.Millisecond))
-	if !got.Unverified || got.Slots != 4 || got.Name != "" || got.Palette != "" || got.Score != 0 {
+	if !got.Unverified || got.Slots != 4 || got.Name != "" || got.Palette != "" || got.PaletteHint != Purple || got.Score != 0 {
 		t.Fatalf("missing label reused identity or dropped topology: %+v", got)
 	}
 	got = tracker.Read(r, blank, roi, 1, at.Add(1100*time.Millisecond))

@@ -34,6 +34,9 @@ type Readout struct {
 	// Unverified retains only a recently verified slot topology during a short
 	// label gap. Name/Palette/Score are empty; it MUST NOT supply bean votes.
 	Unverified bool
+	// PaletteHint is a prior verified special-skin classifier hint. It is set
+	// only while Unverified and never represents current name evidence.
+	PaletteHint Palette
 }
 type nameTemplate struct {
 	readout Readout

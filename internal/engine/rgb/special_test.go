@@ -82,3 +82,38 @@ func TestSpecialPaletteNeedsNameAndRejectsBroadColoredWash(t *testing.T) {
 		}
 	}
 }
+
+func TestUnverifiedSpecialNameKeepsClearlyDarkBeansObservable(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{28, 42, 58, 255}), image.Point{}, draw.Src)
+	positions := []detect.BeadPosition{{Bead: detect.Bead{Side: "right", Idx: 0}, X: 80, Y: 50}}
+	readouts := [2]ninja.Readout{{}, {Slots: 6, Unverified: true, PaletteHint: ninja.Warm}}
+	beads := sampleCalibratedSpecial(img, positions, detect.ContentArea{W: 960, H: 540}, config.Default().Vision, readouts)
+	if len(beads) != 1 || beads[0].Unknown || beads[0].Lit || beads[0].Gold {
+		t.Fatalf("dark bean became unobservable during name gap: %+v", beads)
+	}
+}
+
+func TestUnverifiedPurpleNameUsesCurrentPurpleBody(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	purple := color.RGBA{255, 70, 255, 255}
+	draw.Draw(img, image.Rect(75, 45, 86, 56), image.NewUniform(purple), image.Point{}, draw.Src)
+	positions := []detect.BeadPosition{{Bead: detect.Bead{Side: "left", Idx: 0}, X: 80, Y: 50}}
+	readouts := [2]ninja.Readout{{Slots: 4, Unverified: true, PaletteHint: ninja.Purple}, {}}
+	beads := sampleCalibratedSpecial(img, positions, detect.ContentArea{W: 960, H: 540}, config.Default().Vision, readouts)
+	if len(beads) != 1 || !beads[0].Lit || beads[0].Unknown {
+		t.Fatalf("current purple body became unknown during name gap: %+v", beads)
+	}
+}
+
+func TestUnverifiedPurpleNameRejectsBroadWash(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	purple := color.RGBA{255, 70, 255, 255}
+	draw.Draw(img, img.Bounds(), image.NewUniform(purple), image.Point{}, draw.Src)
+	positions := []detect.BeadPosition{{Bead: detect.Bead{Side: "left", Idx: 0}, X: 100, Y: 50}}
+	readouts := [2]ninja.Readout{{Slots: 4, Unverified: true, PaletteHint: ninja.Purple}, {}}
+	beads := sampleCalibratedSpecial(img, positions, detect.ContentArea{W: 960, H: 540}, config.Default().Vision, readouts)
+	if len(beads) != 1 || !beads[0].Unknown || beads[0].Lit {
+		t.Fatalf("broad purple wash supplied a bean vote: %+v", beads)
+	}
+}
