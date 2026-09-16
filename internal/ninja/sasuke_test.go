@@ -50,7 +50,7 @@ func testSasukeNameAndHint(t *testing.T, file string) {
 				var tracker Tracker
 				at := time.Unix(100, 0)
 				got := tracker.Read(r, img, roi, scale, at)
-				if got.Name != SasukeXiayin || got.Slots != 4 || got.Palette != Purple || got.RowOffsetY != 9 {
+				if got.Name != SasukeXiayin || got.Slots != 4 || got.Palette != Xiayin || got.RowOffsetY != 9 {
 					t.Fatalf("full version: %+v", got)
 				}
 				// Half a name cannot identify this variant or shift a new row.
@@ -59,7 +59,7 @@ func testSasukeNameAndHint(t *testing.T, file string) {
 					t.Fatalf("partial version supplied special rules: %+v", got)
 				}
 				got = tracker.Read(r, img, roi, scale, at.Add(16*time.Millisecond))
-				if got.Name != "" || got.Palette != "" || got.Score != 0 || !got.Unverified || got.Slots != 4 || got.RowOffsetY != 9 || got.PaletteHint != Purple {
+				if got.Name != "" || got.Palette != "" || got.Score != 0 || !got.Unverified || got.Slots != 4 || got.RowOffsetY != 9 || got.PaletteHint != Xiayin {
 					t.Fatalf("brief gap must retain geometry only: %+v", got)
 				}
 				for _, tc := range []struct {

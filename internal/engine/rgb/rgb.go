@@ -181,6 +181,10 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 		if identified[index].Unverified {
 			palette = identified[index].PaletteHint
 		}
+		xiayin := palette == ninja.Xiayin
+		if xiayin {
+			palette = xiayinPalette(img, positions, side.String(), w, h)
+		}
 		var states []detect.BeadState
 		start := len(out)
 		for _, p := range positions {
@@ -189,10 +193,20 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 			}
 			if identified[index].Unverified {
 				// Keep the row topology, but decide each bean from this frame only.
-				// The hint permits only a strongly purple body; broad effects,
-				// white flares, gold and red all remain unknown until the name returns.
+				// Hints permit current saturated purple bodies; Xiayin also permits
+				// spatially isolated red cores. White flares/gold remain unknown.
 				guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
-				st, conf := sampleUnverifiedSpecial(img, p, w, h, guard, identified[index].PaletteHint)
+				hint := identified[index].PaletteHint
+				if xiayin {
+					hint = palette
+				}
+				var st detect.BeadState
+				var conf float64
+				if xiayin && palette == ninja.Red {
+					st, conf = sampleUnverifiedXiayinRed(img, p, w, h, guard)
+				} else {
+					st, conf = sampleUnverifiedSpecial(img, p, w, h, guard, hint)
+				}
 				states = append(states, st)
 				out = append(out, engine.BeadInfo{X: p.X, Y: p.Y, Label: label(side, p.Idx), Lit: st == detect.StateLight, Unknown: st == detect.StateUnknown, Conf: conf})
 				continue
@@ -286,6 +300,11 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 				st, conf = detect.StateDark, 1
 			}
 			guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
+			// Xiayin's alternate red skin still needs its own bounded body.
+			// Red bars/effects alone must not convert a purple row into ready beans.
+			if st == detect.StateLight && xiayin && palette == ninja.Red && !isolatedRedHalo(img, p, guard) {
+				st = detect.StateUnknown
+			}
 			if st == detect.StateLight && specialWash(img, p, palette, guard) {
 				if !warmHighlight && (palette != ninja.Purple || identified[index].Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard, gap))) {
 					st = detect.StateUnknown

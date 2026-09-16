@@ -24,6 +24,7 @@ const (
 	Warm   Palette = "warm" // Blue/orange six-slot variants.
 	Purple Palette = "purple"
 	Red    Palette = "red"
+	Xiayin Palette = "xiayin" // Exact Sasuke variant supports purple and red HUD skins.
 )
 
 type Readout struct {
@@ -69,8 +70,8 @@ func NewReader() *Reader {
 		{"hashirama", Hashirama, 6, Warm, 0}, {"hashirama_alt", Hashirama, 6, Warm, 0}, {"madara", Madara, 6, Warm, 0},
 		{"obito", Obito, 4, Purple, 0}, {"naruto", Naruto, 4, Red, 0}, {"naruto_right", Naruto, 4, Red, 0},
 		{"obito_current", Obito, 4, Purple, 0},
-		{"sasuke_xiayin", SasukeXiayin, 4, Purple, 9},
-		{"sasuke_xiayin_duel", SasukeXiayin, 4, Purple, 9},
+		{"sasuke_xiayin", SasukeXiayin, 4, Xiayin, 9},
+		{"sasuke_xiayin_duel", SasukeXiayin, 4, Xiayin, 9},
 		{"naruto_student", NarutoStudent, 0, "", 0},
 	} {
 		data, err := templates.ReadFile("templates/" + spec.file + ".png")
