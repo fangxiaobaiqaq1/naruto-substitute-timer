@@ -43,7 +43,7 @@ Windows 10/11 x64 · MuMu · 本地视觉识别 · MIT
 Go 1.26.1、Windows x64 C/C++ 工具链（cgo）：
 
 ```powershell
-$env:TIMER_VERSION = "v0.2.4"
+$env:TIMER_VERSION = "v0.2.5"
 .\build.bat
 ```
 
