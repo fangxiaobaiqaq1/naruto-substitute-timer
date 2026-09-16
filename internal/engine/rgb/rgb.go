@@ -198,7 +198,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 				continue
 			}
 			redHighlight := palette == ninja.Red && redLowerBody(img, p, w, h)
-			purpleHighlight := palette == ninja.Purple && purpleGlintBody(img, p, w, h)
+			purpleHighlight := palette == ninja.Purple && purpleGlintBody(img, p, w, h, beadHalfPitch(positions, p, 2*w))
 			goldHighlight := (palette == "" || palette == ninja.Warm) && goldGlintBody(img, p, w, h)
 			warmHighlight := palette == ninja.Warm && identified[index].Slots == 6 && warmGlintBody(img, p, w, h)
 			light, dark, gold, paleGold, blue, total := 0, 0, 0, 0, 0, 0
@@ -275,9 +275,12 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 					st = detect.StateDark
 				}
 			}
+			if st == detect.StateUnknown && darkGlintBody(img, p, w, h, palette) {
+				st, conf = detect.StateDark, 1
+			}
 			guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
 			if st == detect.StateLight && specialWash(img, p, palette, guard) {
-				if palette != ninja.Purple || identified[index].Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard)) {
+				if !warmHighlight && (palette != ninja.Purple || identified[index].Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard))) {
 					st = detect.StateUnknown
 				}
 			}

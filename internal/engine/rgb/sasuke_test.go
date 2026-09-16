@@ -56,7 +56,7 @@ func TestSasukeXiayinUserScreenshots(t *testing.T) {
 						h := max(2, int(math.Round(cfg.Vision.SampleHeightReferencePX*cfg.Vision.CoreScale*float64(area.H)/detect.LogicHeight)))
 						guard := max(3, int(math.Round(cfg.Vision.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
 						for _, p := range positions[:4] {
-							t.Logf("slot %d: glintBody=%v wash=%v core=%v", p.Idx+1, purpleGlintBody(img, p, w, h), specialWash(img, p, ninja.Purple, guard), img.RGBAAt(p.X, p.Y))
+							t.Logf("slot %d: glintBody=%v wash=%v core=%v", p.Idx+1, purpleGlintBody(img, p, w, h, beadHalfPitch(positions, p, 2*w)), specialWash(img, p, ninja.Purple, guard), img.RGBAAt(p.X, p.Y))
 						}
 						t.Fatalf("frame %d: names %q/%q slots %d/%d counts %d/%d: %+v", i, got.LeftNinja, got.RightNinja, got.LeftSlots, got.RightSlots, left, right, got.Beads)
 					}

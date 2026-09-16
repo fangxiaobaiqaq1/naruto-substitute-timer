@@ -25,7 +25,9 @@ func warmGlintBody(img *image.RGBA, p detect.BeadPosition, w, h int) bool {
 		r, g, b := int(c.R), int(c.G), int(c.B)
 		return sample{specialPixel(ninja.Warm, r, g, b) == detect.StateLight, r - b, r + g - b}, true
 	}
-	far := image.Pt(p.X, p.Y+2*h)
+	// The moving lower sparkle can reach two core heights. A farther probe,
+	// together with BOTH filled lobes and slot-gap contrast, bounds the body.
+	far := image.Pt(p.X, p.Y+3*h)
 	body, ok := at(far.X, far.Y)
 	if !ok || body.warm {
 		return false

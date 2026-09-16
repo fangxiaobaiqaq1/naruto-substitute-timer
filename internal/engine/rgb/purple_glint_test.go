@@ -70,7 +70,7 @@ func TestPurpleHighlightNeedsFilledBodyInCurrentFrame(t *testing.T) {
 				}
 				draw.Draw(img, image.Rect(97, 97, 104, 104), image.White, image.Point{}, draw.Src)
 			}
-			if purpleGlintBody(img, p, 6, 7) {
+			if purpleGlintBody(img, p, 6, 7, 12) {
 				t.Fatal("unfilled or unbounded effect admitted as body")
 			}
 			got := sampleCalibratedSpecial(img, []detect.BeadPosition{p}, area, config.Default().Vision, palette)
