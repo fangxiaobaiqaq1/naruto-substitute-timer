@@ -1,0 +1,21 @@
+{
+  "scope": "Exact full name/version identifies four purple slots with a lower row; no player identity or cooldown override.",
+  "name": "宇智波佐助[侠隐江湖]",
+  "source": "user game screenshot 2026-09-16, three.png",
+  "sourceSHA256": "4566ab45a2126badeeddff528f037859bd6c52edbed78d1836a6e13ab5b2476e",
+  "sourceSize": [
+    1308,
+    734
+  ],
+  "box": [
+    133,
+    27,
+    361,
+    54
+  ],
+  "referenceWidth": 960,
+  "rowOffsetY": 9,
+  "template": "sasuke_xiayin.png",
+  "templateSHA256": "7ceac685bab4960e3a42eb824023b74ab1b2ecb8ddce1787e565c26974e06ec7",
+  "resampling": "Pillow BILINEAR; reference 960-wide HUD"
+}

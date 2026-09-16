@@ -51,6 +51,15 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: side, Idx: i, LX: lx, LY: ly}, X: area.X + int(math.Round(lx*float64(area.W)/detect.LogicWidth)), Y: area.Y + int(math.Round(ly*float64(area.H)/detect.LogicHeight))})
 				}
 			}
+			// Xiayin Sasuke has an extra energy bar above his purple beans.
+			// Shift only this name-verified row (or its bounded geometry hint),
+			// after name search so its ROI cannot drift on subsequent frames.
+			if offset := identified[index].RowOffsetY; offset != 0 {
+				for i := range row {
+					row[i].LY += offset * detect.LogicHeight / 540
+					row[i].Y = area.Y + int(math.Round(row[i].LY*float64(area.H)/detect.LogicHeight))
+				}
+			}
 		}
 		out = append(out, row...)
 	}

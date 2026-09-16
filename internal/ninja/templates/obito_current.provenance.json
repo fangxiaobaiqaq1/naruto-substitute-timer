@@ -1,0 +1,20 @@
+{
+  "scope": "Exact full name/version only; retains the original four-slot purple rules and strict 0.80 threshold.",
+  "name": "宇智波带土[十尾人柱力]",
+  "source": "debug\\obito-flicker-20260916-before\\diagnostic-01.png",
+  "sourceSHA256": "8be2e898ba172c213830c68b3c933c5c3e5ed3a8514ea853dc6f283621bae299",
+  "sourceSize": [
+    1600,
+    900
+  ],
+  "box": [
+    164,
+    32,
+    465,
+    66
+  ],
+  "referenceWidth": 960,
+  "template": "obito_current.png",
+  "templateSHA256": "e52c0d14762e3fa3a068de02e3c496e47ec8d68d7a6c6c9b4d089e0e7bf81548",
+  "resampling": "Pillow BILINEAR; reference 960-wide HUD"
+}

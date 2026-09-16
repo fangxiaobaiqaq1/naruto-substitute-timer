@@ -14,6 +14,7 @@ const (
 	Hashirama         = "千手柱间[木叶创立]"
 	Madara            = "宇智波斑[神驹佑祥]"
 	Obito             = "宇智波带土[十尾人柱力]"
+	SasukeXiayin      = "宇智波佐助[侠隐江湖]"
 	Naruto            = "漩涡鸣人[暴怒·第六尾]"
 	DefaultCooldown   = 15 * time.Second
 	AlternateCooldown = 10 * time.Second
@@ -44,6 +45,8 @@ func ShortLabel(name string) string {
 		return "斑·神驹佑祥"
 	case normalize(Obito):
 		return "带土·十尾"
+	case normalize(SasukeXiayin):
+		return "佐助·侠隐江湖"
 	case normalize(NarutoStudent):
 		return "鸣人·忍者学员"
 	case normalize(Naruto):

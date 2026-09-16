@@ -40,7 +40,7 @@ func (t *Tracker) Read(reader *Reader, img *image.RGBA, roi image.Rectangle, sca
 	t.reader, t.bounds, t.roi, t.scale = reader, img.Bounds(), roi, scale
 	unavailable := func() Readout {
 		if t.hint.Name != "" && t.hint.Slots > 0 && now.Sub(t.verifiedAt) <= time.Second {
-			return Readout{Slots: t.hint.Slots, Unverified: true, PaletteHint: t.hint.Palette}
+			return Readout{Slots: t.hint.Slots, RowOffsetY: t.hint.RowOffsetY, Unverified: true, PaletteHint: t.hint.Palette}
 		}
 		return Readout{}
 	}

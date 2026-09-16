@@ -130,7 +130,7 @@ func sampleCalibrated(img *image.RGBA, positions []detect.BeadPosition, area det
 
 // sampleUnverifiedSpecial reads only strong, current-frame evidence during a
 // brief special-name gap. It never reuses an old count. Dark cores remain
-// observable for every skin; a bright result is allowed only for Obito's
+// observable for every skin; a bright result is allowed only for a verified
 // saturated purple body and still has to pass the current-frame wash guard.
 func sampleUnverifiedSpecial(img *image.RGBA, p detect.BeadPosition, w, h, guard int, palette ninja.Palette) (detect.BeadState, float64) {
 	if img == nil || w <= 0 || h <= 0 {
@@ -189,7 +189,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 			}
 			if identified[index].Unverified {
 				// Keep the row topology, but decide each bean from this frame only.
-				// The hint permits only Obito's strongly purple body; broad effects,
+				// The hint permits only a strongly purple body; broad effects,
 				// white flares, gold and red all remain unknown until the name returns.
 				guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
 				st, conf := sampleUnverifiedSpecial(img, p, w, h, guard, identified[index].PaletteHint)
@@ -277,7 +277,9 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 			}
 			guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
 			if st == detect.StateLight && specialWash(img, p, palette, guard) {
-				st = detect.StateUnknown
+				if palette != ninja.Purple || identified[index].Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard)) {
+					st = detect.StateUnknown
+				}
 			}
 			if st == detect.StateLight && blue > light/2 && !blueBodyVisible(img, p, w, h) {
 				st = detect.StateUnknown

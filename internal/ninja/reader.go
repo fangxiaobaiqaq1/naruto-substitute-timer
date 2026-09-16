@@ -31,8 +31,11 @@ type Readout struct {
 	Slots   int
 	Palette Palette
 	Score   float64
-	// Unverified retains only a recently verified slot topology during a short
-	// label gap. Name/Palette/Score are empty; it MUST NOT supply bean votes.
+	// RowOffsetY shifts the calibrated bean row in 960x540 reference pixels.
+	// It is geometry, not evidence of a current name or a readable bean.
+	RowOffsetY float64
+	// Unverified retains recently verified slot geometry during a short label
+	// gap. Name/Palette/Score are empty; hints alone MUST NOT supply bean votes.
 	Unverified bool
 	// PaletteHint is a prior verified special-skin classifier hint. It is set
 	// only while Unverified and never represents current name evidence.
@@ -61,10 +64,13 @@ func NewReader() *Reader {
 		file, name string
 		slots      int
 		palette    Palette
+		rowOffsetY float64
 	}{
-		{"hashirama", Hashirama, 6, Warm}, {"hashirama_alt", Hashirama, 6, Warm}, {"madara", Madara, 6, Warm},
-		{"obito", Obito, 4, Purple}, {"naruto", Naruto, 4, Red}, {"naruto_right", Naruto, 4, Red},
-		{"naruto_student", NarutoStudent, 0, ""},
+		{"hashirama", Hashirama, 6, Warm, 0}, {"hashirama_alt", Hashirama, 6, Warm, 0}, {"madara", Madara, 6, Warm, 0},
+		{"obito", Obito, 4, Purple, 0}, {"naruto", Naruto, 4, Red, 0}, {"naruto_right", Naruto, 4, Red, 0},
+		{"obito_current", Obito, 4, Purple, 0},
+		{"sasuke_xiayin", SasukeXiayin, 4, Purple, 9},
+		{"naruto_student", NarutoStudent, 0, "", 0},
 	} {
 		data, err := templates.ReadFile("templates/" + spec.file + ".png")
 		if err != nil {
@@ -74,7 +80,7 @@ func NewReader() *Reader {
 		if err != nil {
 			continue
 		}
-		r.source = append(r.source, nameTemplate{Readout{Name: spec.name, Slots: spec.slots, Palette: spec.palette}, match.ToGray(img)})
+		r.source = append(r.source, nameTemplate{Readout{Name: spec.name, Slots: spec.slots, Palette: spec.palette, RowOffsetY: spec.rowOffsetY}, match.ToGray(img)})
 	}
 	return r
 }
