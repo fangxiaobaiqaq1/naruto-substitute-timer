@@ -230,7 +230,7 @@ type replayTracker struct {
 	left, right           app.SideClock
 	fighting, holdFreeze  bool
 	inheritOnReturn       bool
-	roundBaseline         bool
+	roundBaseline         [2]bool
 	roundOpeningActive    bool
 	roundOpeningSeenAt    time.Time
 	syncLeft, syncRight   bool
@@ -275,25 +275,25 @@ func (t *replayTracker) beginVerifiedRound() {
 	t.syncLeft, t.syncRight = false, false
 	t.inheritOnReturn = false
 	t.holdFreeze = false
-	t.roundBaseline = true
+	t.roundBaseline = [2]bool{true, true}
 }
 
 func (t *replayTracker) clearRoundOpening() {
-	t.roundBaseline = false
+	t.roundBaseline = [2]bool{}
 	t.roundOpeningActive = false
 	t.roundOpeningSeenAt = time.Time{}
 }
 
 // observeRoundOpening mirrors the live session: while the verified "第 N 回 / 60"
 // marker is present, beans are calibration evidence only. Once it clears, one
-// complete frame becomes the final baseline before normal drop confirmation.
+// complete observation PER SIDE becomes its baseline before drop confirmation.
 func (t *replayTracker) observeRoundOpening(f frame.Frame) {
 	at := replayFrameTime(f.CapturedAt)
 	if f.Fighting && f.RoundOpening {
 		if !t.roundOpeningActive {
 			t.beginVerifiedRound()
 		} else {
-			t.roundBaseline = true
+			t.roundBaseline = [2]bool{true, true}
 		}
 		t.roundOpeningActive = true
 		t.roundOpeningSeenAt = at
@@ -306,7 +306,7 @@ func (t *replayTracker) observeRoundOpening(f frame.Frame) {
 		return
 	}
 	t.roundOpeningActive = false
-	t.roundBaseline = true
+	t.roundBaseline = [2]bool{true, true}
 }
 
 func (t *replayTracker) resyncAfterRecordingGap() {
@@ -372,24 +372,8 @@ func (t *replayTracker) observe(f frame.Frame) []replayEvent {
 	if f.Duplicate {
 		return nil
 	}
-	if t.roundBaseline {
-		if left == nil {
-			t.left.InvalidateObservation(f.CapturedAt)
-		} else {
-			t.left.SyncReady(*left)
-		}
-		if right == nil {
-			t.right.InvalidateObservation(f.CapturedAt)
-		} else {
-			t.right.SyncReady(*right)
-		}
-		if !t.roundOpeningActive && left != nil && right != nil {
-			t.roundBaseline = false
-		}
-		return nil
-	}
 	var events []replayEvent
-	for _, side := range []struct {
+	for i, side := range []struct {
 		name  string
 		clock *app.SideClock
 		ready *int
@@ -397,6 +381,12 @@ func (t *replayTracker) observe(f frame.Frame) []replayEvent {
 	}{{"left", &t.left, left, &t.syncLeft}, {"right", &t.right, right, &t.syncRight}} {
 		if side.ready == nil {
 			side.clock.InvalidateObservation(f.CapturedAt)
+			continue
+		}
+		if t.roundBaseline[i] {
+			side.clock.SyncReady(*side.ready)
+			*side.sync = false
+			t.roundBaseline[i] = t.roundOpeningActive
 			continue
 		}
 		if *side.sync {

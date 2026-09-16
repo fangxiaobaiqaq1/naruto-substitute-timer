@@ -67,8 +67,8 @@ type session struct {
 	sceneObservedAt     time.Time
 	holdFreeze          bool
 	inheritOnReturn     bool
-	roundBaseline       bool // A verified round-opening marker temporarily makes beans baseline-only.
-	roundOpeningActive  bool // Opening marker can briefly disappear behind animation effects.
+	roundBaseline       [2]bool // Each side leaves opening calibration independently.
+	roundOpeningActive  bool    // Opening marker can briefly disappear behind animation effects.
 	roundOpeningSeenAt  time.Time
 	syncLeft            bool
 	syncRight           bool
@@ -602,12 +602,12 @@ func (s *session) beginVerifiedRound() {
 	s.syncLeft, s.syncRight = false, false
 	s.inheritOnReturn = false
 	s.holdFreeze = false
-	s.roundBaseline = true
+	s.armRoundBaseline()
 }
 
-func (s *session) armRoundBaseline() { s.roundBaseline = true }
+func (s *session) armRoundBaseline() { s.roundBaseline = [2]bool{true, true} }
 
-func (s *session) clearRoundBaseline() { s.roundBaseline = false }
+func (s *session) clearRoundBaseline() { s.roundBaseline = [2]bool{} }
 
 func (s *session) clearRoundOpening() {
 	s.roundOpeningActive = false
@@ -666,28 +666,18 @@ func (s *session) observeBeads(f frame.Frame) {
 	// A round-opening fade can make an empty slot briefly look available. While
 	// the verified 60-second opening marker remains visible, beans are baseline
 	// evidence only, so an opening 3→4→3 (or a special ninja skin's equivalent)
-	// cannot become a cooldown. When the marker clears, one complete bilateral
-	// HUD supplies the final baseline before normal confirmation resumes.
-	if s.roundBaseline {
+	// cannot become a cooldown. After it clears, each side consumes its own
+	// first complete observation. An obscured opponent must not keep resetting
+	// the readable side's baseline and silently swallow its real substitutes.
+	if s.roundBaseline[0] {
 		if leftObserved {
 			s.left.SyncReady(lc)
+			s.syncLeft = false
+			s.roundBaseline[0] = s.roundOpeningActive
 		} else {
 			s.left.InvalidateObservation(f.CapturedAt)
 		}
-		if rightObserved {
-			s.right.SyncReady(rc)
-		} else {
-			s.right.InvalidateObservation(f.CapturedAt)
-		}
-		// Keep synchronizing while the real 60 marker is present. Once it has
-		// cleared, one complete bilateral frame establishes the final baseline.
-		if !s.roundOpeningActive && leftObserved && rightObserved {
-			s.clearRoundBaseline()
-		}
-		return
-	}
-
-	if leftObserved {
+	} else if leftObserved {
 		if s.syncLeft {
 			if s.inheritOnReturn {
 				s.syncLeft = !s.left.ResumeInheritedObservation(f.CapturedAt)
@@ -700,7 +690,15 @@ func (s *session) observeBeads(f frame.Frame) {
 	} else {
 		s.left.InvalidateObservation(f.CapturedAt)
 	}
-	if rightObserved {
+	if s.roundBaseline[1] {
+		if rightObserved {
+			s.right.SyncReady(rc)
+			s.syncRight = false
+			s.roundBaseline[1] = s.roundOpeningActive
+		} else {
+			s.right.InvalidateObservation(f.CapturedAt)
+		}
+	} else if rightObserved {
 		if s.syncRight {
 			if s.inheritOnReturn {
 				s.syncRight = !s.right.ResumeInheritedObservation(f.CapturedAt)

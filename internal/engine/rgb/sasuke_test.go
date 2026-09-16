@@ -164,7 +164,7 @@ func TestSasukeXiayinHaloDoesNotAdmitEffects(t *testing.T) {
 					draw.Draw(img, image.Rect(97, 97, 104, 104), image.White, image.Point{}, draw.Src)
 				}
 			}
-			if isolatedPurpleHalo(img, p, 4, 4, 10) {
+			if isolatedPurpleHalo(img, p, 4, 4, 10, 8) {
 				t.Fatal("unbounded/unfilled effect passed isolation proof")
 			}
 			bead := sampleCalibratedSpecial(img, []detect.BeadPosition{p}, area, config.Default().Vision, [2]ninja.Readout{readout, {}})[0]

@@ -70,6 +70,7 @@ func NewReader() *Reader {
 		{"obito", Obito, 4, Purple, 0}, {"naruto", Naruto, 4, Red, 0}, {"naruto_right", Naruto, 4, Red, 0},
 		{"obito_current", Obito, 4, Purple, 0},
 		{"sasuke_xiayin", SasukeXiayin, 4, Purple, 9},
+		{"sasuke_xiayin_duel", SasukeXiayin, 4, Purple, 9},
 		{"naruto_student", NarutoStudent, 0, "", 0},
 	} {
 		data, err := templates.ReadFile("templates/" + spec.file + ".png")

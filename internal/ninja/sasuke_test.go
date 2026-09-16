@@ -13,7 +13,17 @@ import (
 )
 
 func TestSasukeXiayinNameAndBoundedGeometryHint(t *testing.T) {
-	data, err := templates.ReadFile("templates/sasuke_xiayin.png")
+	for _, file := range []string{"sasuke_xiayin.png", "sasuke_xiayin_duel.png"} {
+		t.Run(file, func(t *testing.T) { testSasukeNameAndHint(t, file) })
+	}
+	if ShortLabel(SasukeXiayin) != "佐助·侠隐江湖" || DualCooldown(SasukeXiayin) {
+		t.Fatal("display label or ordinary cooldown changed")
+	}
+}
+
+func testSasukeNameAndHint(t *testing.T, file string) {
+	t.Helper()
+	data, err := templates.ReadFile("templates/" + file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +31,7 @@ func TestSasukeXiayinNameAndBoundedGeometryHint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, width := range []int{800, 960, 1308, 1920, 2560} {
+	for _, width := range []int{800, 822, 960, 1308, 1920, 2560} {
 		for _, left := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%d/left=%v", width, left), func(t *testing.T) {
 				scale := float64(width) / 960
@@ -70,8 +80,5 @@ func TestSasukeXiayinNameAndBoundedGeometryHint(t *testing.T) {
 				}
 			})
 		}
-	}
-	if ShortLabel(SasukeXiayin) != "佐助·侠隐江湖" || DualCooldown(SasukeXiayin) {
-		t.Fatal("display label or ordinary cooldown changed")
 	}
 }

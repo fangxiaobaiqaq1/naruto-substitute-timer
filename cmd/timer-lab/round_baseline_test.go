@@ -1,11 +1,39 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"narutotimer/internal/frame"
 )
+
+func TestReplayOpeningBaselineDoesNotBlockOtherSide(t *testing.T) {
+	for _, visible := range []int{0, 1} {
+		t.Run(fmt.Sprint(visible), func(t *testing.T) {
+			tr := newReplayTracker(replayTestConfig(), 15*time.Second)
+			base := time.Unix(1700000000, 0)
+			opening := replayFight(base, 4, 4)
+			opening.RoundOpening = true
+			tr.observe(opening)
+			var events []replayEvent
+			for i, ready := range []int{4, 3, 3, 3, 3} {
+				counts := []int{ready, ready}
+				if i < 3 {
+					counts[1-visible] = -1
+				}
+				f := replayFight(base.Add(420*time.Millisecond+time.Duration(i)*20*time.Millisecond), counts[0], counts[1])
+				events = append(events, tr.observe(f)...)
+			}
+			if len(events) != 1 || events[0].side != []string{"left", "right"}[visible] || !events[0].firstObserved.Equal(base.Add(440*time.Millisecond)) {
+				t.Fatalf("visible side was blocked or unknown side inferred a use: %+v", events)
+			}
+			if tr.roundBaseline != ([2]bool{}) {
+				t.Fatal("baseline did not clear independently")
+			}
+		})
+	}
+}
 
 func TestReplayNewRoundDifferenceIsNotObservedSubstitute(t *testing.T) {
 	cfg := replayTestConfig()

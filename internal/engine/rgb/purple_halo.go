@@ -2,7 +2,6 @@ package rgb
 
 import (
 	"image"
-	"math"
 
 	"narutotimer/internal/detect"
 	"narutotimer/internal/ninja"
@@ -10,28 +9,30 @@ import (
 
 // Xiayin Sasuke's energy bar above and idle glow below can trip both wash
 // guards. A confirmed version may keep its saturated bean vote only if the
-// current body is filled, brighter than BOTH inter-slot gaps on consecutive
-// scanlines, and the glow fades further below. This does not count white cores
+// current body is filled, distinct from BOTH inter-slot gaps on consecutive
+// scanlines, and the purple glow fades further below. This does not count white cores
 // or search for a brighter position. Flat bands and hollow rims fail.
-func isolatedPurpleHalo(img *image.RGBA, p detect.BeadPosition, w, h, guard int) bool {
+func isolatedPurpleHalo(img *image.RGBA, p detect.BeadPosition, w, h, guard, gap int) bool {
 	far := image.Pt(p.X, p.Y+2*guard)
 	if !far.In(img.Bounds()) {
 		return false
 	}
 	c := img.RGBAAt(far.X, far.Y)
-	if specialPixel(ninja.Purple, int(c.R), int(c.G), int(c.B)) == detect.StateLight || (c.R >= 235 && c.G >= 210 && c.B >= 235) {
+	// White damage numbers can pass BELOW an intact saturated bean. They do
+	// not invalidate its current body; white cores still receive no votes here.
+	if specialPixel(ninja.Purple, int(c.R), int(c.G), int(c.B)) == detect.StateLight {
 		return false
 	}
-	brightness := func(x, y int) (int, bool) {
+	signal := func(x, y int) ([3]int, bool) {
 		if !image.Pt(x, y).In(img.Bounds()) {
-			return 0, false
+			return [3]int{}, false
 		}
 		c := img.RGBAAt(x, y)
-		// Purple saturates R/B during the glint; G preserves body contrast.
-		return min(int(c.R), int(c.B)) + int(c.G), true
+		// Bright scenery can exceed the purple body's luminance, while an
+		// energy-bar halo saturates R. Keep independent value/chroma channels.
+		return [3]int{min(int(c.R), int(c.B)) + int(c.G), min(int(c.R), int(c.B)) - int(c.G), int(c.B) - int(c.G)}, true
 	}
-	gap := max(2, int(math.Round(float64(guard)*.75)))
-	consecutive := 0
+	contrast := newBodyContrast(max(2, h/3))
 	for dy := -h; dy <= h; dy++ {
 		y := p.Y + dy
 		filled := 0
@@ -41,20 +42,24 @@ func isolatedPurpleHalo(img *image.RGBA, p detect.BeadPosition, w, h, guard int)
 				return false
 			}
 			c := img.RGBAAt(point.X, point.Y)
-			if c.R >= 180 && c.B >= 210 && int(c.R)-int(c.G) >= 40 && int(c.B)-int(c.G) >= 55 {
+			if specialPixel(ninja.Purple, int(c.R), int(c.G), int(c.B)) == detect.StateLight {
 				filled++
 			}
 		}
-		core, ok := brightness(p.X, y)
-		left, leftOK := brightness(p.X-gap, y)
-		right, rightOK := brightness(p.X+gap, y)
-		if filled == 3 && ok && leftOK && rightOK && core-max(left, right) >= 32 {
-			consecutive++
-			if consecutive >= max(2, h/3) {
+		core, ok := signal(p.X, y)
+		left, leftOK := signal(p.X-gap, y)
+		right, rightOK := signal(p.X+gap, y)
+		c := img.RGBAAt(p.X, y)
+		if filled >= 2 && specialPixel(ninja.Purple, int(c.R), int(c.G), int(c.B)) == detect.StateLight && ok && leftOK && rightOK {
+			lc, rc := core[0]-left[0], core[0]-right[0]
+			for channel := 1; channel < len(core); channel++ {
+				lc, rc = max(lc, core[channel]-left[channel]), max(rc, core[channel]-right[channel])
+			}
+			if contrast.add(lc, rc, 32) {
 				return true
 			}
 		} else {
-			consecutive = 0
+			contrast.reset()
 		}
 	}
 	return false

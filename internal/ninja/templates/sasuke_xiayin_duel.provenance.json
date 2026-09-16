@@ -1,0 +1,33 @@
+{
+  "scope": "Exact full ninja variant only; crop excludes player nickname. Compressed desktop video, not native SDK evidence.",
+  "name": "宇智波佐助[侠隐江湖]",
+  "source": "user-supplied 2026-09-16 12-42-00.mp4",
+  "sourceSHA256": "9ab41e5a733a3a90387c230689fe1beb6f02a76078be135c621216959a9c0847",
+  "sourceSize": [
+    1280,
+    720
+  ],
+  "frame": 0,
+  "fps": 30,
+  "gameBox": [
+    59,
+    136,
+    881,
+    599
+  ],
+  "nameBoxInGame": [
+    539,
+    16,
+    681,
+    34
+  ],
+  "referenceWidth": 960,
+  "templateSize": [
+    166,
+    21
+  ],
+  "rowOffsetY": 9,
+  "resampling": "Pillow BILINEAR, normalized from 822-wide game crop",
+  "template": "sasuke_xiayin_duel.png",
+  "templateSHA256": "c736c4a69cdbd0ca5d5028e32c75f9113701b6034519c9c0fee54d41c47297cc"
+}

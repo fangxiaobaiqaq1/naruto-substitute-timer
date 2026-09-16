@@ -197,9 +197,11 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 				out = append(out, engine.BeadInfo{X: p.X, Y: p.Y, Label: label(side, p.Idx), Lit: st == detect.StateLight, Unknown: st == detect.StateUnknown, Conf: conf})
 				continue
 			}
+			gap := beadHalfPitch(positions, p, 2*w)
 			redHighlight := palette == ninja.Red && redLowerBody(img, p, w, h)
-			purpleHighlight := palette == ninja.Purple && purpleGlintBody(img, p, w, h, beadHalfPitch(positions, p, 2*w))
+			purpleHighlight := palette == ninja.Purple && (purpleGlintBody(img, p, w, h, gap) || purplePairedBody(img, p, w, h, gap))
 			goldHighlight := (palette == "" || palette == ninja.Warm) && goldGlintBody(img, p, w, h)
+			blueHighlight := (palette == "" || palette == ninja.Warm) && blueGlintBody(img, p, w, h, gap)
 			warmHighlight := palette == ninja.Warm && identified[index].Slots == 6 && warmGlintBody(img, p, w, h)
 			light, dark, gold, paleGold, blue, total := 0, 0, 0, 0, 0, 0
 			for dy := -h / 2; dy <= h/2; dy++ {
@@ -213,6 +215,11 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 					}
 					c := img.RGBAAt(p.X+dx, p.Y+dy)
 					r, g, b := int(c.R), int(c.G), int(c.B)
+					if blueHighlight && g >= 190 && b >= 185 && g+15 >= r && b+45 >= r {
+						light++
+						blue++
+						continue
+					}
 					if warmHighlight && r >= 235 && g >= 210 && r+12 >= g && g >= b {
 						light++
 						continue
@@ -280,7 +287,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 			}
 			guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
 			if st == detect.StateLight && specialWash(img, p, palette, guard) {
-				if !warmHighlight && (palette != ninja.Purple || identified[index].Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard))) {
+				if !warmHighlight && (palette != ninja.Purple || identified[index].Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard, gap))) {
 					st = detect.StateUnknown
 				}
 			}
