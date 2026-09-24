@@ -47,8 +47,53 @@ func TestExportBundleAllowListsSessionFiles(t *testing.T) {
 			t.Fatalf("missing %s: %v", want, names)
 		}
 	}
-	if names["session/secret.txt"] || names["session/raw.png"] {
+	if names["session/secret.txt"] || names["session/raw.png"] || names["session/replay/frame.jpg"] {
 		t.Fatalf("unexpected private/raw file: %v", names)
+	}
+}
+
+func TestAllowedSessionFilesIncludesImagesOnlyByExplicitOptIn(t *testing.T) {
+	session := t.TempDir()
+	for dir, name := range map[string]string{"frames": "raw.png", "hud": "crop.png", "replay": "frame.jpg"} {
+		if err := os.MkdirAll(filepath.Join(session, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(session, dir, name), []byte("image"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(session, "replay", "manifest.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(session, "replay", "unfinished.jpg.partial"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(session, "replay", "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(session, "replay", "nested", "hidden.jpg"), []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	without := allowedSessionFiles(session, false)
+	with := allowedSessionFiles(session, true)
+	if len(without) != 1 || without[0] != "replay/manifest.json" {
+		t.Fatalf("default allowlist leaked image: %v", without)
+	}
+	for _, want := range []string{"frames/raw.png", "hud/crop.png", "replay/frame.jpg", "replay/manifest.json"} {
+		found := false
+		for _, name := range with {
+			found = found || name == want
+		}
+		if !found {
+			t.Fatalf("explicit allowlist missing %s: %v", want, with)
+		}
+	}
+	for _, forbidden := range []string{"replay/unfinished.jpg.partial", "replay/nested/hidden.jpg"} {
+		for _, name := range with {
+			if name == forbidden {
+				t.Fatalf("recursive image allowlist escaped its directory: %v", with)
+			}
+		}
 	}
 }
 func TestExportBundleDoesNotOverwriteEarlierBundle(t *testing.T) {
