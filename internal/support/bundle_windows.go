@@ -103,7 +103,11 @@ func summary(options BundleOptions) string {
 			fmt.Fprintf(&b, "SDK 自检失败阶段：%s\n\n错误：%s\n\n", options.Probe.FailureStage, options.Probe.Error)
 		}
 	}
-	fmt.Fprintln(&b, "压缩包默认不包含原帧 PNG；其中的 JSON 文件记录实际配置、MuMu 安装目录、实例编号、PID、SDK DLL 和分阶段自检结果。")
+	if options.IncludeImages {
+		fmt.Fprintln(&b, "已按用户明确选择包含原帧 PNG、HUD 证据和诊断回放 JPEG；请在发送前确认图像隐私。")
+	} else {
+		fmt.Fprintln(&b, "压缩包默认不包含原帧 PNG、HUD 证据或诊断回放 JPEG；其中的 JSON 文件记录实际配置、MuMu 安装目录、实例编号、PID、SDK DLL 和分阶段自检结果。")
+	}
 	return b.String()
 }
 
@@ -152,21 +156,27 @@ func copyZipFile(ctx context.Context, zw *zip.Writer, source, name string, files
 }
 
 func allowedSessionFiles(dir string, includeImages bool) []string {
-	allowed := []string{"session.json", "capture.jsonl", "frames.jsonl", "report.json", "report.md"}
+	allowed := []string{"session.json", "capture.jsonl", "frames.jsonl", "report.json", "report.md", "replay/manifest.json"}
 	var out []string
 	for _, name := range allowed {
-		path := filepath.Join(dir, name)
+		path := filepath.Join(dir, filepath.FromSlash(name))
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			out = append(out, name)
+			out = append(out, filepath.ToSlash(name))
 		}
 	}
 	if includeImages {
-		entries, _ := os.ReadDir(dir)
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".png") {
-				continue
+		for _, subdir := range []string{"frames", "hud", "replay", "replay/annotated"} {
+			entries, _ := os.ReadDir(filepath.Join(dir, subdir))
+			for _, entry := range entries {
+				if entry.IsDir() || entry.Name()[0] == '.' || strings.HasSuffix(entry.Name(), ".partial") {
+					continue
+				}
+				ext := strings.ToLower(filepath.Ext(entry.Name()))
+				if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
+					continue
+				}
+				out = append(out, filepath.ToSlash(filepath.Join(subdir, entry.Name())))
 			}
-			out = append(out, entry.Name())
 		}
 	}
 	sort.Strings(out)

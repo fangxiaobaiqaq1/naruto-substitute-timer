@@ -1,0 +1,12 @@
+{
+  "scope": "Exact full-title display recognition only; no slot, palette, account, cooldown, or gameplay-rule inference.",
+  "name": "千手柱间[秽土转生]",
+  "source": "user-provided duel screenshot 2026-09-21, 91bbfb754b95c206a18c413529345896_720.png",
+  "sourceSHA256": "ddb0afd8244de926a68aee867631405387b89fb31ec16628a7d16c1375f11911",
+  "sourceSize": [1280, 721],
+  "box": [850, 2, 1121, 31],
+  "referenceWidth": 960,
+  "template": "hashirama_edo.png",
+  "templateSHA256": "aaffebac4b592215c5b8bbcb9ef0b716ad36381e60efc49cf6fca2607600dcf6",
+  "resampling": "Pillow BILINEAR full-frame resample to 960-wide HUD, then crop"
+}

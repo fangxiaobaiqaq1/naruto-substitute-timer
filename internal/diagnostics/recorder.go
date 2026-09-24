@@ -33,6 +33,12 @@ type Options struct {
 	MaxRecordingBytes int64
 	MaxQueuedBytes    int64
 	MaxObservations   int
+	// Replay is run-local, sampled JPEG evidence. Zero-value limits select the
+	// bounded defaults when Replay is enabled.
+	Replay         bool
+	ReplayDuration time.Duration
+	ReplayInterval time.Duration
+	MaxReplayBytes int64
 }
 
 // Event correlates a confirmed decision with the frame containing that decision
@@ -65,6 +71,10 @@ type Status struct {
 	LastError      string `json:"last_error,omitempty"`
 	Closed         bool   `json:"closed"`
 	Finalized      bool   `json:"finalized"`
+	ReplaySaved    uint64 `json:"replay_saved"`
+	ReplayDropped  uint64 `json:"replay_dropped"`
+	ReplayEvicted  uint64 `json:"replay_evicted"`
+	ReplayBytes    int64  `json:"replay_bytes"`
 }
 
 type observation struct {
@@ -149,6 +159,7 @@ type Recorder struct {
 	queue         chan work
 	frameQueue    chan work
 	framesDone    chan struct{}
+	replay        *replayRecorder
 	encodePNG     func(io.Writer, *image.RGBA) error
 	done          chan struct{}
 	log           *os.File
@@ -187,6 +198,15 @@ func New(opts Options) (*Recorder, error) {
 		opts.MaxObservations = defaultObservations
 	}
 	opts.RecordHUDEvidence = opts.RecordHUDEvidence && opts.RecordFrames
+	if opts.ReplayDuration <= 0 {
+		opts.ReplayDuration = defaultReplayDuration
+	}
+	if opts.ReplayInterval <= 0 {
+		opts.ReplayInterval = defaultReplayInterval
+	}
+	if opts.MaxReplayBytes <= 0 {
+		opts.MaxReplayBytes = defaultReplayBytes
+	}
 	root, err := filepath.Abs(opts.Root)
 	if err != nil {
 		return nil, err
@@ -209,6 +229,11 @@ func New(opts Options) (*Recorder, error) {
 			return nil, err
 		}
 	}
+	if opts.Replay {
+		if err = os.Mkdir(filepath.Join(dir, "replay"), 0755); err != nil {
+			return nil, err
+		}
+	}
 	manifest := map[string]any{
 		"schema_version": 1, "started_at": started, "record_frames": opts.RecordFrames,
 		"max_recording_bytes": opts.MaxRecordingBytes, "max_queued_bytes": opts.MaxQueuedBytes,
@@ -218,6 +243,12 @@ func New(opts Options) (*Recorder, error) {
 		"draw_endpoint":         "paint and SwapBuffers completion when instrumented; physical display time unavailable",
 		"raw_format":            "lossless native-size PNG, without UI overlays; original origin in capture.jsonl",
 		"raw_frame_policy":      "only current fighting scene frames without hold or errors; other scenes retain metadata only",
+		"replay":                opts.Replay,
+		"replay_duration":       opts.ReplayDuration.String(),
+		"replay_interval":       opts.ReplayInterval.String(),
+		"replay_max_width":      replayMaxWidth,
+		"replay_jpeg_quality":   replayJPEGQuality,
+		"max_replay_bytes":      opts.MaxReplayBytes,
 		"hud_evidence":          opts.RecordHUDEvidence,
 		"hud_evidence_policy":   "when enabled, reserve 1/4 of the same PNG byte limit for native-pixel name/bean strips at most twice per second; not full frames or replay inputs; crop coordinates and frame_id in capture.jsonl",
 		"player_side_semantics": "per-frame identity observation; an empty player_side may mean no new sample during the identity sampling interval, not loss of the UI's remembered side",
@@ -247,6 +278,10 @@ func New(opts Options) (*Recorder, error) {
 			_ = log.Close()
 			return nil, err
 		}
+	}
+	if opts.Replay {
+		r.replay = newReplayRecorder(r, filepath.Join(dir, "replay"))
+		go r.replay.run()
 	}
 	go r.runFrames()
 	go r.run()
@@ -338,6 +373,18 @@ func (r *Recorder) Observe(f frame.Frame, receivedAt time.Time) uint64 {
 		}
 	} else {
 		o.RawState = "no_image"
+	}
+	// Replay intentionally uses a separate queue/worker and has no fighting or
+	// hold gate. It captures diagnostic context, not lossless raw recording.
+	if r.replay != nil && f.Err == nil && usableImage(f.Img) {
+		bounds := f.Img.Bounds()
+		replayEvidence := replayState{Scene: f.Scene, Fighting: f.Fighting, Hold: f.Hold, Duplicate: f.Duplicate,
+			Status: f.Status, TextStatus: f.TextStatus, TextError: f.TextError, Engine: f.Engine, LayoutProfile: f.LayoutProfile,
+			LeftNinja: f.LeftNinja, RightNinja: f.RightNinja, LeftNinjaCandidate: f.LeftNinjaCandidate, RightNinjaCandidate: f.RightNinjaCandidate,
+			LeftSlots: f.LeftSlots, RightSlots: f.RightSlots, PlayerSide: f.PlayerSide, PlayerName: f.PlayerName, OpponentName: f.OppName,
+			Beads: append([]frame.Bead(nil), f.Beads...), EventState: "not available on frame; replay metadata does not infer UI event counters"}
+		r.replay.enqueueLocked(replayWork{img: f.Img, frameID: id, capturedAt: f.CapturedAt,
+			captureMethod: f.CaptureMethod, sourceWidth: bounds.Dx(), sourceHeight: bounds.Dy(), state: replayEvidence})
 	}
 	r.prepareHUDLocked(f, receivedAt, &o, &w)
 	w.entry = o
@@ -452,6 +499,9 @@ func (r *Recorder) run() {
 		r.writeEntry(w.entry)
 	}
 	<-r.framesDone
+	if r.replay != nil {
+		<-r.replay.done
+	}
 	if err := r.log.Close(); err != nil {
 		r.setError(err)
 	}
@@ -615,7 +665,12 @@ func (r *Recorder) writeReplay(o observation, path, state string) {
 func (r *Recorder) Close() error {
 	r.mu.Lock()
 	if !r.status.Closed {
+		// The cutoff is established while Observe admission is locked. Work
+		// accepted before this point drains; later frames cannot enter replay.
 		r.status.Closed = true
+		if r.replay != nil {
+			r.replay.stop(time.Now())
+		}
 		close(r.queue)
 		close(r.frameQueue)
 	}
@@ -634,4 +689,39 @@ func (r *Recorder) Close() error {
 		return err
 	}
 	return r.closeErr
+}
+
+func (r *Recorder) replaySaved(bytes int64) {
+	r.mu.Lock()
+	r.status.ReplaySaved++
+	r.status.ReplayBytes += bytes
+	r.mu.Unlock()
+}
+
+func (r *Recorder) replayBytes(bytes int64) {
+	r.mu.Lock()
+	r.status.ReplayBytes += bytes
+	r.mu.Unlock()
+}
+
+func (r *Recorder) replayDrop(err error) {
+	r.mu.Lock()
+	r.status.ReplayDropped++
+	if err != nil {
+		r.status.LastError = err.Error()
+	}
+	r.mu.Unlock()
+}
+
+func (r *Recorder) replayEvicted(bytes int64) {
+	r.mu.Lock()
+	r.status.ReplayEvicted++
+	if r.status.ReplaySaved > 0 {
+		r.status.ReplaySaved--
+	}
+	r.status.ReplayBytes -= bytes
+	if r.status.ReplayBytes < 0 {
+		r.status.ReplayBytes = 0
+	}
+	r.mu.Unlock()
 }

@@ -38,7 +38,7 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			// interval must not accidentally stretch all of the name lettering.
 			scale := float64(area.W) / 960
 			first := image.Pt(row[0].X, row[0].Y)
-			identified[index] = e.nameTracker[profileIndex][index].Read(e.names, img, ninja.NameRegion(first, scale, index == 0), scale, at)
+			identified[index] = e.nameTracker[profileIndex][index].ReadWithAvatar(e.names, &e.avatarTracker[profileIndex][index], img, ninja.NameRegion(first, scale, index == 0), ninja.AvatarRegion(first, scale, index == 0), scale, at)
 			// Only a recognized six-slot NAME permits usable slots five and six.
 			// A brief label gap retains six UNKNOWN placeholders, never extra votes.
 			if len(row) == 4 && identified[index].Slots == 6 {
@@ -51,9 +51,10 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: side, Idx: i, LX: lx, LY: ly}, X: area.X + int(math.Round(lx*float64(area.W)/detect.LogicWidth)), Y: area.Y + int(math.Round(ly*float64(area.H)/detect.LogicHeight))})
 				}
 			}
-			// Xiayin Sasuke has an extra energy bar above his colored beans.
-			// Shift only this name-verified row (or its bounded geometry hint),
-			// after name search so its ROI cannot drift on subsequent frames.
+			// Some exact variants have an extra energy bar above their ordinary
+			// colored beans. Shift only a name-verified row (or its bounded
+			// geometry hint), after name search so its ROI cannot drift on
+			// subsequent frames. This applies to Sasuke Xiayin and Minato Kyubi.
 			if offset := identified[index].RowOffsetY; offset != 0 {
 				for i := range row {
 					row[i].LY += offset * detect.LogicHeight / 540

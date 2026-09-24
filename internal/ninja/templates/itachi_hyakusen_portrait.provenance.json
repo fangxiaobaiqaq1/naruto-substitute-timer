@@ -1,0 +1,12 @@
+{
+  "scope": "Right-side character HUD portrait evidence for 百战鼬. It is combined with the existing full current-title template: either signal alone cannot enable the 13px energy-row offset.",
+  "name": "宇智波鼬[百战]",
+  "source": "2026-09-23 16-33-17.mp4, GStreamer avdec_h264 extracted frame-03",
+  "sourceSize": [1280, 720],
+  "box": [1130, 10, 1225, 105],
+  "referenceWidth": 960,
+  "template": "itachi_hyakusen_portrait.png",
+  "templateSHA256": "e97622ea3ea6e53a92697ef778d5009598cf4bc47607ad8c0c410ac93e78d60e",
+  "resampling": "Pillow BILINEAR; 95x95 source HUD portrait resized to 71x71 at the 960-wide HUD reference",
+  "acceptance": "requires independently thresholded portrait and full-title NCC in the same current frame; no OCR, account/player-name length, or stale tracker identity is accepted"
+}

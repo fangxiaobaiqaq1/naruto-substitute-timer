@@ -53,12 +53,22 @@ func TestTrackedNameRecoversNextFrameAfterBriefOcclusion(t *testing.T) {
 	if got := tracker.Read(r, img, roi, 1, at); got.Name != Obito {
 		t.Fatalf("initial name: %+v", got)
 	}
-	searchDeadline := tracker.retryAfter
+	if !tracker.retryAfter.IsZero() {
+		t.Fatal("verified current title retained a failed-search backoff")
+	}
 	if got := tracker.Read(r, blank, roi, 1, at.Add(16*time.Millisecond)); got.Name != "" {
 		t.Fatalf("occluded frame reused a name: %+v", got)
 	}
+	searchDeadline := tracker.retryAfter
+	if searchDeadline.IsZero() {
+		t.Fatal("failed current frame did not start search backoff")
+	}
 	if got := tracker.Read(r, img, roi, 1, at.Add(32*time.Millisecond)); got.Name != Obito {
 		t.Fatalf("visible name waited for full-search backoff: %+v", got)
+	}
+	// A fresh current-frame verification clears the failed-search deadline.
+	if !tracker.retryAfter.IsZero() {
+		t.Fatal("current title did not clear failed-search backoff")
 	}
 	// Repeated glints may alternate visibility; every accepted frame must still
 	// recheck current pixels rather than smoothing an old identity into the gap.
@@ -71,8 +81,28 @@ func TestTrackedNameRecoversNextFrameAfterBriefOcclusion(t *testing.T) {
 			t.Fatalf("frame %d: %q want %q", i, got.Name, want)
 		}
 	}
-	if tracker.retryAfter != searchDeadline {
-		t.Fatal("alternating occlusion bypassed the full-search rate limit")
+}
+
+func TestTrackedTitleRechecksMovedCurrentFrame(t *testing.T) {
+	r := NewReader()
+	var tracker Tracker
+	img := trackerImage(t)
+	roi := NameRegion(image.Pt(87, 56), 1, true)
+	at := time.Unix(1700000000, 0)
+	if got := tracker.Read(r, img, roi, 1, at); got.Name != Obito {
+		t.Fatalf("initial name: %+v", got)
+	}
+
+	// Simulate a current frame whose whole title moved within the same bounded
+	// name ROI. The old exact-pixel hint must fail, then the full current-frame
+	// search must recover it without returning stale identity.
+	moved := image.NewRGBA(img.Bounds())
+	draw.Draw(moved, moved.Bounds(), img, img.Bounds().Min, draw.Src)
+	title := tracker.hint.rect
+	draw.Draw(moved, title, image.Black, image.Point{}, draw.Src)
+	draw.Draw(moved, title.Add(image.Pt(2, 0)), img, title.Min, draw.Src)
+	if got := tracker.Read(r, moved, roi, 1, at.Add(16*time.Millisecond)); got.Name != Obito || got.Unverified {
+		t.Fatalf("moved current title was not re-verified: %+v", got)
 	}
 }
 

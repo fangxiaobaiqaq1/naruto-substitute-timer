@@ -76,8 +76,9 @@ func (r *Recorder) report() Report {
 			"All required timestamps must exist and be ordered. Missing/failed/held/duplicate frames, incomplete chains and hidden events never contribute end-to-end samples.",
 			"A UI post, Refresh call, function cost or capture timeout is not a drawing endpoint. Without instrumented drawing, end-to-end quantiles stay null.",
 			"Quantiles use nearest rank over qualified samples in this bounded session. Capture logs/recording drops are reported explicitly and are not latency samples.",
-			"Limits: 4096-frame correlation history, at most 100000 observations per session, 4096 queued metadata jobs and a separate 256-job PNG/replay queue, configurable queued pixel bytes and PNG bytes, 64 MiB combined JSONL logs.",
-			"Raw PNGs retain native pixel dimensions without overlays; capture.jsonl records recognition and raw save/drop status by frame_id. frames.jsonl is the replay manifest.",
+			"Limits: 4096-frame correlation history, at most 100000 observations per session, 4096 queued metadata jobs, a 256-job PNG queue, and an independent 64-job replay queue; configurable PNG queued pixel bytes, 64 MiB replay JPEG spool and 64 MiB combined JSONL logs.",
+			"When enabled for this diagnostic session only, replay samples at most one usable frame per second, scales it to at most 720 px wide and saves JPEG quality 75. It retains the final requested 180 seconds before recorder detach (or available partial history), including non-fight/hold images but never nil/error frames. replay/manifest.json records cutoff, range, drops and evictions.",
+			"Raw PNGs retain native pixel dimensions without overlays; capture.jsonl records recognition and raw save/drop status by frame_id. frames.jsonl is the PNG index, while replay/manifest.json is the sampled replay manifest.",
 			"Raw recording saves only current fighting scene frames without hold or errors. Non-fight and uncertain/error images are skipped before pixel copying; bounded metadata remains for diagnosis.",
 			"When HUD evidence is enabled, 1/4 of the same PNG budget is reserved for native-pixel name/bean crops at most twice per second. HUD crops correlate by frame_id but are not full images or replay inputs. RecordingBytes includes both, HUDBytes identifies the crop share.",
 			"capture.player_side is identity evidence supplied on that frame; empty can mean no new identity sample. It is not the UI's remembered/effective player side.",
@@ -123,6 +124,19 @@ func (r *Recorder) ExportReport() (string, error) {
 	return path, nil
 }
 
+func replaceFile(oldPath, newPath string) error {
+	if err := os.Rename(oldPath, newPath); err == nil {
+		return nil
+	}
+	// Windows refuses to rename over an existing report. ExportReport is
+	// intentionally repeatable, so remove only this same-directory target then
+	// retry; replay frame publication never uses this replacement path.
+	if err := os.Remove(newPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(oldPath, newPath)
+}
+
 func atomicWrite(path string, data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".report-*")
 	if err != nil {
@@ -137,7 +151,7 @@ func atomicWrite(path string, data []byte) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return replaceFile(tmp, path)
 }
 
 func reportMarkdown(r Report) string {
@@ -147,6 +161,7 @@ func reportMarkdown(r Report) string {
 	fmt.Fprintf(&s, "原生录制：%d 帧；丢弃录制：%d 帧；日志丢弃：%d 条；已保存 PNG：%d 字节。\n\n", r.Status.RecordedFrames, r.Status.DroppedFrames, r.Status.DroppedLogs, r.Status.RecordingBytes)
 	fmt.Fprintf(&s, "HUD 原像素证据：%d 张，%d 字节；HUD 丢弃：%d 张。启用时在同一录制额度内预留四分之一，每秒最多两张；与识别日志按帧号关联，不当作完整帧回放。\n\n", r.Status.HUDFrames, r.Status.HUDBytes, r.Status.DroppedHUD)
 	fmt.Fprintf(&s, "仅保存已识别的对局原帧；非对局/未知/错误画面主动跳过：%d 帧（不计为录制丢帧）。\n\n", r.Status.SkippedFrames)
+	fmt.Fprintf(&s, "诊断回放 JPEG：已保存 %d，队列/写入丢弃 %d，滚动淘汰 %d，当前 %d 字节；仅在本次会话开启时生成，详见 replay/manifest.json。\n\n", r.Status.ReplaySaved, r.Status.ReplayDropped, r.Status.ReplayEvicted, r.Status.ReplayBytes)
 	if r.Status.LastError != "" {
 		fmt.Fprintf(&s, "最近写入/限额异常：%s\n\n", r.Status.LastError)
 	}

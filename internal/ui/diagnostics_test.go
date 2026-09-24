@@ -123,6 +123,9 @@ func TestDiagnosticLifecycleAndSettingsControl(t *testing.T) {
 	if start == nil {
 		t.Fatal("missing diagnostics start control")
 	}
+	if overlayButton(preview.Content(), "导出诊断回放（小型 ZIP）") == nil {
+		t.Fatal("missing independent replay export control")
+	}
 	start.OnTapped()
 	first := s.currentDiagnostics()
 	if first == nil {

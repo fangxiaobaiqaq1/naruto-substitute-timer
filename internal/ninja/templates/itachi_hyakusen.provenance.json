@@ -1,0 +1,12 @@
+{
+  "scope": "Exact full-title recognition. Keeps ordinary four slots and default palette/cooldown; on verified complete title only, applies the reviewed 13px/960 energy-gauge bean-row offset.",
+  "name": "宇智波鼬[百战]",
+  "source": "user-provided duel screenshot 2026-09-21, image.png",
+  "sourceSHA256": "838b32ddebe605e6e5ef81d74a850f9d12b074db420962381e6be7386caf7250",
+  "sourceSize": [1308, 735],
+  "box": [133, 28, 360, 56],
+  "referenceWidth": 960,
+  "template": "itachi_hyakusen.png",
+  "templateSHA256": "2c2ea37e339688882e8091d7ec9e37210587cb360e6becb5652744dd0b87803b",
+  "resampling": "Pillow BILINEAR; source crop normalized to a 960-wide HUD"
+}

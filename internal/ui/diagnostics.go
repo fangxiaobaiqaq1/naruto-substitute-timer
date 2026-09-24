@@ -31,6 +31,7 @@ type diagnosticsState struct {
 	diagnostic         *diagnostics.Recorder
 	diagnosticLast     *diagnostics.Recorder
 	diagnosticRecord   bool
+	diagnosticReplay   bool
 	diagnosticError    string
 	diagnosticProbe    *mumu.ProbeResult
 	diagnosticWriters  sync.WaitGroup
@@ -62,7 +63,8 @@ func (s *session) currentDiagnostics() *diagnostics.Recorder {
 	return s.diagnostic
 }
 
-func (s *session) startDiagnostics(record bool) error {
+func (s *session) startDiagnostics(record bool, replayEnabled ...bool) error {
+	replay := len(replayEnabled) > 0 && replayEnabled[0]
 	s.diagnosticMu.Lock()
 	defer s.diagnosticMu.Unlock()
 	if s.diagnostic != nil {
@@ -79,7 +81,7 @@ func (s *session) startDiagnostics(record bool) error {
 		root = "debug"
 	}
 	r, err := diagnostics.New(diagnostics.Options{
-		Root: filepath.Join(root, "sessions"), RecordFrames: record, RecordHUDEvidence: record, Config: cfg,
+		Root: filepath.Join(root, "sessions"), RecordFrames: record, RecordHUDEvidence: record, Replay: replay, Config: cfg,
 	})
 	if err != nil {
 		return err
@@ -87,6 +89,7 @@ func (s *session) startDiagnostics(record bool) error {
 	s.diagnostic, s.diagnosticLast, s.diagnosticError = r, r, ""
 	s.diagnosticProbe = nil
 	s.diagnosticRecord = record
+	s.diagnosticReplay = replay
 	if source, ok := s.win.(frameDrawSource); ok {
 		source.SetFrameDrawCallback(s.traceDrawn)
 	}
@@ -165,6 +168,7 @@ func (s *session) installDrawTrace() {
 }
 
 func (s *session) traceApplied(ref traceRef, overlay bool) {
+	applied := time.Now()
 	s.mu.Lock()
 	if overlay {
 		s.traceOverlay = ref
@@ -173,8 +177,11 @@ func (s *session) traceApplied(ref traceRef, overlay bool) {
 	}
 	ready := ref.id != 0 && ref == s.traceOverlay && ref == s.traceClock
 	s.mu.Unlock()
+	if ref.recorder != nil && ref.id != 0 {
+		ref.recorder.MarkReplayUIDrawn(ref.id, applied, time.Time{})
+	}
 	if ready {
-		ref.mark("applied", time.Now())
+		ref.mark("applied", applied)
 		// Even an unchanged text value needs a real draw to get a draw sample.
 		// This only runs while diagnostics are enabled and is recording overhead.
 		if s.info != nil {
@@ -193,10 +200,11 @@ func (s *session) traceDrawn(started, completed time.Time) {
 	if ready {
 		ref.mark("drawing", started)
 		ref.mark("drawn", completed)
+		ref.recorder.MarkReplayUIDrawn(ref.id, time.Time{}, completed)
 	}
 }
 
-func (s *session) exportSupportBundle(ctx context.Context, sessionDir string, probe *mumu.ProbeResult) (string, error) {
+func (s *session) exportSupportBundle(ctx context.Context, sessionDir string, probe *mumu.ProbeResult, includeImages bool) (string, error) {
 	s.mu.Lock()
 	cfg := s.cfg
 	root := s.supportRoot
@@ -208,15 +216,16 @@ func (s *session) exportSupportBundle(ctx context.Context, sessionDir string, pr
 	}
 	inventory := mumu.DiscoverInventory(ctx, cfg.Capture.MuMu.InstallDir)
 	return support.ExportBundle(ctx, support.BundleOptions{
-		Root:         root,
-		SessionDir:   sessionDir,
-		Config:       cfg,
-		ConfigPath:   cfgPath,
-		CaptureState: s.snapshotCaptureState(),
-		Version:      buildinfo.Version,
-		Executable:   executable,
-		Inventory:    inventory,
-		Probe:        probe,
+		Root:          root,
+		SessionDir:    sessionDir,
+		Config:        cfg,
+		ConfigPath:    cfgPath,
+		CaptureState:  s.snapshotCaptureState(),
+		Version:       buildinfo.Version,
+		Executable:    executable,
+		Inventory:     inventory,
+		Probe:         probe,
+		IncludeImages: includeImages,
 	})
 }
 
@@ -237,9 +246,10 @@ func (s *session) diagnosticText() string {
 		} else if v.Finalized {
 			state = "诊断已停止"
 		}
-		state += fmt.Sprintf("\n采集 %d · 有效 %d · 绘制样本 %d · 事件样本 %d\n原帧已存 %d · 场景跳过 %d · 丢帧 %d · 丢日志 %d\n%s",
+		state += fmt.Sprintf("\n采集 %d · 有效 %d · 绘制样本 %d · 事件样本 %d\n无损 PNG 原帧 %d · 场景跳过 %d · PNG 丢帧 %d · 丢日志 %d\n%s",
 			v.Attempts, v.ValidFrames, v.CompleteFrames, v.CompleteEvents, v.RecordedFrames, v.SkippedFrames, v.DroppedFrames, v.DroppedLogs, v.Directory)
-		state += fmt.Sprintf("\nHUD 证据 %d · HUD 丢弃 %d · 已用 %.1f MiB / 1024 MiB", v.HUDFrames, v.DroppedHUD, float64(v.RecordingBytes)/(1<<20))
+		state += fmt.Sprintf("\nPNG+HUD 占用 %.1f MiB / 1024 MiB（HUD %d 张，%.1f MiB，丢弃 %d）", float64(v.RecordingBytes)/(1<<20), v.HUDFrames, float64(v.HUDBytes)/(1<<20), v.DroppedHUD)
+		state += fmt.Sprintf("\n回放 JPEG 独立占用 %.1f MiB / 64 MiB · 已保存 %d · 丢弃 %d · 淘汰 %d", float64(v.ReplayBytes)/(1<<20), v.ReplaySaved, v.ReplayDropped, v.ReplayEvicted)
 		if v.LastError != "" {
 			state += "\n写入异常：" + v.LastError
 		}
@@ -259,6 +269,25 @@ func (s *session) diagnosticText() string {
 		state += "\n" + lastError
 	}
 	return state
+}
+
+func openExportFolder(path string) error {
+	dir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	return fyne.CurrentApp().OpenURL(&url.URL{Scheme: "file", Path: "/" + strings.ReplaceAll(dir, "\\", "/")})
+}
+
+func exportSaved(w fyne.Window, title, path string) {
+	message := "已保存：" + path
+	dialog.ShowCustomConfirm(title, "打开文件夹", "关闭", widget.NewLabel(message), func(open bool) {
+		if open {
+			if err := openExportFolder(path); err != nil {
+				dialog.ShowError(err, w)
+			}
+		}
+	}, w)
 }
 
 func (s *session) refreshDiagnosticLabel() {
@@ -293,12 +322,16 @@ func (s *session) openDiagnostics() {
 func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 	s.diagnosticLabel = widget.NewLabel(s.diagnosticText())
 	s.diagnosticLabel.Wrapping = fyne.TextWrapWord
-	record := widget.NewCheck("仅在对局中录制原帧（无损 PNG）", nil)
+	record := widget.NewCheck("录制原始对局帧（无损 PNG，可能快速占用约 1GiB）", nil)
+	replay := widget.NewCheck("保留停止前 3 分钟回放（独立 1fps JPEG，最多 64MiB）", nil)
+	includeImages := widget.NewCheck("导出 ZIP 时包含原帧/回放图像（隐私选项）", nil)
 	s.diagnosticMu.Lock()
 	record.SetChecked(s.diagnosticRecord)
+	replay.SetChecked(s.diagnosticReplay)
 	s.diagnosticMu.Unlock()
 	if s.currentDiagnostics() != nil {
 		record.Disable()
+		replay.Disable()
 	}
 	var start *widget.Button
 	start = widget.NewButton("开始诊断", func() {
@@ -306,13 +339,15 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 			s.stopDiagnostics()
 			start.SetText("开始诊断")
 			record.Enable()
+			replay.Enable()
 		} else {
-			if err := s.startDiagnostics(record.Checked); err != nil {
+			if err := s.startDiagnostics(record.Checked, replay.Checked); err != nil {
 				dialog.ShowError(err, w)
 				return
 			}
 			start.SetText("停止并生成报告")
 			record.Disable()
+			replay.Disable()
 		}
 		s.refreshDiagnosticLabel()
 	})
@@ -347,9 +382,34 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 				if err != nil {
 					dialog.ShowError(err, w)
 				} else {
-					dialog.ShowInformation("诊断报告", "已保存："+path, w)
+					exportSaved(w, "诊断报告", path)
 				}
 				s.refreshDiagnosticLabel()
+			})
+		}()
+	})
+	var exportReplay *widget.Button
+	exportReplay = widget.NewButton("导出诊断回放（小型 ZIP）", func() {
+		s.diagnosticMu.Lock()
+		r := s.diagnosticLast
+		s.diagnosticMu.Unlock()
+		if r == nil {
+			dialog.ShowInformation("诊断回放", "本次尚未开始诊断。请勾选回放并停止诊断后导出。", w)
+			return
+		}
+		exportReplay.Disable()
+		go func() {
+			path, err := r.ExportReplay("")
+			fyne.Do(func() {
+				if s.stopped() || s.diagnosticWindow != w {
+					return
+				}
+				exportReplay.Enable()
+				if err != nil {
+					dialog.ShowInformation("诊断回放", err.Error(), w)
+					return
+				}
+				exportSaved(w, "诊断回放", path)
 			})
 		}()
 	})
@@ -399,6 +459,7 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 		s.diagnosticMu.Lock()
 		r := s.diagnosticLast
 		probeResult := s.diagnosticProbe
+		include := includeImages.Checked
 		if probeResult != nil {
 			copy := *probeResult
 			probeResult = &copy
@@ -438,7 +499,7 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 				}
 				probeResult = &result
 			}
-			path, err := s.exportSupportBundle(ctx, sessionDir, probeResult)
+			path, err := s.exportSupportBundle(ctx, sessionDir, probeResult, include)
 			fyne.Do(func() {
 				if s.stopped() || s.diagnosticWindow != w {
 					return
@@ -448,7 +509,7 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 					dialog.ShowError(err, w)
 					return
 				}
-				dialog.ShowInformation("支持诊断包", "已保存："+path+"\n\n如需反馈，请将 ZIP 发到 BUG 反馈 QQ 群："+support.BugReportQQGroup, w)
+				exportSaved(w, "支持诊断包", path)
 			})
 		}()
 	})
@@ -483,9 +544,10 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 			dialog.ShowError(err, w)
 		}
 	})
-	hint := widget.NewLabel("支持诊断包默认不包含原帧 PNG，会收集实际配置、MuMu 安装目录、实例编号、PID、SDK DLL 和连接阶段结果；可直接发到 BUG 反馈 QQ 群：" + support.BugReportQQGroup + "。原帧录制仍需手动开启，仅当前帧成功识别为对局时保存。关闭此窗口不会停止诊断，请点击停止按钮结束。")
+	hint := widget.NewLabel("无损 PNG 原帧与回放是两项独立开关：回放每秒最多一帧，保存原始游戏 JPEG 和同帧的 annotated JPEG（720px/质量75，两者共用64MiB上限）。标注图固定记录对应 frame_id 的识别、豆位、计时器显示和绘制时刻；没有同帧 UI 状态会明确写不可用，不会借用新帧。导出后可直接打开所在文件夹；支持包默认不含图像。")
 	hint.Wrapping = fyne.TextWrapWord
-	return container.NewVBox(widget.NewLabel("采集与延迟诊断"), record, start,
-		container.NewGridWithColumns(2, export, exportBundle),
-		container.NewGridWithColumns(2, probe, open), openOCR, s.diagnosticLabel, hint)
+	return container.NewVBox(widget.NewLabel("采集与延迟诊断"), record, replay, includeImages, start,
+		container.NewGridWithColumns(2, export, exportReplay),
+		container.NewGridWithColumns(2, exportBundle, probe),
+		container.NewGridWithColumns(2, open, openOCR), s.diagnosticLabel, hint)
 }

@@ -23,6 +23,7 @@ import (
 	timerapp "narutotimer/internal/app"
 	"narutotimer/internal/catalog"
 	"narutotimer/internal/config"
+	"narutotimer/internal/diagnostics"
 	"narutotimer/internal/frame"
 	"narutotimer/internal/identity"
 	"narutotimer/internal/ninja"
@@ -915,6 +916,20 @@ func (s *session) refreshClockAt(now time.Time) {
 	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor
 	trace := s.traceFrame
 	leftEvent, rightEvent := s.visibleEventSerials()
+	if trace.recorder != nil && trace.id != 0 {
+		opponentSide := ""
+		opponentNinja := ""
+		switch s.side {
+		case "left":
+			opponentSide, opponentNinja = "right", s.rightNinja
+		case "right":
+			opponentSide, opponentNinja = "left", s.leftNinja
+		}
+		trace.recorder.RecordReplayUIState(diagnostics.ReplayUIState{FrameID: trace.id,
+			PlayerSide: s.side, OpponentSide: opponentSide, OpponentNinja: opponentNinja,
+			PrimaryText: txt, AlternateText: altText, EventText: eventText,
+			LeftEventCount: s.left.EventCount(), RightEventCount: s.right.EventCount(), PreparedAt: time.Now()})
+	}
 	if same && (trace.id == 0 || trace == s.traceClock) {
 		s.mu.Unlock()
 		return
