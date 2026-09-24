@@ -13,6 +13,23 @@ func TestDefaultValid(t *testing.T) {
 	}
 }
 
+func TestDefaultDuelProfileUsesNeutralBeanRow(t *testing.T) {
+	p := Default().Layout.Profile("duel")
+	for _, tc := range []struct {
+		side   string
+		points []NormalizedPoint
+	}{
+		{"left", p.Left.NominalCenters},
+		{"right", p.Right.NominalCenters},
+	} {
+		for i, point := range tc.points {
+			if point.Y != 103.0/900 {
+				t.Fatalf("duel %s center %d y=%g, want %g", tc.side, i+1, point.Y, 103.0/900)
+			}
+		}
+	}
+}
+
 func TestLoadRejectsUnknownField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{"schemaVersion":1,"unexpected":true}`), 0o600); err != nil {
