@@ -133,8 +133,13 @@ func ToGray(src image.Image) *image.Gray {
 	// color for every pixel; the direct path preserves the same integer luma
 	// calculation and also handles subimages with a padded stride.
 	if rgba, ok := src.(*image.RGBA); ok {
+		// RGBA subimages keep their parent Pix and Stride. Include Rect.Min so
+		// a cropped HUD ROI is converted from its own current pixels, not from
+		// the top-left of the parent frame.
+		xoff, yoff := b.Min.X-rgba.Rect.Min.X, b.Min.Y-rgba.Rect.Min.Y
 		for y := 0; y < b.Dy(); y++ {
-			srcRow := rgba.Pix[y*rgba.Stride : y*rgba.Stride+b.Dx()*4]
+			start := (y+yoff)*rgba.Stride + xoff*4
+			srcRow := rgba.Pix[start : start+b.Dx()*4]
 			dstRow := out.Pix[y*out.Stride : y*out.Stride+b.Dx()]
 			for x := range dstRow {
 				i := x * 4

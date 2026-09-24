@@ -17,13 +17,14 @@ import (
 
 // Engine 保存同步保护的布局偏好，可并发调用。
 type Engine struct {
-	layout      engine.LayoutProvider
-	prefer      string
-	mu          sync.Mutex
-	locked      string
-	vision      config.VisionConfig
-	names       *ninja.Reader
-	nameTracker [2][2]ninja.Tracker
+	layout        engine.LayoutProvider
+	prefer        string
+	mu            sync.Mutex
+	locked        string
+	vision        config.VisionConfig
+	names         *ninja.Reader
+	nameTracker   [2][2]ninja.Tracker
+	avatarTracker [2][2]ninja.AvatarTracker
 }
 
 func New(layout engine.LayoutProvider) *Engine {

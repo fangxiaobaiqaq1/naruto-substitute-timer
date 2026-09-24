@@ -7,6 +7,7 @@ import (
 	_ "image/png"
 	"math"
 	"sync"
+	"time"
 
 	"narutotimer/internal/match"
 )
@@ -28,10 +29,15 @@ const (
 )
 
 type Readout struct {
-	Name    string
-	Slots   int
-	Palette Palette
-	Score   float64
+	Name string
+	// TitleName and AvatarName preserve independent same-frame evidence for
+	// diagnostics. Name is set only by ResolveEvidence after their agreement.
+	TitleName   string
+	AvatarName  string
+	AvatarScore float64
+	Slots       int
+	Palette     Palette
+	Score       float64
 	// RowOffsetY shifts the calibrated bean row in 960x540 reference pixels.
 	// It is geometry, not evidence of a current name or a readable bean.
 	RowOffsetY float64
@@ -43,36 +49,60 @@ type Readout struct {
 	PaletteHint Palette
 }
 type nameTemplate struct {
-	readout Readout
-	gray    *image.Gray
+	readout         Readout
+	gray            *image.Gray
+	portrait        *image.Gray // optional independent HUD portrait evidence
+	requirePortrait bool
 }
 type scaledName struct {
-	readout Readout
-	ncc     *match.PreparedNCC
-	size    image.Point
-	coarse  *match.PreparedNCC
+	readout         Readout
+	ncc             *match.PreparedNCC
+	size            image.Point
+	coarse          *match.PreparedNCC
+	portrait        *match.PreparedNCC
+	portraitSize    image.Point
+	requirePortrait bool
 }
 type Reader struct {
 	mu       sync.Mutex
 	source   []nameTemplate
 	scale    float64
 	prepared []scaledName
+	avatars  *avatarCatalog
 }
 
-func NewReader() *Reader {
+func NewReader() *Reader { return NewReaderWithAvatars(AvatarOptions{}) }
+
+// NewReaderWithAvatars uses the embedded A/S catalog by default. A caller can
+// point to a reviewed external catalog for development; an invalid optional
+// catalog falls back to embedded assets rather than degrading normal operation.
+func NewReaderWithAvatars(options AvatarOptions) *Reader {
 	r := &Reader{}
+	r.avatars, _ = loadEmbeddedAvatarCatalog()
+	if external, err := LoadAvatarCatalog(options); err == nil && external != nil {
+		r.avatars = external
+	}
 	for _, spec := range []struct {
-		file, name string
-		slots      int
-		palette    Palette
-		rowOffsetY float64
+		file, name      string
+		slots           int
+		palette         Palette
+		rowOffsetY      float64
+		requirePortrait bool
 	}{
-		{"hashirama", Hashirama, 6, Warm, 0}, {"hashirama_alt", Hashirama, 6, Warm, 0}, {"madara", Madara, 6, Warm, 0},
-		{"obito", Obito, 4, Purple, 0}, {"naruto", Naruto, 4, Red, 0}, {"naruto_right", Naruto, 4, Red, 0},
-		{"obito_current", Obito, 4, Purple, 0},
-		{"sasuke_xiayin", SasukeXiayin, 4, Xiayin, 9},
-		{"sasuke_xiayin_duel", SasukeXiayin, 4, Xiayin, 9},
-		{"naruto_student", NarutoStudent, 0, "", 0},
+		{"hashirama", Hashirama, 6, Warm, 0, false}, {"hashirama_alt", Hashirama, 6, Warm, 0, false}, {"madara", Madara, 6, Warm, 0, false},
+		{"obito", Obito, 4, Purple, 0, false}, {"naruto", Naruto, 4, Red, 0, false}, {"naruto_right", Naruto, 4, Red, 0, false},
+		{"obito_current", Obito, 4, Purple, 0, false},
+		{"sasuke_xiayin", SasukeXiayin, 4, Xiayin, 9, false},
+		{"sasuke_xiayin_duel", SasukeXiayin, 4, Xiayin, 9, false},
+		// User-provided native captures. These full-title templates establish
+		// a display identity; they retain the ordinary four-slot/default-color
+		// policy. Minato is the reviewed energy-gauge row-offset exception.
+		{"itachi_hyakusen", ItachiHyakusen, 4, "", EnergyGaugeRowOffset, true},
+		// MuMu 1280x720 capture requires independent character HUD portrait evidence.
+		{"itachi_hyakusen_mumu", ItachiHyakusen, 4, "", EnergyGaugeRowOffset, true},
+		{"minato_kyubi", MinatoKyubi, 0, "", EnergyGaugeRowOffset, false},
+		{"hashirama_edo", HashiramaEdo, 0, "", 0, false},
+		{"naruto_student", NarutoStudent, 0, "", 0, false},
 	} {
 		data, err := templates.ReadFile("templates/" + spec.file + ".png")
 		if err != nil {
@@ -82,10 +112,21 @@ func NewReader() *Reader {
 		if err != nil {
 			continue
 		}
-		r.source = append(r.source, nameTemplate{Readout{Name: spec.name, Slots: spec.slots, Palette: spec.palette, RowOffsetY: spec.rowOffsetY}, match.ToGray(img)})
+		portrait := (*image.Gray)(nil)
+		if spec.name == ItachiHyakusen {
+			if portraitData, portraitErr := templates.ReadFile("templates/itachi_hyakusen_portrait.png"); portraitErr == nil {
+				if portraitImage, _, decodeErr := image.Decode(bytes.NewReader(portraitData)); decodeErr == nil {
+					portrait = match.ToGray(portraitImage)
+				}
+			}
+		}
+		r.source = append(r.source, nameTemplate{readout: Readout{Name: spec.name, Slots: spec.slots, Palette: spec.palette, RowOffsetY: spec.rowOffsetY}, gray: match.ToGray(img), portrait: portrait, requirePortrait: spec.requirePortrait})
 	}
 	return r
 }
+
+// AvatarEnabled reports whether a validated external catalog is available.
+func (r *Reader) AvatarEnabled() bool { return r != nil && r.avatars != nil }
 
 // Read uses scale relative to the supplied 960-wide HUD reference (15px
 // nominal slot pitch), never the arbitrary width of a tightly cropped image.
@@ -116,11 +157,22 @@ func (r *Reader) read(img *image.RGBA, roi image.Rectangle, scale float64) evide
 			gray := match.ScaleGray(t.gray, w, h)
 			coarseScale := min(scale, .5)
 			small := match.ScaleGray(t.gray, int(math.Round(float64(t.gray.Bounds().Dx())*coarseScale)), int(math.Round(float64(t.gray.Bounds().Dy())*coarseScale)))
-			r.prepared = append(r.prepared, scaledName{readout: t.readout, ncc: match.PrepareNCC(gray, nil), size: gray.Bounds().Size(), coarse: match.PrepareNCC(small, nil)})
+			prepared := scaledName{readout: t.readout, ncc: match.PrepareNCC(gray, nil), size: gray.Bounds().Size(), coarse: match.PrepareNCC(small, nil), requirePortrait: t.requirePortrait}
+			if t.portrait != nil {
+				pw := int(math.Round(float64(t.portrait.Bounds().Dx()) * scale))
+				ph := int(math.Round(float64(t.portrait.Bounds().Dy()) * scale))
+				portrait := match.ScaleGray(t.portrait, pw, ph)
+				prepared.portrait = match.PrepareNCC(portrait, nil)
+				prepared.portraitSize = portrait.Bounds().Size()
+			}
+			r.prepared = append(r.prepared, prepared)
 		}
 	}
 	prepared := r.prepared
 	r.mu.Unlock()
+	// 百战鼬 requires two independent, current-frame signals: its complete title
+	// and its fixed right-HUD portrait. The portrait alone cannot move the bean
+	// row or turn a base Itachi into the 百战 skin.
 	roi = roi.Intersect(img.Bounds())
 	if roi.Empty() {
 		return evidence{}
@@ -162,15 +214,99 @@ func (r *Reader) read(img *image.RGBA, roi image.Rectangle, scale float64) evide
 	if best.Score < 0.80 || best.Score-runnerUp < 0.08 {
 		return evidence{}
 	}
+	if best.Name == ItachiHyakusen && !itachiPortraitEvidence(img, scale, scaledNameForEvidence(prepared, best)) {
+		return evidence{}
+	}
 	return best
 }
 
-// NameRegion is deliberately above the calibrated bean row. Blood bars and
-// full-screen effects do not get to move the sampling centers.
+// ResolveEvidence decides identity from two independent CURRENT-frame sources.
+// Exact complete titles win when present; an avatar can independently confirm a
+// title or produce a bounded candidate only if it identifies an exact catalog
+// variant. A base title never turns an avatar into a special variant.
+func (r *Reader) ResolveEvidence(img *image.RGBA, titleROI image.Rectangle, avatarROI image.Rectangle, scale float64, title Readout, avatar *AvatarTracker, now time.Time) Readout {
+	out := title
+	out.TitleName = title.Name
+	if r == nil || r.avatars == nil || avatarROI.Empty() {
+		return out
+	}
+	m := avatar.Read(r.avatars, img, avatarROI, scale, now)
+	out.AvatarName, out.AvatarScore = m.Name, m.Score
+	if title.Name != "" {
+		if m.Name != "" && !sameAvatarVariant(title.Name, m.Name) {
+			// A disagreement never enables a version-dependent geometry rule.
+			return Readout{TitleName: title.Name, AvatarName: m.Name, AvatarScore: m.Score}
+		}
+		// Current complete title is still independently sufficient. Portrait
+		// absence (crop/skin mismatch) does not regress reviewed title paths.
+		out.Name = title.Name
+		return out
+	}
+	if m.Name != "" {
+		// A strong, separated current avatar can supply a bounded exact variant
+		// when a long account name covers the title. Only explicit variant
+		// policies below alter slots/palette/row geometry; other catalog entries
+		// remain display identity only.
+		return avatarReadout(m)
+	}
+	return out
+}
+
+func scaledNameForEvidence(prepared []scaledName, found evidence) scaledName {
+	for _, t := range prepared {
+		if t.readout.Name == found.Name && t.requirePortrait {
+			return t
+		}
+	}
+	return scaledName{}
+}
+
+func avatarReadout(m AvatarMatch) Readout {
+	name := canonicalAvatarName(m.Name)
+	out := Readout{Name: name, AvatarName: name, AvatarScore: m.Score}
+	switch normalizeAvatarName(name) {
+	case normalizeAvatarName(Obito):
+		out.Slots, out.Palette = 4, Purple
+	case normalizeAvatarName(SasukeXiayin):
+		out.Slots, out.Palette, out.RowOffsetY = 4, Xiayin, 9
+	case normalizeAvatarName(ItachiHyakusen):
+		// Corpus ID 920541 is 宇智波鼬[百战]. Only that exact current avatar
+		// variant gets the ordinary four-slot row and its 13px energy shift.
+		out.Slots, out.RowOffsetY = 4, EnergyGaugeRowOffset
+	}
+	return out
+}
+
+func itachiPortraitEvidence(img *image.RGBA, scale float64, t scaledName) bool {
+	if t.portrait == nil || t.portraitSize.X <= 0 || t.portraitSize.Y <= 0 {
+		return false
+	}
+	bounds := img.Bounds()
+	// The supplied portrait is a right-HUD visual anchor. Do not mirror it to
+	// the left: insufficient evidence must remain unknown, never a guessed
+	// special offset. Coordinates are normalized to the 960-wide HUD reference.
+	x0, x1, y0 := 847.5, 918.75, 7.5
+	rect := image.Rect(bounds.Min.X+int(math.Round(x0*scale)), bounds.Min.Y+int(math.Round(y0*scale)), bounds.Min.X+int(math.Round(x1*scale)), bounds.Min.Y+int(math.Round((y0+71)*scale))).Intersect(bounds)
+	if rect.Size() != t.portraitSize {
+		return false
+	}
+	gray := match.ToGray(img)
+	score, err := (match.NCC{}).Match(match.Query{Image: img, Gray: gray, ROI: rect, Prepared: t.portrait})
+	return err == nil && score.Value >= .78
+}
+
+// NameRegion is deliberately above the calibrated bean row. A small extra
+// upper band keeps the search stable for compact duel HUDs whose title baseline
+// sits above the normal blood-bar offset; it does not move any bean center or
+// authorize a slot/palette rule. Blood bars and full-screen effects do not get
+// to move the sampling centers.
 func NameRegion(first image.Point, scale float64, left bool) image.Rectangle {
 	x0, x1 := -6.0, 340.0
 	if !left {
-		x0, x1 = -340.0, 6.0
+		// MuMu 1280x720 right titles can extend a few pixels beyond the
+		// right-side first-bead anchor; keep the bounded ROI symmetric enough
+		// to include the complete current title without searching the HUD.
+		x0, x1 = -340.0, 16.0
 	}
-	return image.Rect(first.X+int(math.Round(x0*scale)), first.Y-int(math.Round(48*scale)), first.X+int(math.Round(x1*scale)), first.Y-int(math.Round(13*scale)))
+	return image.Rect(first.X+int(math.Round(x0*scale)), first.Y-int(math.Round(64*scale)), first.X+int(math.Round(x1*scale)), first.Y-int(math.Round(13*scale)))
 }

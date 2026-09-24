@@ -66,13 +66,28 @@ func (t *Tracker) Read(reader *Reader, img *image.RGBA, roi image.Rectangle, sca
 	if now.Before(t.retryAfter) {
 		return unavailable()
 	}
+	// A verified title clears any old failed-search backoff. Therefore the
+	// first failed current-pixel recheck performs one bounded full-ROI search:
+	// a title that moved with the current HUD may still be recognized on this
+	// frame. A failed search starts the backoff; later failed rechecks cannot
+	// turn rapid occlusion/effect flicker into repeated scans.
 	t.retryAfter = now.Add(500 * time.Millisecond)
 	found := reader.read(img, roi, scale)
 	if found.Name != "" {
 		t.hint = found
 		t.verifiedAt = now
+		t.retryAfter = time.Time{}
 		return found.Readout
 	}
 	// In particular, never return the retained hint on this failed frame.
 	return unavailable()
+}
+
+// ReadWithAvatar keeps title and portrait evidence independent until a current
+// frame resolves them. It deliberately does not reuse title/portrait identity
+// from prior frames; Tracker still provides only the existing bounded geometry
+// hint and never a name.
+func (t *Tracker) ReadWithAvatar(reader *Reader, avatar *AvatarTracker, img *image.RGBA, titleROI, avatarROI image.Rectangle, scale float64, now time.Time) Readout {
+	title := t.Read(reader, img, titleROI, scale, now)
+	return reader.ResolveEvidence(img, titleROI, avatarROI, scale, title, avatar, now)
 }
