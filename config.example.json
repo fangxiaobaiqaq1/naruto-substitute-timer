@@ -7,7 +7,18 @@
     "restoreMinimized": false
   },
   "capture": {
+    "provider": "mumu-sdk",
     "mumu": { "package": "com.tencent.KiHan", "instance": 0, "displayId": 0 },
+    "leidian": {
+      "selection": "manual",
+      "installDir": "",
+      "consolePath": "",
+      "adbPath": "",
+      "index": 0,
+      "serial": "",
+      "package": "com.tencent.KiHan",
+      "connectOnStart": true
+    },
     "preferredMethods": ["mumu-sdk"],
     "timeoutMs": 1200,
     "hudRegion": { "x": 0, "y": 0, "width": 1, "height": 0.24 }

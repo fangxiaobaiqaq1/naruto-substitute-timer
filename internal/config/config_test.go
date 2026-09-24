@@ -13,6 +13,39 @@ func TestDefaultValid(t *testing.T) {
 	}
 }
 
+func TestLeidianConfigValidatesProviderAndSerial(t *testing.T) {
+	cfg := Default()
+	cfg.Capture.Provider = "leidian-adb"
+	cfg.Capture.PreferredMethods = []string{"leidian-adb"}
+	cfg.Capture.Leidian.Selection = "manual"
+	cfg.Capture.Leidian.InstallDir = `E:\\leidian\\LDPlayer14`
+	cfg.Capture.Leidian.Serial = "127.0.0.1:5555"
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("雷电配置应通过校验: %v", err)
+	}
+	cfg.Capture.Leidian.Serial = "5555"
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "serial") {
+		t.Fatalf("expected serial validation error, got %v", err)
+	}
+}
+
+func TestDefaultDuelProfileUsesNeutralBeanRow(t *testing.T) {
+	p := Default().Layout.Profile("duel")
+	for _, tc := range []struct {
+		side   string
+		points []NormalizedPoint
+	}{
+		{"left", p.Left.NominalCenters},
+		{"right", p.Right.NominalCenters},
+	} {
+		for i, point := range tc.points {
+			if point.Y != 103.0/900 {
+				t.Fatalf("duel %s center %d y=%g, want %g", tc.side, i+1, point.Y, 103.0/900)
+			}
+		}
+	}
+}
+
 func TestLoadRejectsUnknownField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{"schemaVersion":1,"unexpected":true}`), 0o600); err != nil {

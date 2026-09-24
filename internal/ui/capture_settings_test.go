@@ -2,6 +2,7 @@ package ui
 
 import (
 	fynetest "fyne.io/fyne/v2/test"
+	"narutotimer/internal/capture"
 	"narutotimer/internal/capture/mumu"
 	"narutotimer/internal/config"
 	"narutotimer/internal/frame"
@@ -78,6 +79,37 @@ func TestCaptureProbeSelectionUsesSoleAutomaticCandidate(t *testing.T) {
 	}
 	if got.Selection != "manual" || got.InstallDir != `E:\MuMu` || got.Instance != 2 || got.Package != "com.tencent.KiHan" {
 		t.Fatalf("unexpected probe target: %+v", got)
+	}
+}
+
+func TestLeidianSelectionFromFieldsUsesDefaultSerial(t *testing.T) {
+	got, err := leidianSelectionFromFields(`E:\leidian\LDPlayer14`, "2", "", config.LeidianCaptureConfig{Package: "com.tencent.KiHan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Selection != "manual" || got.InstallDir != `E:\leidian\LDPlayer14` || got.Index != 2 || got.Serial != "127.0.0.1:5557" || got.Package != "com.tencent.KiHan" {
+		t.Fatalf("unexpected 雷电 target: %+v", got)
+	}
+}
+
+func TestLeidianProviderConfigIsDistinctFromMuMuDraft(t *testing.T) {
+	cfg := config.Default().Capture
+	cfg.Provider = capture.MethodLeidianADB
+	cfg.PreferredMethods = []string{capture.MethodLeidianADB}
+	cfg.Leidian.InstallDir = `E:\leidian\LDPlayer14`
+	cfg.Leidian.Index = 2
+	if captureProvider(cfg) != capture.MethodLeidianADB || captureProvider(config.Default().Capture) != capture.MethodMuMuSDK {
+		t.Fatalf("provider selection was not preserved: %+v", cfg)
+	}
+	if cfg.MuMu.InstallDir != "" || cfg.MuMu.Instance != 0 {
+		t.Fatalf("MuMu draft unexpectedly changed: %+v", cfg.MuMu)
+	}
+}
+
+func TestCaptureTargetTextIncludesLeidianProvider(t *testing.T) {
+	text := captureTargetText(config.CaptureConfig{Provider: capture.MethodLeidianADB, Leidian: config.LeidianCaptureConfig{InstallDir: `E:\leidian\LDPlayer14`, Index: 0}})
+	if !strings.Contains(text, "雷电") || !strings.Contains(text, "实例 0") {
+		t.Fatalf("unexpected target text: %q", text)
 	}
 }
 

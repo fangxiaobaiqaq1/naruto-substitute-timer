@@ -33,21 +33,22 @@ import (
 var overlayTitle = "替身 · " + buildinfo.Version
 
 type session struct {
-	captureCancel  context.CancelFunc
-	captureRefresh func()
-	sourceRevision uint64
-	captureControl func(config.MuMuCaptureConfig) uint64
-	captureState   func() frame.CaptureState
-	captureSource  string
-	executablePath string
-	supportRoot    string
-	initialAbout   bool
-	settingsTabs   *container.AppTabs
-	aboutCancel    context.CancelFunc
-	updateCancel   context.CancelFunc
-	updateService  *updates.FeedService
-	updateFeed     updates.Feed
-	updateNotice   string
+	captureCancel        context.CancelFunc
+	captureRefresh       func()
+	sourceRevision       uint64
+	captureControl       func(config.MuMuCaptureConfig) uint64
+	captureConfigControl func(config.CaptureConfig) uint64
+	captureState         func() frame.CaptureState
+	captureSource        string
+	executablePath       string
+	supportRoot          string
+	initialAbout         bool
+	settingsTabs         *container.AppTabs
+	aboutCancel          context.CancelFunc
+	updateCancel         context.CancelFunc
+	updateService        *updates.FeedService
+	updateFeed           updates.Feed
+	updateNotice         string
 	diagnosticsState
 	done                  chan struct{}
 	stopOnce              sync.Once

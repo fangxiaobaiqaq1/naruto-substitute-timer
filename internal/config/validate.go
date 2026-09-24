@@ -3,11 +3,24 @@ package config
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 func Validate(c Config) error {
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("schemaVersion: got %d, want %d", c.SchemaVersion, SchemaVersion)
+	}
+	if c.Capture.Provider != "" && c.Capture.Provider != "auto" && c.Capture.Provider != "mumu-sdk" && c.Capture.Provider != "leidian-adb" && c.Capture.Provider != "printwindow-fullcontent" {
+		return fmt.Errorf("capture.provider: unsupported value %q", c.Capture.Provider)
+	}
+	if c.Capture.Leidian.Selection != "" && c.Capture.Leidian.Selection != "auto" && c.Capture.Leidian.Selection != "manual" {
+		return fmt.Errorf("capture.leidian.selection: choose auto or manual")
+	}
+	if c.Capture.Leidian.Index < 0 {
+		return fmt.Errorf("capture.leidian.index: must be nonnegative")
+	}
+	if c.Capture.Leidian.Serial != "" && !strings.Contains(c.Capture.Leidian.Serial, ":") {
+		return fmt.Errorf("capture.leidian.serial: expected host:port")
 	}
 	if len(c.Device.ProcessNames) == 0 && len(c.Device.TitlePatterns) == 0 {
 		return fmt.Errorf("device: processNames and titlePatterns cannot both be empty")
@@ -22,7 +35,7 @@ func Validate(c Config) error {
 		return fmt.Errorf("capture.mumu: instance and displayId must be nonnegative")
 	}
 	for _, method := range c.Capture.PreferredMethods {
-		if method != "mumu-sdk" && method != "printwindow-fullcontent" {
+		if method != "mumu-sdk" && method != "leidian-adb" && method != "printwindow-fullcontent" {
 			return fmt.Errorf("capture.preferredMethods: unsupported method %q", method)
 		}
 	}

@@ -42,10 +42,13 @@ type DeviceConfig struct {
 }
 
 type CaptureConfig struct {
-	MuMu             MuMuCaptureConfig `json:"mumu"`
-	PreferredMethods []string          `json:"preferredMethods"`
-	TimeoutMS        int               `json:"timeoutMs"`
-	HUDRegion        NormalizedRect    `json:"hudRegion"`
+	// Provider selects the primary emulator adapter. Empty keeps legacy MuMu behavior.
+	Provider         string               `json:"provider,omitempty"`
+	MuMu             MuMuCaptureConfig    `json:"mumu"`
+	Leidian          LeidianCaptureConfig `json:"leidian"`
+	PreferredMethods []string             `json:"preferredMethods"`
+	TimeoutMS        int                  `json:"timeoutMs"`
+	HUDRegion        NormalizedRect       `json:"hudRegion"`
 }
 
 type MuMuCaptureConfig struct {
@@ -55,6 +58,17 @@ type MuMuCaptureConfig struct {
 	Instance   int    `json:"instance"`
 	DisplayID  int    `json:"displayId"`
 	Package    string `json:"package"`
+}
+
+type LeidianCaptureConfig struct {
+	Selection      string `json:"selection,omitempty"`
+	InstallDir     string `json:"installDir"`
+	ConsolePath    string `json:"consolePath"`
+	ADBPath        string `json:"adbPath"`
+	Index          int    `json:"index"`
+	Serial         string `json:"serial"`
+	Package        string `json:"package"`
+	ConnectOnStart bool   `json:"connectOnStart"`
 }
 
 type NormalizedRect struct {
@@ -220,7 +234,9 @@ func Default() Config {
 			RestoreMinimized: false,
 		},
 		Capture: CaptureConfig{
+			Provider:         "mumu-sdk",
 			MuMu:             MuMuCaptureConfig{Package: "com.tencent.KiHan"},
+			Leidian:          LeidianCaptureConfig{Package: "com.tencent.KiHan", ConnectOnStart: true},
 			PreferredMethods: []string{"mumu-sdk"},
 			TimeoutMS:        1200,
 			HUDRegion:        NormalizedRect{X: 0, Y: 0, Width: 1, Height: 0.24},

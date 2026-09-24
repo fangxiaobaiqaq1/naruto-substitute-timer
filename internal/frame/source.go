@@ -1,6 +1,7 @@
 package frame
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -9,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"narutotimer/internal/capture/mumu"
+	"narutotimer/internal/capture"
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
@@ -63,36 +64,57 @@ func NewConfiguredSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 // applied by the native capture worker. A new revision means "requested" until
 // the worker has torn down its old SDK client and begins using the new target.
 type CaptureState struct {
-	RequestedRevision uint64                   `json:"requested_revision"`
-	AppliedRevision   uint64                   `json:"applied_revision"`
-	Requested         config.MuMuCaptureConfig `json:"requested"`
-	Applied           config.MuMuCaptureConfig `json:"applied"`
-	Source            string                   `json:"source,omitempty"`
-	LastError         string                   `json:"last_error,omitempty"`
-	UpdatedAt         time.Time                `json:"updated_at"`
+	RequestedRevision uint64 `json:"requested_revision"`
+	AppliedRevision   uint64 `json:"applied_revision"`
+	// Requested/Applied remain MuMu-shaped for compatibility with existing UI
+	// and support bundles. The complete provider-neutral snapshots are included
+	// for new callers.
+	Requested        config.MuMuCaptureConfig `json:"requested"`
+	Applied          config.MuMuCaptureConfig `json:"applied"`
+	RequestedCapture config.CaptureConfig     `json:"requested_capture"`
+	AppliedCapture   config.CaptureConfig     `json:"applied_capture"`
+	Method           string                   `json:"method,omitempty"`
+	Source           string                   `json:"source,omitempty"`
+	LastError        string                   `json:"last_error,omitempty"`
+	UpdatedAt        time.Time                `json:"updated_at"`
 }
 
 // NewSelectableSnapshotterStateful exposes the capture-worker state needed by
 // settings and support diagnostics. The existing constructor remains available
 // for callers that only need a selection callback.
 func NewSelectableSnapshotterStateful(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.MuMuCaptureConfig) uint64, func() CaptureState) {
-	return newSelectableSnapshotter(eng, cfg, true)
+	return newSelectableSnapshotterLegacy(eng, cfg)
+}
+
+// NewSelectableSnapshotterConfigStateful exposes provider-neutral target changes.
+func NewSelectableSnapshotterConfigStateful(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.CaptureConfig) uint64, func() CaptureState) {
+	return newSelectableSnapshotter(eng, cfg)
 }
 
 func NewSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.MuMuCaptureConfig) uint64) {
-	provider, close, selectTarget, _ := newSelectableSnapshotter(eng, cfg, false)
+	provider, close, selectTarget, _ := NewSelectableSnapshotterStateful(eng, cfg)
 	return provider, close, selectTarget
 }
 
-func newSelectableSnapshotter(eng engine.Engine, cfg config.Config, _ bool) (Provider, func(), func(config.MuMuCaptureConfig) uint64, func() CaptureState) {
+func newSelectableSnapshotterLegacy(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.MuMuCaptureConfig) uint64, func() CaptureState) {
+	provider, close, selectConfig, state := newSelectableSnapshotter(eng, cfg)
+	selectTarget := func(next config.MuMuCaptureConfig) uint64 {
+		current := state().RequestedCapture
+		current.MuMu = next
+		return selectConfig(current)
+	}
+	return provider, close, selectTarget, state
+}
+
+func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.CaptureConfig) uint64, func() CaptureState) {
 	var selectionMu sync.Mutex
-	selected := cfg.Capture.MuMu
+	selected := cfg.Capture
 	var revision, activeRevision uint64
-	var appliedConfig = cfg.Capture.MuMu
+	var appliedConfig = cfg.Capture
 	var stateMu sync.RWMutex
 	var lastCaptureError string
 	var stateSource string
-	setSelection := func(next config.MuMuCaptureConfig) uint64 {
+	setSelection := func(next config.CaptureConfig) uint64 {
 		selectionMu.Lock()
 		selected = next
 		revision++
@@ -105,7 +127,7 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config, _ bool) (Pro
 	}
 
 	mode, _ := detect.ParseMode(cfg.Layout.ContentMode)
-	var client *mumu.Client
+	var client capture.Client
 	var retryAfter time.Time
 	var retryError error
 	var attemptMu sync.Mutex
@@ -120,9 +142,17 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config, _ bool) (Pro
 		defer attemptMu.Unlock()
 		return attempt
 	}
-	methods := cfg.Capture.PreferredMethods
-	if len(methods) == 0 {
-		methods = []string{"mumu-sdk"}
+	preferredMethods := func(c config.CaptureConfig) []string {
+		if c.Provider == capture.MethodLeidianADB {
+			return []string{capture.MethodLeidianADB}
+		}
+		if c.Provider == capture.MethodMuMuSDK {
+			return []string{capture.MethodMuMuSDK}
+		}
+		if len(c.PreferredMethods) > 0 {
+			return c.PreferredMethods
+		}
+		return []string{capture.MethodMuMuSDK}
 	}
 	inner := func() Frame {
 		selectionMu.Lock()
@@ -133,7 +163,7 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config, _ bool) (Pro
 				client.Close()
 				client = nil
 			}
-			cfg.Capture.MuMu = next
+			cfg.Capture = next
 			stateMu.Lock()
 			appliedConfig = next
 			stateSource = ""
@@ -143,30 +173,17 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config, _ bool) (Pro
 			activeRevision = rev
 		}
 		var f Frame
-		for _, method := range methods {
+		for _, method := range preferredMethods(cfg.Capture) {
 			started := time.Now()
 			setAttempt(started, method)
-			if method == "mumu-sdk" {
+			if method == capture.MethodMuMuSDK || method == capture.MethodLeidianADB {
 				if client == nil {
 					if time.Now().Before(retryAfter) {
-						f = Frame{Hold: true, Err: fmt.Errorf("MuMu截图接口重连等待中：%w", retryError), CaptureStarted: started, CaptureMethod: method}
+						f = Frame{Hold: true, Err: fmt.Errorf("%s 重连等待中：%w", method, retryError), CaptureStarted: started, CaptureMethod: method}
 						continue
 					}
-					o := cfg.Capture.MuMu
 					var err error
-					options := mumu.Options{InstallDir: o.InstallDir, DLLPath: o.DLLPath, Instance: o.Instance, DisplayID: o.DisplayID, Package: o.Package}
-					// An explicit installation directory is itself a manual target,
-					// including legacy configs that predate the Selection field.
-					// Otherwise a saved root with instance 0 could be silently
-					// replaced by auto-discovery. Only an explicit "auto" selection
-					// is allowed to take the automatic path.
-					manual := o.Selection == "manual" || (o.Selection != "auto" &&
-						(o.InstallDir != "" || o.Instance != 0 || o.DLLPath != ""))
-					if manual {
-						client, err = mumu.Open(options)
-					} else {
-						client, err = mumu.OpenAuto(options)
-					}
+					client, err = capture.OpenConfigured(context.Background(), method, cfg.Capture)
 					if err != nil {
 						retryError = err
 						stateMu.Lock()
@@ -198,7 +215,7 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config, _ bool) (Pro
 					continue
 				}
 				f = AnalyzeImage(img, eng, mode, started, captured, client.Source())
-			} else if method == "printwindow-fullcontent" {
+			} else if method == capture.MethodPrintWindow {
 				f = snapshot(eng, mode)
 			} else {
 				f = Frame{Hold: true, Err: fmt.Errorf("unsupported capture method %q", method), CaptureStarted: started, CaptureMethod: method}
@@ -245,11 +262,22 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config, _ bool) (Pro
 		lastError := lastCaptureError
 		source := stateSource
 		stateMu.RUnlock()
+		selectionMu.Lock()
+		requestedForState := requested
+		selectionMu.Unlock()
+		methods := preferredMethods(requestedForState)
+		method := requestedForState.Provider
+		if method == "" && len(methods) > 0 {
+			method = methods[0]
+		}
 		return CaptureState{
 			RequestedRevision: requestedRevision,
 			AppliedRevision:   appliedRevision,
-			Requested:         requested,
-			Applied:           applied,
+			Requested:         requested.MuMu,
+			Applied:           applied.MuMu,
+			RequestedCapture:  requested,
+			AppliedCapture:    applied,
+			Method:            method,
 			Source:            source,
 			LastError:         lastError,
 			UpdatedAt:         time.Now(),

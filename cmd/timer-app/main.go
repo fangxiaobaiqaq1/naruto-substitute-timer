@@ -58,12 +58,12 @@ func main() {
 		fail(err)
 	}
 	defer eng.Close()
-	provider, closeCapture, controlCapture, captureState := frame.NewSelectableSnapshotterStateful(eng, cfg)
+	provider, closeCapture, controlCapture, captureState := frame.NewSelectableSnapshotterConfigStateful(eng, cfg)
 	defer closeCapture()
 	executable, _ := os.Executable()
 	if err := ui.Run(cfg, provider,
 		ui.WithTextRecognitionControl(eng.SetEnabled),
-		ui.WithCaptureSelection(controlCapture),
+		ui.WithCaptureConfigSelection(controlCapture),
 		ui.WithCaptureState(captureState),
 		ui.WithSupportContext(executable, cfg.Debug.Directory),
 		ui.WithInitialAbout(len(os.Args) == 2 && os.Args[1] == "--about")); err != nil {
