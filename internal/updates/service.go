@@ -89,7 +89,7 @@ func (s *FeedService) run(call *feedCall) {
 	if err == nil {
 		// The in-memory response remains valid if the cache directory is
 		// unavailable (for example, a restrictive portable location).
-		_ = SaveFeed(feed)
+		_ = SaveFeedForSource(feed.Latest.UpdateSource(), feed)
 	}
 
 	s.mu.Lock()

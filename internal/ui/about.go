@@ -64,19 +64,22 @@ func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.aboutCancel = cancel
 	updatesService := s.updateFeeds()
-	client := updates.NewClient() // downloads keep their existing dedicated timeout and redirect policy
+	s.mu.Lock()
+	source := updates.Source(s.cfg.UI.UpdateSource)
+	s.mu.Unlock()
+	client := updates.NewClientForSource(source)
 	title := canvas.NewText("替身计时器", clockIdle)
 	title.TextSize = 28
 	title.TextStyle.Bold = true
 	subtitle := widget.NewLabel("纯视觉识别 · 本地 OCR · Windows x64")
 	version := widget.NewLabelWithStyle(buildinfo.Version, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	status := widget.NewLabel("点击检查更新，从 GitHub 获取最新正式版。")
+	status := widget.NewLabel("点击检查更新，从 " + source.Label() + " 获取最新正式版。")
 	status.Wrapping = fyne.TextWrapWord
 	progress := widget.NewProgressBar()
 	progress.Hide()
 	detail := widget.NewLabel("")
 	detail.Wrapping = fyne.TextWrapWord
-	date := widget.NewLabel("版本记录来自 GitHub Releases，按发布时间排列。")
+	date := widget.NewLabel("版本记录来自 " + source.Label() + " Releases，按发布时间排列。")
 	notes := container.NewStack(changelogText("选择版本查看更新内容。"))
 	var feed updates.Feed
 	var downloaded string
@@ -143,7 +146,7 @@ func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 			action.Disable()
 		}
 		if cmp < 0 {
-			status.SetText(prefix + "当前版本比 GitHub 已发布版本更新。")
+			status.SetText(prefix + "当前版本比 " + source.Label() + " 已发布版本更新。")
 			action.Disable()
 		}
 		if !f.Checked.IsZero() {
@@ -153,15 +156,15 @@ func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 	s.mu.Lock()
 	automaticFeed := s.updateFeed
 	s.mu.Unlock()
-	if automaticFeed.Latest.Tag != "" {
+	if automaticFeed.Latest.Tag != "" && automaticFeed.Latest.UpdateSource() == source {
 		applyFeed(automaticFeed, false)
-	} else if f, err := updates.CachedFeed(); err == nil {
+	} else if f, err := updates.CachedFeedForSource(source); err == nil {
 		applyFeed(f, true)
 	}
 	check.OnTapped = func() {
 		check.Disable()
 		action.Disable()
-		status.SetText("正在连接 GitHub…")
+		status.SetText("正在连接 " + source.Label() + "…")
 		detail.SetText("")
 		go func() {
 			request, c := context.WithTimeout(ctx, 25*time.Second)

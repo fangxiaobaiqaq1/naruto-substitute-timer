@@ -1245,9 +1245,35 @@ func (s *session) updateFeeds() *updates.FeedService {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.updateService == nil {
-		s.updateService = updates.NewFeedService(updates.NewClient())
+		s.updateService = updates.NewFeedService(updates.NewClientForSource(updates.Source(s.cfg.UI.UpdateSource)))
 	}
 	return s.updateService
+}
+
+func (s *session) setUpdateSource(source updates.Source) error {
+	if !source.Valid() {
+		return fmt.Errorf("无效更新源 %q", source)
+	}
+	s.mu.Lock()
+	if s.cfg.UI.UpdateSource == string(source) {
+		s.mu.Unlock()
+		return nil
+	}
+	oldService, oldCancel := s.updateService, s.updateCancel
+	s.cfg.UI.UpdateSource, s.updateService, s.updateCancel = string(source), nil, nil
+	s.updateFeed, s.updateNotice = updates.Feed{}, ""
+	err := s.saveSettingsLocked()
+	s.mu.Unlock()
+	if oldCancel != nil {
+		oldCancel()
+	}
+	if oldService != nil {
+		oldService.Close()
+	}
+	if err == nil {
+		s.startAutomaticUpdateChecks()
+	}
+	return err
 }
 
 func (s *session) startAutomaticUpdateChecks() {
@@ -1260,7 +1286,7 @@ func (s *session) startAutomaticUpdateChecks() {
 	s.updateCancel = cancel
 	service := s.updateService
 	if service == nil {
-		service = updates.NewFeedService(updates.NewClient())
+		service = updates.NewFeedService(updates.NewClientForSource(updates.Source(s.cfg.UI.UpdateSource)))
 		s.updateService = service
 	}
 	s.mu.Unlock()
@@ -1296,6 +1322,12 @@ func (s *session) stopOnceDoneLocked() bool {
 
 func (s *session) handleAutomaticUpdateResult(result updates.MonitorResult) {
 	if result.Err != nil || !result.Notify || s.stopped() {
+		return
+	}
+	s.mu.Lock()
+	selected := updates.Source(s.cfg.UI.UpdateSource)
+	s.mu.Unlock()
+	if result.Feed.Latest.UpdateSource() != selected {
 		return
 	}
 	fyne.Do(func() {

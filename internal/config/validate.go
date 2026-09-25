@@ -150,6 +150,9 @@ func Validate(c Config) error {
 	if c.Debug.RetentionFiles < 0 || c.Debug.MinimumIntervalMS < 0 {
 		return fmt.Errorf("debug: retentionFiles and minimumIntervalMs cannot be negative")
 	}
+	if c.UI.UpdateSource != "github" && c.UI.UpdateSource != "gitee" {
+		return fmt.Errorf("ui.updateSource: must be github or gitee")
+	}
 	if c.UI.PollIntervalMS <= 0 || c.UI.IdlePollIntervalMS <= 0 {
 		return fmt.Errorf("ui: pollIntervalMs and idlePollIntervalMs must be positive")
 	}

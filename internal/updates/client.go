@@ -24,6 +24,7 @@ const APIBase = "https://api.github.com/repos/" + Repository
 const MaxDownload = 256 << 20
 
 type Asset struct {
+	ID     int64  `json:"id"`
 	Name   string `json:"name"`
 	URL    string `json:"browser_download_url"`
 	Size   int64  `json:"size"`
@@ -31,6 +32,8 @@ type Asset struct {
 	State  string `json:"state"`
 }
 type Release struct {
+	Source     Source    `json:"source,omitempty"`
+	ID         int64     `json:"id,omitempty"`
 	Tag        string    `json:"tag_name"`
 	Name       string    `json:"name"`
 	Body       string    `json:"body"`
@@ -46,8 +49,9 @@ type Feed struct {
 	Checked  time.Time `json:"checked"`
 }
 type Client struct {
-	HTTP *http.Client
-	Base string
+	HTTP   *http.Client
+	Base   string
+	Source Source
 }
 
 func NewClient() *Client {
@@ -58,19 +62,25 @@ func (c *Client) get(ctx context.Context, path string, dst any) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	if c.Source != Gitee {
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	}
 	req.Header.Set("User-Agent", "Naruto-Substitute-Timer")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	name := "GitHub"
+	if c.Source == Gitee {
+		name = "Gitee"
+	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("无法连接 GitHub，请检查网络后重试: %w", err)
+		return fmt.Errorf("无法连接 %s，请检查网络后重试: %w", name, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 403 || resp.StatusCode == 429 {
-		return errors.New("GitHub 请求限流，请稍后重试")
+		return fmt.Errorf("%s 请求限流，请稍后重试", name)
 	}
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("GitHub 返回 HTTP %d", resp.StatusCode)
+		return fmt.Errorf("%s 返回 HTTP %d", name, resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, (2<<20)+1))
 	if err != nil {
@@ -82,6 +92,9 @@ func (c *Client) get(ctx context.Context, path string, dst any) error {
 	return json.Unmarshal(data, dst)
 }
 func (c *Client) Check(ctx context.Context) (Feed, error) {
+	if c != nil && c.Source == Gitee {
+		return c.checkGitee(ctx)
+	}
 	var f Feed
 	if err := c.get(ctx, "/releases/latest", &f.Latest); err != nil {
 		return f, err
@@ -106,7 +119,13 @@ func (c *Client) Check(ctx context.Context) (Feed, error) {
 func validRelease(r Release) bool {
 	_, ok := version(r.Tag)
 	u, e := url.Parse(r.URL)
-	return ok && !r.Draft && !r.Prerelease && !r.Published.IsZero() && e == nil && u.Scheme == "https" && u.Host == "github.com" && strings.HasPrefix(u.Path, "/"+Repository+"/releases/tag/")
+	if !ok || r.Draft || r.Prerelease || r.Published.IsZero() || e != nil || u.Scheme != "https" {
+		return false
+	}
+	if r.UpdateSource() == Gitee {
+		return u.Host == "gitee.com" && u.Path == "/"+GiteeRepository+"/releases/tag/"+r.Tag
+	}
+	return u.Host == "github.com" && strings.HasPrefix(u.Path, "/"+Repository+"/releases/tag/")
 }
 func version(v string) ([3]uint64, bool) {
 	var out [3]uint64
@@ -161,6 +180,9 @@ func Compare(remote, local string) (int, error) {
 	return 0, nil
 }
 func (r Release) Executable() (Asset, error) {
+	if r.Source == Gitee {
+		return r.giteeExecutable()
+	}
 	for _, a := range r.Assets {
 		if a.Name == "timer-app.exe" && a.State == "uploaded" && a.Size > 0 && a.Size <= MaxDownload {
 			u, e := url.Parse(a.URL)
@@ -184,6 +206,11 @@ func assetHash(a Asset) (string, error) {
 	return strings.ToLower(s), nil
 }
 func Directory() string {
+	// LOCALAPPDATA is the Windows cache root and is also honored in focused
+	// cross-platform tests. Do not use it when absent on Unix-like systems.
+	if d := os.Getenv("LOCALAPPDATA"); d != "" {
+		return filepath.Join(d, "naruto-timer", "updates")
+	}
 	d, e := os.UserCacheDir()
 	if e != nil {
 		return ""
@@ -191,6 +218,9 @@ func Directory() string {
 	return filepath.Join(d, "naruto-timer", "updates")
 }
 func SaveFeed(f Feed) error {
+	return SaveFeedForSource(f.Latest.UpdateSource(), f)
+}
+func SaveFeedForSource(source Source, f Feed) error {
 	d := Directory()
 	if d == "" {
 		return errors.New("无法获取更新缓存目录")
@@ -202,11 +232,12 @@ func SaveFeed(f Feed) error {
 	if e != nil {
 		return e
 	}
-	return os.WriteFile(filepath.Join(d, "releases.json"), b, 0600)
+	return os.WriteFile(filepath.Join(d, feedCacheName(source)), b, 0600)
 }
-func CachedFeed() (Feed, error) {
+func CachedFeed() (Feed, error) { return CachedFeedForSource(GitHub) }
+func CachedFeedForSource(source Source) (Feed, error) {
 	var f Feed
-	b, e := os.ReadFile(filepath.Join(Directory(), "releases.json"))
+	b, e := os.ReadFile(filepath.Join(Directory(), feedCacheName(source)))
 	if e != nil {
 		return f, e
 	}
@@ -214,16 +245,34 @@ func CachedFeed() (Feed, error) {
 		return f, errors.New("缓存过大")
 	}
 	e = json.Unmarshal(b, &f)
-	if e == nil && !validRelease(f.Latest) {
+	if e == nil && (!validRelease(f.Latest) || f.Latest.UpdateSource() != source) {
 		e = errors.New("缓存无效")
 	}
 	return f, e
+}
+func feedCacheName(source Source) string {
+	if source == Gitee {
+		return "releases-gitee.json"
+	}
+	return "releases.json"
+}
+func (r Release) UpdateSource() Source {
+	if r.Source == Gitee {
+		return Gitee
+	}
+	return GitHub
 }
 
 // Download only the canonical EXE from the release selected by the GitHub API.
 // TLS redirects must remain on GitHub's asset infrastructure. Partial downloads
 // never become installable; every byte is verified again by the updater helper.
 func (c *Client) Download(ctx context.Context, r Release, progress func(int64, int64)) (string, error) {
+	if c != nil && c.Source == Gitee {
+		return c.downloadGitee(ctx, r, progress)
+	}
+	if r.UpdateSource() != GitHub {
+		return "", errors.New("发布信息与所选 GitHub 更新源不匹配")
+	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
