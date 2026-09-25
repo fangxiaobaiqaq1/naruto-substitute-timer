@@ -10,6 +10,7 @@ project_directory=$(cd -- "$script_directory/../.." && pwd)
 output_path=$(mkdir -p -- "$output_directory" && cd -- "$output_directory" && pwd)
 
 go_binary=${GO:-go}
+gofmt_binary=$(dirname -- "$(command -v -- "$go_binary")")/gofmt
 
 cd -- "$project_directory"
 module_json=$("$go_binary" list -m -json fyne.io/fyne/v2)
@@ -85,7 +86,7 @@ source_path.mkdir(parents=True, exist_ok=True)
 (source_path / "timer_diagnostics_frame.go").write_text(hook_path.read_text())
 PY
 
-"${go_binary%/go}/gofmt" -w "$output_path/_source/loop.go" "$output_path/_source/window.go" "$output_path/_source/timer_diagnostics_frame.go"
+"$gofmt_binary" -w "$output_path/_source/loop.go" "$output_path/_source/window.go" "$output_path/_source/timer_diagnostics_frame.go"
 cp go.mod "$output_path/diagnostics.mod"
 cp go.sum "$output_path/diagnostics.sum"
 "$go_binary" mod edit -modfile="$output_path/diagnostics.mod" "-replace=fyne.io/fyne/v2=$module_alias"
