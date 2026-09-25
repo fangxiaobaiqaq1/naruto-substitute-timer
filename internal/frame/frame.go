@@ -55,6 +55,16 @@ type Frame struct {
 	AnalysisStarted     time.Time // Engine entry, after image validation; zero if analysis was skipped.
 	AnalyzedAt          time.Time
 	CaptureMethod       string
+	// Helper captures expose only non-sensitive transaction metadata. It is
+	// diagnostic state, never image content, target paths, or request tokens.
+	HelperRequestStart time.Time
+	HelperDeadline     time.Time
+	HelperOutcome      string
+	HelperReap         string
+	// Origin identifies the transaction responsible for a later busy result;
+	// terminal fields record the eventual helper exit without inventing a frame.
+	HelperOriginOutcome string
+	HelperTerminal      string
 	Sequence            uint64
 	Duplicate           bool // Identical pixels; never count as an independent confirmation.
 	Err                 error

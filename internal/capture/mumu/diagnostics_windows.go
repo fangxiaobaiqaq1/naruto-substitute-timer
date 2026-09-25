@@ -15,9 +15,6 @@ import (
 )
 
 const (
-	// ProbeWorkerArgument is handled by timer-app before it starts OCR or Fyne.
-	ProbeWorkerArgument = "--timer-mumu-sdk-probe-v1"
-
 	ProbeStageResolveRoot = "定位 MuMu 安装目录"
 	ProbeStageFindSDK     = "定位 MuMu 截图 SDK"
 	ProbeStageLoadSDK     = "加载 MuMu 截图 SDK"
@@ -98,6 +95,78 @@ type ProbeResult struct {
 	FailureStage   string      `json:"failure_stage,omitempty"`
 	Error          string      `json:"error,omitempty"`
 	Steps          []ProbeStep `json:"steps"`
+}
+
+// SanitizedForExport returns the support-bundle view. Probe retains raw paths
+// and SDK errors in memory for the immediate local UI, while the exported view
+// includes only stage, result, dimensions, and non-identifying SDK metadata.
+func (p ProbeResult) SanitizedForExport() any {
+	type exportedSDK struct {
+		Size          int64     `json:"size,omitempty"`
+		Modified      time.Time `json:"modified,omitempty"`
+		Preferred     bool      `json:"preferred,omitempty"`
+		ErrorCategory string    `json:"error_category,omitempty"`
+	}
+	type exportedStep struct {
+		Stage         string    `json:"stage"`
+		StartedAt     time.Time `json:"started_at"`
+		DurationMS    float64   `json:"duration_ms"`
+		OK            bool      `json:"ok"`
+		Detail        string    `json:"detail,omitempty"`
+		ErrorCategory string    `json:"error_category,omitempty"`
+	}
+	sdk := func(value SDKFile) exportedSDK {
+		return exportedSDK{Size: value.Size, Modified: value.Modified, Preferred: value.Preferred, ErrorCategory: probeErrorCategory(value.Error)}
+	}
+	steps := make([]exportedStep, 0, len(p.Steps))
+	for _, step := range p.Steps {
+		steps = append(steps, exportedStep{Stage: step.Stage, StartedAt: step.StartedAt, DurationMS: step.DurationMS, OK: step.OK, Detail: probeDetail(step.Stage, step.Detail), ErrorCategory: probeErrorCategory(step.Error)})
+	}
+	candidates := make([]exportedSDK, 0, len(p.SDKCandidates))
+	for _, candidate := range p.SDKCandidates {
+		candidates = append(candidates, sdk(candidate))
+	}
+	return struct {
+		StartedAt      time.Time      `json:"started_at"`
+		EndedAt        time.Time      `json:"ended_at"`
+		SDKCandidates  []exportedSDK  `json:"sdk_candidates,omitempty"`
+		SelectedSDK    exportedSDK    `json:"selected_sdk"`
+		Width          int            `json:"width,omitempty"`
+		Height         int            `json:"height,omitempty"`
+		ImageAvailable bool           `json:"image_available"`
+		FailureStage   string         `json:"failure_stage,omitempty"`
+		Error          string         `json:"error,omitempty"`
+		Steps          []exportedStep `json:"steps"`
+	}{
+		StartedAt: p.StartedAt, EndedAt: p.EndedAt,
+		SDKCandidates: candidates, SelectedSDK: sdk(p.SelectedSDK),
+		Width: p.Width, Height: p.Height, ImageAvailable: p.ImageAvailable, FailureStage: p.FailureStage,
+		Error: probeErrorCategory(p.Error), Steps: steps,
+	}
+}
+
+func probeDetail(stage, detail string) string {
+	if detail == "" {
+		return ""
+	}
+	if stage == ProbeStageCapture && strings.Contains(detail, "×") {
+		return detail
+	}
+	switch stage {
+	case ProbeStageResolveRoot, ProbeStageFindSDK:
+		return "path_redacted"
+	case ProbeStageConnect:
+		return "connected"
+	default:
+		return "completed"
+	}
+}
+
+func probeErrorCategory(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return "probe_failed"
 }
 
 // FindDLLCandidates returns SDK files in deterministic preference order. The
@@ -189,6 +258,43 @@ func addProbeStep(result *ProbeResult, stage string, started time.Time, detail s
 // Probe uses the exact Open/Capture implementation used by live collection. It
 // should be called from a background goroutine because a vendor SDK call can
 // block independently of the Fyne event loop.
+// ProbeAuto uses the same automatic target-selection mode as runtime capture.
+// Its result intentionally records only the selected SDK metadata that is
+// available after OpenAuto resolves the single connected game instance.
+func ProbeAuto(options Options) (result ProbeResult) {
+	result = ProbeResult{StartedAt: time.Now(), Requested: options}
+	defer func() { result.EndedAt = time.Now() }()
+
+	started := time.Now()
+	client, err := OpenAuto(options)
+	if err != nil {
+		addProbeStep(&result, ProbeStageConnect, started, "", err)
+		return result
+	}
+	defer client.Close()
+	if path := client.DLLPath(); path != "" {
+		if info, statErr := os.Stat(path); statErr == nil {
+			result.SelectedSDK = inspectSDK(SDKFile{Path: path, Size: info.Size(), Modified: info.ModTime()})
+		}
+	}
+	addProbeStep(&result, ProbeStageConnect, started, client.Source(), nil)
+
+	started = time.Now()
+	img, err := client.Capture()
+	if err != nil {
+		stage := errorStage(err)
+		if stage == "" {
+			stage = ProbeStageCapture
+		}
+		addProbeStep(&result, stage, started, "", err)
+		return result
+	}
+	result.Width, result.Height = img.Bounds().Dx(), img.Bounds().Dy()
+	result.ImageAvailable = true
+	addProbeStep(&result, ProbeStageCapture, started, fmt.Sprintf("%d × %d", result.Width, result.Height), nil)
+	return result
+}
+
 func Probe(options Options) (result ProbeResult) {
 	result = ProbeResult{StartedAt: time.Now(), Requested: options}
 	defer func() { result.EndedAt = time.Now() }()

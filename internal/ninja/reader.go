@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"narutotimer/internal/detect"
 	"narutotimer/internal/match"
 )
 
@@ -89,7 +90,7 @@ func NewReaderWithAvatars(options AvatarOptions) *Reader {
 		rowOffsetY      float64
 		requirePortrait bool
 	}{
-		{"hashirama", Hashirama, 6, Warm, 0, false}, {"hashirama_alt", Hashirama, 6, Warm, 0, false}, {"madara", Madara, 6, Warm, 0, false},
+		{"hashirama", Hashirama, 6, Warm, 0, false}, {"hashirama_alt", Hashirama, 6, Warm, 0, false}, {"madara", Madara, 4, Warm, 0, false},
 		{"obito", Obito, 4, Purple, 0, false}, {"naruto", Naruto, 4, Red, 0, false}, {"naruto_right", Naruto, 4, Red, 0, false},
 		{"obito_current", Obito, 4, Purple, 0, false},
 		{"sasuke_xiayin", SasukeXiayin, 4, Xiayin, 9, false},
@@ -221,17 +222,20 @@ func (r *Reader) read(img *image.RGBA, roi image.Rectangle, scale float64) evide
 }
 
 // ResolveEvidence decides identity from two independent CURRENT-frame sources.
-// Exact complete titles win when present; an avatar can independently confirm a
-// title or produce a bounded candidate only if it identifies an exact catalog
-// variant. A base title never turns an avatar into a special variant.
+// It retains the fixed-ROI avatar path for callers that cannot supply selected
+// HUD content/profile geometry; localized callers use resolveAvatarEvidence.
 func (r *Reader) ResolveEvidence(img *image.RGBA, titleROI image.Rectangle, avatarROI image.Rectangle, scale float64, title Readout, avatar *AvatarTracker, now time.Time) Readout {
-	out := title
-	out.TitleName = title.Name
 	if r == nil || r.avatars == nil || avatarROI.Empty() {
+		out := title
+		out.TitleName = title.Name
 		return out
 	}
-	m := avatar.Read(r.avatars, img, avatarROI, scale, now)
-	out.AvatarName, out.AvatarScore = m.Name, m.Score
+	return r.resolveAvatarEvidence(title, avatar.Read(r.avatars, img, avatarROI, scale, now))
+}
+
+func (r *Reader) resolveAvatarEvidence(title Readout, m AvatarMatch) Readout {
+	out := title
+	out.TitleName, out.AvatarName, out.AvatarScore = title.Name, m.Name, m.Score
 	if title.Name != "" {
 		if m.Name != "" && !sameAvatarVariant(title.Name, m.Name) {
 			// A disagreement never enables a version-dependent geometry rule.
@@ -244,12 +248,32 @@ func (r *Reader) ResolveEvidence(img *image.RGBA, titleROI image.Rectangle, avat
 	}
 	if m.Name != "" {
 		// A strong, separated current avatar can supply a bounded exact variant
-		// when a long account name covers the title. Only explicit variant
-		// policies below alter slots/palette/row geometry; other catalog entries
-		// remain display identity only.
+		// when a long account name covers the title. Only explicit reviewed
+		// policies alter slots/palette/row geometry; generic catalog entries are
+		// display identity only.
 		return avatarReadout(m)
 	}
 	return out
+}
+
+// ReadLocalizedWithAvatar first locates a portrait in the selected current HUD
+// side. A strong current match derives the title search ROI from its footprint,
+// so shifted HUD titles are recognized before title/avatar fusion. If no avatar
+// can be localized, the existing first-bead calibrated title/avatar ROIs remain
+// the fallback. No anchor is retained across frames by AvatarTracker.
+func (r *Reader) ReadLocalizedWithAvatar(title *Tracker, avatar *AvatarTracker, img *image.RGBA, area detect.ContentArea, profile string, left bool, fixedTitle, fixedAvatar image.Rectangle, scale float64, now time.Time) Readout {
+	if r == nil || title == nil || img == nil {
+		return Readout{}
+	}
+	if r.avatars != nil && avatar != nil {
+		m := avatar.Localize(r.avatars, img, area, profile, left, scale, now)
+		if m.Name != "" && !m.Rect.Empty() {
+			currentTitle := title.Read(r, img, NameRegionFromAvatar(m.Rect, scale, left), scale, now)
+			return r.resolveAvatarEvidence(currentTitle, m)
+		}
+	}
+	currentTitle := title.Read(r, img, fixedTitle, scale, now)
+	return r.ResolveEvidence(img, fixedTitle, fixedAvatar, scale, currentTitle, avatar, now)
 }
 
 func scaledNameForEvidence(prepared []scaledName, found evidence) scaledName {

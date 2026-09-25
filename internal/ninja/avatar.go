@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	"narutotimer/assets"
+	"narutotimer/internal/detect"
 	"narutotimer/internal/match"
 )
 
@@ -77,7 +78,15 @@ type AvatarMatch struct {
 	Score     float64
 	RunnerUp  float64
 	Candidate string
-	ids       []string
+	// Rect is the current-frame template footprint. It is empty unless the
+	// match passed the normal score and separation requirements.
+	Rect image.Rectangle
+	// Scale/Profile/Side describe the current HUD search context. They make an
+	// anchor usable by callers without allowing it to cross a layout or side.
+	Scale   float64
+	Profile string
+	Side    string
+	ids     []string
 }
 
 type avatarCatalog struct {
@@ -90,8 +99,12 @@ type avatarCatalog struct {
 // second per side. Other frames re-score only the previous six candidates on
 // current pixels; no identity is inherited from a prior frame.
 type AvatarTracker struct {
-	next time.Time
-	ids  []string
+	next          time.Time
+	ids           []string
+	bounds, roi   image.Rectangle
+	scale         float64
+	profile, side string
+	lastAt        time.Time
 }
 
 var embeddedAvatarCatalog = sync.OnceValues(func() (*avatarCatalog, error) {
@@ -234,31 +247,44 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	view := img.SubImage(roi).(*image.RGBA)
-	coarse := match.ScaleGray(match.ToGray(view), 36, 36)
+	entries := c.coarseEntries([]image.Rectangle{roi}, img, 8)
+	return c.matchEntries(view, scale, entries)
+}
+
+// coarseEntries uses normalized fixed-size portrait windows to cheaply retain
+// a small set of catalog candidates. It deliberately never does a full-size
+// catalog scan; full NCC below sees at most eight candidates.
+func (c *avatarCatalog) coarseEntries(windows []image.Rectangle, img *image.RGBA, limit int) []*avatarEntry {
 	type finalist struct {
 		entry *avatarEntry
 		score float64
 	}
+	// Convert each bounded current-frame window once. The catalog loop below
+	// then only compares 36² bytes, rather than repeatedly converting pixels.
+	queries := make([]*image.Gray, 0, len(windows))
+	for _, window := range windows {
+		window = window.Intersect(img.Bounds())
+		if !window.Empty() {
+			queries = append(queries, match.ScaleGray(match.ToGray(img.SubImage(window).(*image.RGBA)), 36, 36))
+		}
+	}
 	best := make([]finalist, 0, len(c.entries))
 	for _, entry := range c.entries {
-		// Direct masked thumbnail distance is O(36²) per entry and operates on
-		// the normalized ROI itself. Unlike the old 16px NCC sliding search it
-		// cannot discard a true centered portrait because of unrelated ROI
-		// background. Only the retained candidates do full-resolution NCC.
-		best = append(best, finalist{entry, coarseAvatarScore(coarse, entry.coarseGray, entry.coarseMask)})
+		score := 0.0
+		for _, coarse := range queries {
+			score = max(score, coarseAvatarScore(coarse, entry.coarseGray, entry.coarseMask))
+		}
+		best = append(best, finalist{entry, score})
 	}
 	sort.Slice(best, func(i, j int) bool { return best[i].score > best[j].score })
-	// Coarse NCC works on 36×36 pixels and tests six display scales only;
-	// retain a deliberately bounded wider recall set before strict full-size
-	// NCC. This is not a 242-image full-resolution scan.
-	if len(best) > 8 {
-		best = best[:8]
+	if len(best) > limit {
+		best = best[:limit]
 	}
 	entries := make([]*avatarEntry, len(best))
 	for i := range best {
 		entries[i] = best[i].entry
 	}
-	return c.matchEntries(view, scale, entries)
+	return entries
 }
 
 func coarseAvatarScore(query, templ, mask *image.Gray) float64 {
@@ -302,12 +328,17 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, scale float64, entries []
 		}
 		for _, factor := range []float64{.55, .70, .85, 1.0, 1.15, 1.30} {
 			w, h := max(12, int(math.Round(float64(entry.gray.Bounds().Dx())*scale*factor))), max(12, int(math.Round(float64(entry.gray.Bounds().Dy())*scale*factor)))
-			score, err := (match.NCC{}).Match(match.Query{Image: view, ROI: view.Bounds(), Template: match.ScaleGray(entry.gray, w, h), Mask: match.ScaleGray(entry.mask, w, h)})
+			template := match.ScaleGray(entry.gray, w, h)
+			score, err := (match.NCC{}).Match(match.Query{Image: view, ROI: view.Bounds(), Template: template, Mask: match.ScaleGray(entry.mask, w, h)})
 			if err != nil {
 				continue
 			}
 			if score.Value > out.Score {
-				out.RunnerUp, out.ID, out.Name, out.Score = out.Score, entry.id, entry.name, score.Value
+				// NCC Peak is the matched template's upper-left screenshot pixel.
+				// Use the actual scaled template footprint and bound it to this
+				// current view; never carry a prior frame's anchor forward.
+				rect := image.Rectangle{Min: score.Peak, Max: score.Peak.Add(template.Bounds().Size())}.Intersect(view.Bounds())
+				out.RunnerUp, out.ID, out.Name, out.Score, out.Rect = out.Score, entry.id, entry.name, score.Value, rect
 			} else if entry.id != out.ID && score.Value > out.RunnerUp {
 				out.RunnerUp = score.Value
 			}
@@ -315,20 +346,44 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, scale float64, entries []
 	}
 	out.Candidate = out.Name
 	if out.Score < .78 || out.Score-out.RunnerUp < .08 {
-		out.ID, out.Name = "", ""
+		out.ID, out.Name, out.Rect = "", "", image.Rectangle{}
 	}
 	return out
 }
 
 func (t *AvatarTracker) Read(c *avatarCatalog, img *image.RGBA, roi image.Rectangle, scale float64, now time.Time) AvatarMatch {
-	if c == nil || img == nil {
+	return t.read(c, img, roi, scale, "", "", now, nil)
+}
+
+// Localize searches only the selected current HUD side. Its returned rectangle
+// is a current-frame anchor, not tracker state: a blank or changed frame returns
+// no identity and no anchor.
+func (t *AvatarTracker) Localize(c *avatarCatalog, img *image.RGBA, area detect.ContentArea, profile string, left bool, scale float64, now time.Time) AvatarMatch {
+	side := "right"
+	if left {
+		side = "left"
+	}
+	roi := AvatarSearchRegion(area, profile, left)
+	return t.read(c, img, roi, scale, profile, side, now, func() AvatarMatch {
+		return c.localize(img, roi, scale, profile, side)
+	})
+}
+
+func (t *AvatarTracker) read(c *avatarCatalog, img *image.RGBA, roi image.Rectangle, scale float64, profile, side string, now time.Time, locate func() AvatarMatch) AvatarMatch {
+	if c == nil || img == nil || scale <= 0 {
 		return AvatarMatch{}
 	}
+	roi = roi.Intersect(img.Bounds())
+	if roi.Empty() {
+		return AvatarMatch{}
+	}
+	changed := t.bounds != img.Bounds() || t.roi != roi || t.scale != scale || t.profile != profile || t.side != side || (!t.lastAt.IsZero() && now.Before(t.lastAt))
+	t.lastAt = now
+	if changed {
+		t.ids, t.next = nil, time.Time{}
+	}
+	t.bounds, t.roi, t.scale, t.profile, t.side = img.Bounds(), roi, scale, profile, side
 	if now.Before(t.next) && len(t.ids) > 0 {
-		roi = roi.Intersect(img.Bounds())
-		if roi.Empty() {
-			return AvatarMatch{}
-		}
 		entries := make([]*avatarEntry, 0, len(t.ids))
 		c.mu.Lock()
 		for _, id := range t.ids {
@@ -336,15 +391,86 @@ func (t *AvatarTracker) Read(c *avatarCatalog, img *image.RGBA, roi image.Rectan
 		}
 		out := c.matchEntries(img.SubImage(roi).(*image.RGBA), scale, entries)
 		c.mu.Unlock()
+		out.Scale, out.Profile, out.Side = scale, profile, side
 		return out
 	}
-	out := c.Match(img, roi, scale)
+	var out AvatarMatch
+	if locate != nil {
+		out = locate()
+	} else {
+		out = c.Match(img, roi, scale)
+	}
+	out.Scale, out.Profile, out.Side = scale, profile, side
 	t.ids, t.next = append(t.ids[:0], out.ids...), now.Add(500*time.Millisecond)
 	return out
 }
 
+// AvatarSearchRegion is the bounded current-frame localization area for one
+// selected HUD profile and side. It deliberately covers only the upper 150
+// reference pixels of that side, never an arbitrary capture or full frame.
+func AvatarSearchRegion(area detect.ContentArea, profile string, left bool) image.Rectangle {
+	if area.W <= 0 || area.H <= 0 || (profile != "camp" && profile != "duel") {
+		return image.Rectangle{}
+	}
+	x0, x1 := 0.0, 220.0
+	if !left {
+		x0, x1 = 740, 960
+	}
+	return image.Rect(
+		area.X+int(math.Round(x0*float64(area.W)/960)),
+		area.Y,
+		area.X+int(math.Round(x1*float64(area.W)/960)),
+		area.Y+int(math.Round(150*float64(area.H)/540)),
+	)
+}
+
+// localize retains eight catalog candidates from a fixed portrait-window grid,
+// then validates them with the existing full NCC search. ponytail: this is
+// bounded O(242*32*36² + 8*6*220*150) per 960-wide HUD side, and AvatarTracker
+// performs the catalog pass at most twice per second per profile/side.
+func (c *avatarCatalog) localize(img *image.RGBA, roi image.Rectangle, scale float64, profile, side string) AvatarMatch {
+	if c == nil || img == nil || scale <= 0 {
+		return AvatarMatch{}
+	}
+	roi = roi.Intersect(img.Bounds())
+	if roi.Empty() {
+		return AvatarMatch{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entries := c.coarseEntries(avatarWindows(roi, scale), img, 8)
+	out := c.matchEntries(img.SubImage(roi).(*image.RGBA), scale, entries)
+	out.Scale, out.Profile, out.Side = scale, profile, side
+	return out
+}
+
+func avatarWindows(roi image.Rectangle, scale float64) []image.Rectangle {
+	size := max(16, int(math.Round(90*scale)))
+	step := max(8, int(math.Round(24*scale)))
+	starts := func(minimum, maximum int) []int {
+		last := maximum - size
+		if last <= minimum {
+			return []int{minimum}
+		}
+		out := make([]int, 0, (last-minimum)/step+2)
+		for x := minimum; x < last; x += step {
+			out = append(out, x)
+		}
+		return append(out, last)
+	}
+	xs, ys := starts(roi.Min.X, roi.Max.X), starts(roi.Min.Y, roi.Max.Y)
+	out := make([]image.Rectangle, 0, len(xs)*len(ys))
+	for _, y := range ys {
+		for _, x := range xs {
+			out = append(out, image.Rect(x, y, x+size, y+size).Intersect(roi))
+		}
+	}
+	return out
+}
+
 // AvatarRegion maps one normalized 960-wide reference ROI from an existing
-// first-bead anchor; it works for 720p..1440p and letterboxed content areas.
+// first-bead anchor; it remains the fixed-calibration fallback when localization
+// cannot find a current portrait.
 func AvatarRegion(first image.Point, scale float64, left bool) image.Rectangle {
 	x0, x1 := -80.0, -14.0
 	if !left {
@@ -355,6 +481,21 @@ func AvatarRegion(first image.Point, scale float64, left bool) image.Rectangle {
 
 // canonicalAvatarName maps only documented historical spellings onto a current
 // canonical catalog title. It deliberately does not collapse distinct forms.
+// NameRegionFromAvatar derives the exact bounded title search rectangle from
+// a current avatar footprint. Its offsets intentionally match NameRegion at
+// the reviewed default HUD anchor, while allowing a shifted current HUD to move
+// both signals together.
+func NameRegionFromAvatar(rect image.Rectangle, scale float64, left bool) image.Rectangle {
+	if rect.Empty() || scale <= 0 {
+		return image.Rectangle{}
+	}
+	y0, y1 := rect.Min.Y-int(math.Round(3*scale)), rect.Min.Y+int(math.Round(48*scale))
+	if left {
+		return image.Rect(rect.Max.X+int(math.Round(2*scale)), y0, rect.Max.X+int(math.Round(348*scale)), y1)
+	}
+	return image.Rect(rect.Min.X-int(math.Round(340*scale)), y0, rect.Min.X+int(math.Round(16*scale)), y1)
+}
+
 func canonicalAvatarName(s string) string {
 	if normalizeAvatarName(s) == normalizeAvatarName(MadaraLegacyAlias) {
 		return Madara

@@ -11,8 +11,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"narutotimer/internal/frame"
 )
@@ -78,15 +81,25 @@ type Status struct {
 }
 
 type observation struct {
-	Type                string       `json:"type"`
-	FrameID             uint64       `json:"frame_id"`
-	SourceSequence      uint64       `json:"source_sequence"`
-	CaptureStarted      time.Time    `json:"capture_started"`
-	CapturedAt          time.Time    `json:"captured_at"`
-	AnalysisStarted     time.Time    `json:"analysis_started"`
-	AnalyzedAt          time.Time    `json:"analyzed_at"`
-	ReceivedAt          time.Time    `json:"received_at"`
-	CaptureMethod       string       `json:"capture_method"`
+	Type            string    `json:"type"`
+	FrameID         uint64    `json:"frame_id"`
+	SourceSequence  uint64    `json:"source_sequence"`
+	SourceRevision  uint64    `json:"source_revision"`
+	CaptureStarted  time.Time `json:"capture_started"`
+	CapturedAt      time.Time `json:"captured_at"`
+	AnalysisStarted time.Time `json:"analysis_started"`
+	AnalyzedAt      time.Time `json:"analyzed_at"`
+	ReceivedAt      time.Time `json:"received_at"`
+	CaptureMethod   string    `json:"capture_method"`
+	// Error is a stable capture category, never a raw adapter error. Status
+	// contains only vetted short Chinese text.
+	ErrorCategory       string       `json:"error_category,omitempty"`
+	HelperRequestStart  time.Time    `json:"helper_request_started,omitempty"`
+	HelperDeadline      time.Time    `json:"helper_deadline,omitempty"`
+	HelperOutcome       string       `json:"helper_outcome,omitempty"`
+	HelperReap          string       `json:"helper_reap,omitempty"`
+	HelperOriginOutcome string       `json:"helper_origin_outcome,omitempty"`
+	HelperTerminal      string       `json:"helper_terminal,omitempty"`
 	Width               int          `json:"width"`
 	Height              int          `json:"height"`
 	OriginX             int          `json:"origin_x"`
@@ -252,7 +265,9 @@ func New(opts Options) (*Recorder, error) {
 		"hud_evidence":          opts.RecordHUDEvidence,
 		"hud_evidence_policy":   "when enabled, reserve 1/4 of the same PNG byte limit for native-pixel name/bean strips at most twice per second; not full frames or replay inputs; crop coordinates and frame_id in capture.jsonl",
 		"player_side_semantics": "per-frame identity observation; an empty player_side may mean no new sample during the identity sampling interval, not loss of the UI's remembered side",
-		"config":                opts.Config,
+		// Config may contain emulator roots, target packages, or tokens. The
+		// session export records its presence, never its raw values.
+		"config_recorded": opts.Config != nil,
 	}
 	b, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -326,21 +341,28 @@ func (r *Recorder) Observe(f frame.Frame, receivedAt time.Time) uint64 {
 		r.exclusions[exclusion]++
 	}
 	r.addHistoryLocked(t)
-	o := observation{Type: "capture", FrameID: id, SourceSequence: f.Sequence,
+	o := observation{Type: "capture", FrameID: id, SourceSequence: f.Sequence, SourceRevision: f.SourceRevision,
 		CaptureStarted: f.CaptureStarted, CapturedAt: f.CapturedAt,
 		AnalysisStarted: f.AnalysisStarted, AnalyzedAt: f.AnalyzedAt, ReceivedAt: receivedAt,
-		CaptureMethod: f.CaptureMethod, Valid: t.valid, Exclusion: exclusion,
+		CaptureMethod: sanitizeCaptureMethod(f.CaptureMethod), HelperRequestStart: f.HelperRequestStart, HelperDeadline: f.HelperDeadline,
+		HelperOutcome: sanitizeHelperOutcome(f.HelperOutcome), HelperReap: sanitizeHelperReap(f.HelperReap), HelperOriginOutcome: sanitizeHelperOutcome(f.HelperOriginOutcome), HelperTerminal: sanitizeHelperReap(f.HelperTerminal), Valid: t.valid, Exclusion: exclusion,
 		RawState: "disabled", Duplicate: f.Duplicate, Hold: f.Hold,
-		Status: f.Status, TextStatus: f.TextStatus, TextError: f.TextError,
 		Fighting: f.Fighting, Engine: f.Engine, Scene: f.Scene, LayoutProfile: f.LayoutProfile,
 		LeftNinja: f.LeftNinja, RightNinja: f.RightNinja,
 		LeftNinjaCandidate: f.LeftNinjaCandidate, RightNinjaCandidate: f.RightNinjaCandidate,
 		LeftSlots: f.LeftSlots, RightSlots: f.RightSlots,
 		PlayerSide: f.PlayerSide, PlayerName: f.PlayerName, OpponentName: f.OppName,
 		Beads: append([]frame.Bead(nil), f.Beads...)}
-	if f.Err != nil {
-		o.Error = f.Err.Error()
+	category, detail := sanitizeCaptureDiagnostic(f)
+	o.ErrorCategory = category
+	if category != "" && category != "success" {
+		// Keep the established error field useful to older readers, but turn it
+		// into a deterministic category instead of serializing Frame.Err.
+		o.Error = category
 	}
+	o.Status = detail
+	o.TextStatus = sanitizeChineseStatus(f.TextStatus)
+	o.TextError = sanitizeChineseStatus(f.TextError)
 	w := work{frameID: id}
 	if usableImage(f.Img) {
 		bounds := f.Img.Bounds()
@@ -379,12 +401,12 @@ func (r *Recorder) Observe(f frame.Frame, receivedAt time.Time) uint64 {
 	if r.replay != nil && f.Err == nil && usableImage(f.Img) {
 		bounds := f.Img.Bounds()
 		replayEvidence := replayState{Scene: f.Scene, Fighting: f.Fighting, Hold: f.Hold, Duplicate: f.Duplicate,
-			Status: f.Status, TextStatus: f.TextStatus, TextError: f.TextError, Engine: f.Engine, LayoutProfile: f.LayoutProfile,
+			Status: detail, TextStatus: sanitizeChineseStatus(f.TextStatus), TextError: sanitizeChineseStatus(f.TextError), Engine: f.Engine, LayoutProfile: f.LayoutProfile,
 			LeftNinja: f.LeftNinja, RightNinja: f.RightNinja, LeftNinjaCandidate: f.LeftNinjaCandidate, RightNinjaCandidate: f.RightNinjaCandidate,
 			LeftSlots: f.LeftSlots, RightSlots: f.RightSlots, PlayerSide: f.PlayerSide, PlayerName: f.PlayerName, OpponentName: f.OppName,
 			Beads: append([]frame.Bead(nil), f.Beads...), EventState: "not available on frame; replay metadata does not infer UI event counters"}
 		r.replay.enqueueLocked(replayWork{img: f.Img, frameID: id, capturedAt: f.CapturedAt,
-			captureMethod: f.CaptureMethod, sourceWidth: bounds.Dx(), sourceHeight: bounds.Dy(), state: replayEvidence})
+			captureMethod: sanitizeCaptureMethod(f.CaptureMethod), sourceWidth: bounds.Dx(), sourceHeight: bounds.Dy(), state: replayEvidence})
 	}
 	r.prepareHUDLocked(f, receivedAt, &o, &w)
 	w.entry = o
@@ -454,6 +476,90 @@ func invalidFrame(f frame.Frame, received time.Time) string {
 
 func usableImage(img *image.RGBA) bool {
 	return img != nil && img.Bounds().Dx() > 0 && img.Bounds().Dy() > 0
+}
+
+// sanitizeCaptureDiagnostic is the export boundary for adapter-provided text.
+// Frame.Err and Frame.Status remain untouched for the in-memory UI, but a
+// diagnostic file records only an allowlisted outcome and a short Chinese
+// status which cannot carry paths, command arguments, tokens, or helper I/O.
+func sanitizeCaptureDiagnostic(f frame.Frame) (category, detail string) {
+	if outcome := sanitizeHelperOutcome(f.HelperOutcome); outcome != "" {
+		category = outcome
+	} else if containsSourceSwitch(f.Status) || (f.Err != nil && containsSourceSwitch(f.Err.Error())) {
+		category = "source_switch"
+	} else if !usableImage(f.Img) {
+		category = "no_image"
+	} else if f.Err != nil {
+		category = "capture_error"
+	} else {
+		category = "success"
+	}
+	return category, sanitizeChineseStatus(f.Status)
+}
+
+func containsSourceSwitch(value string) bool {
+	return strings.Contains(value, "正在切换模拟器") || strings.Contains(value, "切换模拟器")
+}
+
+func sanitizeCaptureMethod(value string) string {
+	switch value {
+	case "mumu-sdk", "leidian-adb", "printwindow-fullcontent":
+		return value
+	default:
+		return "other"
+	}
+}
+
+func sanitizeHelperOutcome(value string) string {
+	switch value {
+	case "timeout", "busy", "helper_launch", "helper_protocol", "sdk_worker", "success":
+		return value
+	default:
+		return ""
+	}
+}
+
+func sanitizeHelperReap(value string) string {
+	switch value {
+	case "not_needed", "completed", "killed_reaped", "pending":
+		return value
+	default:
+		return ""
+	}
+}
+
+// sanitizeChineseStatus preserves established concise user-facing Chinese
+// messages while rejecting values with ASCII, digits, slashes, or backslashes.
+// The latter may contain paths, request IDs, executable arguments, tokens, or
+// arbitrary helper stdout/stderr. This deliberately prefers omission to a
+// heuristic partial redaction.
+func sanitizeChineseStatus(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || utf8.RuneCountInString(value) > 80 {
+		return ""
+	}
+	// OCR lifecycle values are categories, not user- or adapter-provided text.
+	switch value {
+	case "off", "waiting", "reading", "pending", "ready", "unavailable":
+		return value
+	}
+	containsHan := false
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			containsHan = true
+			continue
+		}
+		switch r {
+		case ' ', '，', '。', '！', '？', '、', '：', '；', '（', '）', '·', '…', '—':
+			continue
+		default:
+			return ""
+		}
+	}
+	if !containsHan {
+		return ""
+	}
+	return value
 }
 
 func ordered(times ...time.Time) bool {

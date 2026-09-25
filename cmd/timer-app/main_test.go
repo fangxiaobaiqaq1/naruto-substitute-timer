@@ -23,6 +23,27 @@ func TestApplicationDirectory(t *testing.T) {
 	}
 }
 
+func TestLoadInitialConfigKeepsMissingConfigInMemory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg, firstRun, err := loadInitialConfig(path)
+	if err != nil || !firstRun {
+		t.Fatalf("first run = %v, err = %v", firstRun, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("missing config was unexpectedly written: %v", err)
+	}
+	if cfg.SchemaVersion == 0 {
+		t.Fatal("missing config did not return defaults")
+	}
+	if err := os.WriteFile(path, []byte(`{"schemaVersion": 1}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A malformed existing file must not be treated as first run or overwritten.
+	if _, firstRun, err := loadInitialConfig(path); err == nil || firstRun {
+		t.Fatalf("first run = %v, err = %v", firstRun, err)
+	}
+}
+
 func TestInstalledAppUsesUserDataAndPortableKeepsOwnConfig(t *testing.T) {
 	root := t.TempDir()
 	data := t.TempDir()

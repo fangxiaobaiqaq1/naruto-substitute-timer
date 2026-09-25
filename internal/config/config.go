@@ -216,7 +216,8 @@ type UIConfig struct {
 	RememberSide              bool    `json:"rememberSide"`
 	AlwaysOnTop               bool    `json:"alwaysOnTop"`
 	// AutoCheckUpdates only checks and notifies. Downloads and restarts always require a user action.
-	AutoCheckUpdates bool `json:"autoCheckUpdates"`
+	AutoCheckUpdates bool   `json:"autoCheckUpdates"`
+	UpdateSource     string `json:"updateSource,omitempty"`
 	// WindowOpacity applies only to the compact timer overlay, in [0.40, 1.00].
 	WindowOpacity float64 `json:"windowOpacity"`
 	// FontScale scales compact-overlay text, in [0.80, 1.60].
@@ -309,6 +310,7 @@ func Default() Config {
 			RememberSide:              true,
 			AlwaysOnTop:               true,
 			AutoCheckUpdates:          true,
+			UpdateSource:              "gitee",
 			WindowOpacity:             1,
 			FontScale:                 1,
 			// Keep the published default neutral. Users can add their own names

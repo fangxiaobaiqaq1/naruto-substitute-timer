@@ -11,6 +11,40 @@ func TestDefaultValid(t *testing.T) {
 	if err := Validate(Default()); err != nil {
 		t.Fatalf("default config should be valid: %v", err)
 	}
+	if Default().UI.UpdateSource != "gitee" {
+		t.Fatalf("default update source = %q, want gitee", Default().UI.UpdateSource)
+	}
+}
+
+func TestUpdateSourceValidationAndLegacyDefault(t *testing.T) {
+	cfg := Default()
+	cfg.UI.UpdateSource = "github"
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.UI.UpdateSource = "invalid"
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "updateSource") {
+		t.Fatalf("Validate = %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":1,"ui":{"autoCheckUpdates":false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.UI.UpdateSource != "gitee" {
+		t.Fatalf("legacy source = %q", loaded.UI.UpdateSource)
+	}
+	loaded.UI.UpdateSource = "github"
+	if err := Save(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := Load(path)
+	if err != nil || persisted.UI.UpdateSource != "github" {
+		t.Fatalf("persistence = %+v, %v", persisted.UI, err)
+	}
 }
 
 func TestLeidianConfigValidatesProviderAndSerial(t *testing.T) {

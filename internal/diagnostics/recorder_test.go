@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -249,6 +250,78 @@ func readJSONLines(t *testing.T, path string) []map[string]any {
 		t.Fatal(err)
 	}
 	return rows
+}
+
+func TestCaptureHelperDiagnosticsJSONIsCorrelatedAndPrivate(t *testing.T) {
+	r := testRecorder(t, false)
+	base := time.Now()
+	secretPath := `C:\Users\Private\AppData\Local\Temp\capture-abc\external_renderer_ipc.dll`
+	uncPath := `\\server\share\MuMu\nx_main\MuMuManager.exe`
+	requestID := "9a1b2c3d4e5f67890123456789abcdef"
+	token := "token=very-private-helper-token"
+	cases := []struct {
+		outcome, reap, origin, terminal string
+		revision                        uint64
+	}{
+		{"success", "completed", "", "", 1},
+		{"timeout", "pending", "timeout", "pending", 2},
+		{"busy", "not_needed", "timeout", "pending", 2},
+		{"helper_launch", "not_needed", "", "", 3},
+		{"helper_protocol", "completed", "", "", 4},
+		{"sdk_worker", "completed", "", "", 5},
+		{"timeout", "killed_reaped", "timeout", "killed_reaped", 6},
+	}
+	for i, tc := range cases {
+		at := base.Add(time.Duration(i) * time.Millisecond)
+		r.Observe(frame.Frame{Hold: true, Err: fmt.Errorf("helper stderr %s %s request_id=%s %s", secretPath, uncPath, requestID, token), CaptureStarted: at,
+			Status: "助手输出 " + secretPath + " " + token, TextStatus: "采集超时，正在重试", TextError: "native " + uncPath,
+			CaptureMethod:  `C:\Program Files\MuMu\mumu-helper.exe --request ` + requestID,
+			SourceRevision: tc.revision, HelperRequestStart: at, HelperDeadline: at.Add(time.Second),
+			HelperOutcome: tc.outcome, HelperReap: tc.reap, HelperOriginOutcome: tc.origin, HelperTerminal: tc.terminal}, at)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(r.Snapshot().Directory, "capture.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{secretPath, uncPath, requestID, token, "helper stderr", "助手输出", "mumu-helper.exe"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Fatalf("private diagnostic value leaked")
+		}
+	}
+	rows := readJSONLines(t, filepath.Join(r.Snapshot().Directory, "capture.jsonl"))
+	if len(rows) != len(cases) {
+		t.Fatalf("rows=%d want %d", len(rows), len(cases))
+	}
+	for i, tc := range cases {
+		row := rows[i]
+		if row["helper_outcome"] != tc.outcome || row["helper_reap"] != tc.reap || row["source_revision"] != float64(tc.revision) || row["valid_for_latency"] != false || row["raw_state"] != "no_image" || row["error_category"] != tc.outcome || row["capture_method"] != "other" {
+			t.Fatalf("row %d lost diagnostic correlation: %+v", i, row)
+		}
+		if row["status"] != nil || row["text_error"] != nil || row["text_status"] != "采集超时，正在重试" {
+			t.Fatalf("row %d retained unsafe free text: %+v", i, row)
+		}
+		if tc.origin != "" && (row["helper_origin_outcome"] != tc.origin || row["helper_terminal"] != tc.terminal) {
+			t.Fatalf("row %d lost origin/terminal: %+v", i, row)
+		}
+	}
+}
+
+func TestSanitizeCaptureDiagnosticPreservesOnlySafeCategoriesAndChineseStatus(t *testing.T) {
+	category, detail := sanitizeCaptureDiagnostic(frame.Frame{Status: "空帧，等待画面"})
+	if category != "no_image" || detail != "空帧，等待画面" {
+		t.Fatalf("safe status = %q/%q", category, detail)
+	}
+	category, detail = sanitizeCaptureDiagnostic(frame.Frame{Status: "正在切换模拟器，请稍候"})
+	if category != "source_switch" || detail != "正在切换模拟器，请稍候" {
+		t.Fatalf("source switch = %q/%q", category, detail)
+	}
+	category, detail = sanitizeCaptureDiagnostic(frame.Frame{Err: errors.New(`C:\Temp\secret.exe`)})
+	if category != "no_image" || detail != "" {
+		t.Fatalf("unsafe error = %q/%q", category, detail)
+	}
 }
 
 func TestNativePNGIsImmutableAndReplayHasCorrelatedRecognition(t *testing.T) {

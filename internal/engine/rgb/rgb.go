@@ -217,7 +217,11 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 			purpleHighlight := palette == ninja.Purple && (purpleGlintBody(img, p, w, h, gap) || purplePairedBody(img, p, w, h, gap))
 			goldHighlight := (palette == "" || palette == ninja.Warm) && goldGlintBody(img, p, w, h)
 			blueHighlight := (palette == "" || palette == ninja.Warm) && blueGlintBody(img, p, w, h, gap)
-			warmHighlight := palette == ninja.Warm && identified[index].Slots == 6 && warmGlintBody(img, p, w, h)
+			// 神驹佑将 uses the established four-slot layout, but its bounded warm
+			// body has the same current-pixel white-glint proof as a six-slot warm
+			// variant. This stays restricted to the exact, current-frame title;
+			// topology hints and other four-slot identities cannot enable it.
+			warmHighlight := palette == ninja.Warm && (identified[index].Slots == 6 || (identified[index].Name == ninja.Madara && identified[index].Slots == 4)) && warmGlintBody(img, p, w, h)
 			light, dark, gold, paleGold, blue, total := 0, 0, 0, 0, 0, 0
 			for dy := -h / 2; dy <= h/2; dy++ {
 				for dx := -w / 2; dx <= w/2; dx++ {

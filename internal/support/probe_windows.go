@@ -6,10 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-
+	"narutotimer/internal/capture/helper"
 	"narutotimer/internal/capture/mumu"
 )
 
@@ -20,34 +17,19 @@ func ProbeSDK(ctx context.Context, executable string, options mumu.Options) (mum
 	if executable == "" {
 		return mumu.ProbeResult{}, fmt.Errorf("无法定位计时器可执行文件")
 	}
-	dir, err := os.MkdirTemp("", "naruto-timer-mumu-probe-")
-	if err != nil {
-		return mumu.ProbeResult{}, err
-	}
-	defer os.RemoveAll(dir)
-	request := filepath.Join(dir, "request.json")
-	resultPath := filepath.Join(dir, "result.json")
 	data, err := json.Marshal(options)
 	if err != nil {
 		return mumu.ProbeResult{}, err
 	}
-	if err := os.WriteFile(request, data, 0o600); err != nil {
+	resultData, runErr := helper.Run(ctx, executable, mumu.ProbeWorkerArgument, data)
+	if runErr != nil {
+		return mumu.ProbeResult{}, fmt.Errorf("SDK 自检未产生结果: %w", runErr)
+	}
+	var result mumu.ProbeResult
+	if err := json.Unmarshal(resultData, &result); err != nil {
 		return mumu.ProbeResult{}, err
 	}
-	command := exec.CommandContext(ctx, executable, mumu.ProbeWorkerArgument, request, resultPath)
-	output, runErr := command.CombinedOutput()
-	resultData, readErr := os.ReadFile(resultPath)
-	if readErr == nil {
-		var result mumu.ProbeResult
-		if err := json.Unmarshal(resultData, &result); err != nil {
-			return mumu.ProbeResult{}, err
-		}
-		// A completed probe writes a structured result even when the SDK reports
-		// a failed connect. That is a diagnostic outcome, not a worker crash.
-		return result, nil
-	}
-	if runErr != nil {
-		return mumu.ProbeResult{}, fmt.Errorf("SDK 自检未产生结果: %w；%s", runErr, string(output))
-	}
-	return mumu.ProbeResult{}, readErr
+	// A completed probe writes a structured result even when the SDK reports
+	// a failed connect. That is a diagnostic outcome, not a worker crash.
+	return result, nil
 }

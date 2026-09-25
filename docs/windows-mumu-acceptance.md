@@ -48,21 +48,39 @@ go test ./internal/ninja -run TestItachiHyakusenMuMuVideoTitles -count=1
    settings when multiple instances are present.
 2. Use the capture probe and confirm SDK connection, display selection, and a
    non-empty current screenshot.
-3. At 1280x720, 1600x900, and 1920x1080, confirm the HUD is not marked
+3. `capture.timeoutMs` remains the synchronous observation deadline. Runtime
+   MuMu gives the helper a separate 15-second hard transaction ceiling
+   (startup, DLL/SDK, capture, PNG, protocol, close/reap), but a caller that
+   reaches `capture.timeoutMs` immediately receives a held timeout while the
+   helper is cancelled and reaped. Confirm a normally slow helper that still
+   completes within the observation deadline produces a current frame. Then
+   deliberately cause one SDK capture to stall (for example by pausing the
+   emulator while the app is capturing). Confirm the app reports a timeout for
+   that observation without blocking the UI for 15 seconds, does not overlap a
+   new helper, and resumes with a current valid frame after reap and recovery.
+   Do not accept a frame completed by the timed-out helper as evidence. In
+   `capture.jsonl`, verify `source_revision` plus non-sensitive helper
+   request/deadline/outcome/reap and origin/terminal fields classify the
+   initiating timeout and later `busy`
+   attempts (`busy`, `timeout`, `helper_launch`, `helper_protocol`,
+   `sdk_worker`, or `success`) without paths, tokens, or image data. Close the
+   app while another forced stall is active; confirm its helper terminates
+   before the app exits and no helper remains in Task Manager.
+4. At 1280x720, 1600x900, and 1920x1080, confirm the HUD is not marked
    `unsupported-resolution` and bean centers follow the game content area.
-4. In live fights, verify:
+5. In live fights, verify:
    - 百战鼬: right title is recognized and its energy-row four beans are read.
    - 神驹佑祥斑 / 木叶创立柱间: six current beans and color states.
    - 九喇嘛连结水门: title and energy-row geometry.
    - 十尾带土 / 侠隐佐助: title recovery after a visible current-frame move and
      unknown state during a genuinely obscured title.
-5. Enable the optional three-minute diagnostic replay during a representative
+6. Enable the optional three-minute diagnostic replay during a representative
    fight, then stop diagnostics. Confirm `replay/manifest.json` has schema 2,
    complete `raw_path`/`annotated_path` pairs only, and that each annotation
    describes its own frame rather than a later UI state. Export the small replay
    ZIP and use “Open folder”; confirm the support ZIP contains no game images
    unless its explicit privacy option was selected.
-6. Record an SDK diagnostic bundle for any mismatch; do not treat an old
+7. Record an SDK diagnostic bundle for any mismatch; do not treat an old
    identity or old bean state as validation. For unstable 十尾带土 detection,
    retain original-resolution consecutive frames plus title/avatar scores and
    purple-bean diagnostics; do not lower global thresholds based on lossy

@@ -2,10 +2,12 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"narutotimer/internal/capture"
 	"narutotimer/internal/config"
 	"narutotimer/internal/frame"
 )
@@ -407,6 +409,149 @@ func TestVisibleReadyRejectsIncompleteSide(t *testing.T) {
 	}
 }
 
+func TestMuMuObservationGapRequiresNormalizedMethodIdentity(t *testing.T) {
+	s := &session{cfg: config.Default()}
+	s.cfg.UI.PollIntervalMS = 50
+	displaySource := `MuMu 实例 0 · E:\Program Files\Netease\MuMu`
+	if got := s.observationGap(displaySource); got != 150*time.Millisecond {
+		t.Fatalf("display source selected SDK gap: %s", got)
+	}
+	if got := s.observationGap(capture.MethodMuMuSDK); got != 1250*time.Millisecond {
+		t.Fatalf("normalized SDK method gap = %s, want 1250ms", got)
+	}
+	if got := s.observationGap(capture.MethodLeidianADB); got != leidianADBObservationGap {
+		t.Fatalf("Leidian gap changed: %s", got)
+	}
+}
+
+func TestCaptureOnceMuMuHalfSecondConfirmationUsesFirstCapture(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	first := base.Add(100 * time.Millisecond)
+	confirmation := first.Add(500 * time.Millisecond)
+	s := testSession([]frame.Frame{
+		{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, Beads: testBeads(4, 3), CapturedAt: base},
+		{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, Beads: testBeads(4, 2), CapturedAt: first},
+		{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, Beads: testBeads(4, 2), CapturedAt: confirmation},
+	})
+	for range []int{0, 1, 2} {
+		s.captureOnce()
+	}
+	at, serial := s.right.LastEvent()
+	if serial != 1 || !at.Equal(first) {
+		t.Fatalf("event=%v/%d, want first lower frame %v", at, serial, first)
+	}
+	if got := s.right.LatestRemaining(confirmation); len(got) != 1 || got[0] != 14.5 {
+		t.Fatalf("remaining at confirmation=%v, want 14.5 from first frame", got)
+	}
+}
+
+func TestMuMuObservationGapUsesCaptureBudgetAndActualCadence(t *testing.T) {
+	if got := mumuObservationGap(1200, 50, 0); got != 1250*time.Millisecond {
+		t.Fatalf("gap=%s, want 1250ms", got)
+	}
+	if got := mumuObservationGap(200, 800, 0); got != time.Second {
+		t.Fatalf("slow poll gap=%s, want 1s", got)
+	}
+	if got := mumuObservationGap(200, 50, 900*time.Millisecond); got != 1100*time.Millisecond {
+		t.Fatalf("analysis-bound gap=%s, want 1100ms", got)
+	}
+}
+
+func TestCaptureOnceMuMuSlowPollCadenceStillConfirmsCurrentFrames(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	s := testSession([]frame.Frame{
+		{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 3), CapturedAt: base},
+		{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 2), CapturedAt: base.Add(800 * time.Millisecond)},
+		{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 2), CapturedAt: base.Add(1750 * time.Millisecond)},
+	})
+	s.cfg.Capture.TimeoutMS = 200
+	s.cfg.UI.PollIntervalMS = 800 // Larger than capture timeout: supported cadence is 1s.
+	for range []int{0, 1, 2} {
+		s.captureOnce()
+	}
+	at, serial := s.right.LastEvent()
+	if serial != 1 || !at.Equal(base.Add(800*time.Millisecond)) {
+		t.Fatalf("slow-poll valid frames did not confirm from first lower capture: %v/%d", at, serial)
+	}
+	if got := s.right.LatestRemaining(base.Add(1750 * time.Millisecond)); len(got) != 1 || got[0] != 14.05 {
+		t.Fatalf("event formula changed: remaining=%v", got)
+	}
+}
+
+func TestCaptureOnceMuMuRightDropConfirmsAcrossSuccessfulSDKCalls(t *testing.T) {
+	for _, slots := range []int{4, 6} {
+		t.Run(fmt.Sprintf("%d slots", slots), func(t *testing.T) {
+			base := time.Unix(1_700_000_000, 0)
+			s := testSession([]frame.Frame{
+				{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: slots, Beads: testBeadsForSlots(4, 3, slots), CapturedAt: base},
+				{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: slots, Beads: testBeadsForSlots(4, 2, slots), CapturedAt: base.Add(1040 * time.Millisecond)},
+				{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: slots, Beads: testBeadsForSlots(4, 2, slots), CapturedAt: base.Add(2080 * time.Millisecond)},
+			})
+			for range []int{0, 1, 2} {
+				s.captureOnce()
+			}
+			first, serial := s.right.LastEvent()
+			if serial != 1 || !first.Equal(base.Add(1040*time.Millisecond)) || s.right.EventCount() != 1 {
+				t.Fatalf("right 3/%d→2/%d was not confirmed exactly once: at=%v serial=%d count=%d", slots, slots, first, serial, s.right.EventCount())
+			}
+		})
+	}
+}
+
+func TestCaptureOnceMuMuUntrustedFramesRestartRightDropConfirmation(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	unknown := testBeads(4, 2)
+	unknown[7].Unknown = true
+	for _, tc := range []struct {
+		name        string
+		interrupted frame.Frame
+	}{
+		{name: "unknown", interrupted: frame.Frame{Fighting: true, Scene: "fight", Beads: unknown}},
+		{name: "hold", interrupted: frame.Frame{Fighting: true, Hold: true, Scene: "fight", Beads: testBeads(4, 2)}},
+		{name: "duplicate", interrupted: frame.Frame{Fighting: true, Scene: "fight", Duplicate: true, Beads: testBeads(4, 2)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			interrupted := tc.interrupted
+			interrupted.CaptureMethod = capture.MethodMuMuSDK
+			interrupted.RightSlots = 4
+			interrupted.CapturedAt = base.Add(200 * time.Millisecond)
+			frames := []frame.Frame{
+				{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 3), CapturedAt: base},
+				{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 2), CapturedAt: base.Add(100 * time.Millisecond)},
+				interrupted,
+				{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 2), CapturedAt: base.Add(300 * time.Millisecond)},
+				{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 2), CapturedAt: base.Add(400 * time.Millisecond)},
+			}
+			s := testSession(frames)
+			for i := range frames {
+				s.captureOnce()
+				if i == 2 && s.right.EventCount() != 0 {
+					t.Fatal("untrusted frame supplied a stale confirmation vote")
+				}
+			}
+			if s.right.EventCount() != 1 {
+				t.Fatalf("two fresh low observations after %s should confirm once, got %d", tc.name, s.right.EventCount())
+			}
+		})
+	}
+}
+
+func TestCaptureOnceMuMuGapOverBoundRebaselinesRightLowObservation(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	s := testSession([]frame.Frame{
+		{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 3), CapturedAt: base},
+		{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 2), CapturedAt: base.Add(1040 * time.Millisecond)},
+		// Default bound is 1200ms + 16ms minimum poll cadence; this is outside it.
+		{Fighting: true, Scene: "fight", CaptureMethod: capture.MethodMuMuSDK, RightSlots: 4, Beads: testBeads(4, 2), CapturedAt: base.Add(2300 * time.Millisecond)},
+	})
+	for range []int{0, 1, 2} {
+		s.captureOnce()
+	}
+	if s.right.EventCount() != 0 || s.right.Active() || s.right.LastReady() != 2 {
+		t.Fatalf("over-gap low observation invented an event: count=%d active=%v ready=%d", s.right.EventCount(), s.right.Active(), s.right.LastReady())
+	}
+}
+
 func TestCaptureOnceRepeatedTimestampDoesNotConfirm(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	s := testSession([]frame.Frame{
@@ -434,16 +579,17 @@ func TestCaptureOnceDuplicatePixelsDoNotConfirm(t *testing.T) {
 		{Fighting: true, Beads: testBeads(3, 4), CapturedAt: now.Add(16 * time.Millisecond)},
 		{Fighting: true, Beads: testBeads(3, 4), CapturedAt: now.Add(32 * time.Millisecond), Duplicate: true},
 		{Fighting: true, Beads: testBeads(3, 4), CapturedAt: now.Add(48 * time.Millisecond)},
+		{Fighting: true, Beads: testBeads(3, 4), CapturedAt: now.Add(64 * time.Millisecond)},
 	})
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		s.captureOnce()
 	}
 	if s.left.Active() {
-		t.Fatal("new acquisition timestamp with the same pixels confirmed a drop")
+		t.Fatal("a duplicate must clear the pending vote rather than confirming with stale evidence")
 	}
 	s.captureOnce()
 	if !s.left.Active() {
-		t.Fatal("fresh visual evidence should confirm the drop")
+		t.Fatal("two fresh visual observations after a duplicate should confirm the drop")
 	}
 }
 
@@ -535,14 +681,18 @@ func testSession(frames []frame.Frame) *session {
 }
 
 func testBeads(leftReady, rightReady int) []frame.Bead {
+	return testBeadsForSlots(leftReady, rightReady, 4)
+}
+
+func testBeadsForSlots(leftReady, rightReady, slots int) []frame.Bead {
 	var beads []frame.Bead
-	for side, labels := range [][]string{{"L1", "L2", "L3", "L4"}, {"R1", "R2", "R3", "R4"}} {
+	for side, prefix := range []string{"L", "R"} {
 		ready := leftReady
 		if side == 1 {
 			ready = rightReady
 		}
-		for i, label := range labels {
-			beads = append(beads, frame.Bead{Label: label, Lit: i < ready, Dark: i >= ready})
+		for i := 0; i < slots; i++ {
+			beads = append(beads, frame.Bead{Label: fmt.Sprintf("%s%d", prefix, i+1), Lit: i < ready, Dark: i >= ready})
 		}
 	}
 	return beads

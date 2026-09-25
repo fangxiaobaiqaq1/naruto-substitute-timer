@@ -302,16 +302,17 @@ func TestAnnotatedReplayUsesSameFrameUIState(t *testing.T) {
 	at := time.Unix(1700000000, 0)
 	id := r.Observe(replayTestFrame(at, color.RGBA{R: 31}), at)
 	r.RecordReplayUIState(ReplayUIState{FrameID: id, PlayerSide: "left", OpponentSide: "right", OpponentNinja: "Right Ninja", PrimaryText: "14.9", EventText: "event 7", LeftEventCount: 1, RightEventCount: 7, PreparedAt: at.Add(time.Millisecond)})
+	r.RecordReplayUIApplied(id, "14.5", "", "event 7")
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
 	m := readReplayManifest(t, r)
 	entry := m.Frames[0]
-	if entry.UIState.FrameID != id || entry.UIState.PrimaryText != "14.9" || entry.UIState.EventText != "event 7" || entry.UIState.Unavailable != "" {
+	if entry.UIState.FrameID != id || entry.UIState.PrimaryText != "14.9" || entry.UIState.AppliedPrimaryText != "14.5" || entry.UIState.EventText != "event 7" || entry.UIState.Unavailable != "" {
 		t.Fatalf("wrong same-frame UI state: %+v", entry.UIState)
 	}
 	text := strings.Join(replayLines(entry), "\n")
-	for _, want := range []string{"frame_id=1", "timer=14.9", "event=event 7", "Right Ninja"} {
+	for _, want := range []string{"frame_id=1", "timer prepared=14.9", "timer applied=14.5", "event=event 7", "Right Ninja"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("annotation lacks %q: %s", want, text)
 		}

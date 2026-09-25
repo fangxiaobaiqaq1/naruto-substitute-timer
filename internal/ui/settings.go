@@ -15,6 +15,7 @@ import (
 	"narutotimer/internal/config"
 	"narutotimer/internal/identity"
 	"narutotimer/internal/ninja"
+	"narutotimer/internal/updates"
 )
 
 const identityFreshFor = 2 * time.Second
@@ -161,6 +162,7 @@ func (s *session) openSettings() {
 	mode, remember, top := s.cfg.UI.PlayerSide, s.remember, s.topmost
 	autoText := s.cfg.UI.AutoTextRecognition
 	autoUpdates := s.cfg.UI.AutoCheckUpdates
+	updateSource := s.cfg.UI.UpdateSource
 	opacity, fontScale := s.cfg.UI.WindowOpacity, s.cfg.UI.FontScale
 	appearanceError := s.appearanceError
 	textStatus := s.textStatusText()
@@ -192,6 +194,26 @@ func (s *session) openSettings() {
 	autoUpdateCheck := widget.NewCheck("自动检查软件更新", nil)
 	autoUpdateCheck.SetChecked(autoUpdates)
 	autoUpdateCheck.OnChanged = func(on bool) { showSettingsError(s.setAutoCheckUpdates(on), w) }
+	updateSourceSelect := widget.NewRadioGroup([]string{updates.Gitee.Label(), updates.GitHub.Label()}, nil)
+	if updateSource == string(updates.GitHub) {
+		updateSourceSelect.SetSelected(updates.GitHub.Label())
+	} else {
+		updateSourceSelect.SetSelected(updates.Gitee.Label())
+	}
+	updateSourceSelect.Horizontal = true
+	updateSourceSelect.OnChanged = func(label string) {
+		source := updates.Gitee
+		if label == updates.GitHub.Label() {
+			source = updates.GitHub
+		}
+		if err := s.setUpdateSource(source); err != nil {
+			showSettingsError(err, w)
+			return
+		}
+		// Rebuild update controls so manual checks/downloads immediately use the
+		// newly selected client and its source-specific cached feed.
+		s.openSettings()
+	}
 	updateHint := widget.NewLabel("启动约10秒后检查；之后最多每6小时检查一次。只显示提醒，不会自动下载、重启或打断对局。")
 	updateHint.Wrapping = fyne.TextWrapWord
 
@@ -256,7 +278,7 @@ func (s *session) openSettings() {
 		widget.NewSeparator(), widget.NewLabel("外观与更新"),
 		opacityText, opacitySlider, fontScaleText, fontScaleSlider, resetAppearance,
 		widget.NewLabel("透明度只应用于计时浮窗；设置和更新窗口始终保持不透明。字号会立即预览并自动留出所需空间。"), appearanceNote,
-		autoUpdateCheck, updateHint,
+		autoUpdateCheck, widget.NewLabel("更新源"), updateSourceSelect, updateHint,
 	)
 	diagnosticEntry := widget.NewButton("采集与延迟诊断 / 原帧录制", s.openDiagnostics)
 	bg := canvas.NewRectangle(panelBG)

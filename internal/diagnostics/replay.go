@@ -60,19 +60,25 @@ type replayState struct {
 // capture frame. The UI owns this value; the replay worker only receives this
 // plain data and never reads Fyne objects.
 type ReplayUIState struct {
-	FrameID         uint64    `json:"frame_id"`
-	PlayerSide      string    `json:"player_side,omitempty"`
-	OpponentSide    string    `json:"opponent_side,omitempty"`
-	OpponentNinja   string    `json:"opponent_ninja,omitempty"`
-	PrimaryText     string    `json:"primary_text,omitempty"`
-	AlternateText   string    `json:"alternate_text,omitempty"`
-	EventText       string    `json:"event_text,omitempty"`
-	LeftEventCount  uint64    `json:"left_event_count"`
-	RightEventCount uint64    `json:"right_event_count"`
-	PreparedAt      time.Time `json:"prepared_at,omitempty"`
-	AppliedAt       time.Time `json:"applied_at,omitempty"`
-	DrawnAt         time.Time `json:"drawn_at,omitempty"`
-	Unavailable     string    `json:"unavailable,omitempty"`
+	FrameID       uint64 `json:"frame_id"`
+	PlayerSide    string `json:"player_side,omitempty"`
+	OpponentSide  string `json:"opponent_side,omitempty"`
+	OpponentNinja string `json:"opponent_ninja,omitempty"`
+	// PrimaryText, AlternateText, and EventText are the values prepared when
+	// the capture frame was handled. Applied* records a later Fyne callback's
+	// wall-clock recomputation when queue delay changed presentation.
+	PrimaryText          string    `json:"primary_text,omitempty"`
+	AlternateText        string    `json:"alternate_text,omitempty"`
+	EventText            string    `json:"event_text,omitempty"`
+	AppliedPrimaryText   string    `json:"applied_primary_text,omitempty"`
+	AppliedAlternateText string    `json:"applied_alternate_text,omitempty"`
+	AppliedEventText     string    `json:"applied_event_text,omitempty"`
+	LeftEventCount       uint64    `json:"left_event_count"`
+	RightEventCount      uint64    `json:"right_event_count"`
+	PreparedAt           time.Time `json:"prepared_at,omitempty"`
+	AppliedAt            time.Time `json:"applied_at,omitempty"`
+	DrawnAt              time.Time `json:"drawn_at,omitempty"`
+	Unavailable          string    `json:"unavailable,omitempty"`
 }
 
 type replayWork struct {
@@ -184,6 +190,30 @@ func (r *Recorder) RecordReplayUIState(state ReplayUIState) {
 	if _, exists := r.replay.ui[state.FrameID]; !exists {
 		r.replay.ui[state.FrameID] = state
 	}
+}
+
+// RecordReplayUIApplied records the text actually assigned by the surviving
+// UI callback. It updates only presentation metadata already associated with a
+// frame; it never reads or stores source pixels.
+func (r *Recorder) RecordReplayUIApplied(frameID uint64, primary, alternate, event string) {
+	if frameID == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.replay == nil || r.status.Closed {
+		return
+	}
+	r.replay.mu.Lock()
+	defer r.replay.mu.Unlock()
+	state, ok := r.replay.ui[frameID]
+	if !ok {
+		return
+	}
+	state.AppliedPrimaryText = primary
+	state.AppliedAlternateText = alternate
+	state.AppliedEventText = event
+	r.replay.ui[frameID] = state
 }
 
 func (r *Recorder) MarkReplayUIDrawn(frameID uint64, applied, drawn time.Time) {
@@ -409,7 +439,8 @@ func replayLines(e replayFrame) []string {
 		fmt.Sprintf("right ninja=%s candidate=%s", replayText(e.StateEvidence.RightNinja), replayText(e.StateEvidence.RightNinjaCandidate)),
 		fmt.Sprintf("player=%s opponent=%s (%s)", replayText(e.StateEvidence.PlayerSide), replayText(u.OpponentSide), replayText(u.OpponentNinja)),
 		fmt.Sprintf("slots L=%d R=%d beads=%s", e.StateEvidence.LeftSlots, e.StateEvidence.RightSlots, replayBeads(e.StateEvidence.Beads)),
-		fmt.Sprintf("timer=%s alt=%s event=%s counts L=%s R=%s", replayText(u.PrimaryText), replayText(u.AlternateText), replayText(u.EventText), left, right),
+		fmt.Sprintf("timer prepared=%s alt=%s event=%s counts L=%s R=%s", replayText(u.PrimaryText), replayText(u.AlternateText), replayText(u.EventText), left, right),
+		fmt.Sprintf("timer applied=%s alt=%s event=%s", replayText(u.AppliedPrimaryText), replayText(u.AppliedAlternateText), replayText(u.AppliedEventText)),
 		fmt.Sprintf("capture scene=%s fighting=%v hold=%v status=%s", replayText(e.StateEvidence.Scene), e.StateEvidence.Fighting, e.StateEvidence.Hold, replayText(e.StateEvidence.Status)),
 		fmt.Sprintf("ui prepared=%s applied=%s drawn=%s", stamp(u.PreparedAt), stamp(u.AppliedAt), stamp(u.DrawnAt)),
 		"timer evidence=" + replayText(u.Unavailable),

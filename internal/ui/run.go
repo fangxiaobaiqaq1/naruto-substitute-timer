@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"narutotimer/internal/buildinfo"
+	"narutotimer/internal/capture"
 	"os"
 	"strings"
 	"sync"
@@ -41,9 +42,16 @@ type session struct {
 	captureConfigControl func(config.CaptureConfig) uint64
 	captureState         func() frame.CaptureState
 	captureSource        string
+	captureView          fyne.Window
 	executablePath       string
 	supportRoot          string
 	initialAbout         bool
+	firstRun             bool
+	captureStartOnce     sync.Once
+	onboarding           fyne.Window
+	onboardingCancel     context.CancelFunc
+	onboardingProbe      config.CaptureConfig
+	onboardingProbeOK    bool
 	settingsTabs         *container.AppTabs
 	aboutCancel          context.CancelFunc
 	updateCancel         context.CancelFunc
@@ -96,6 +104,9 @@ type session struct {
 	remember            bool
 	dumpNext            bool
 	busy                bool
+	// lastMuMuAnalysis is the preceding successful frame's local analysis time.
+	// It is scheduling evidence only; it never changes event timestamps.
+	lastMuMuAnalysis time.Duration
 
 	left  timerapp.SideClock
 	right timerapp.SideClock
@@ -110,6 +121,10 @@ type session struct {
 	lastDual        bool
 	clockRevision   uint64
 	overlayRevision uint64
+	// clockNow and clockDo are test-only seams. Production leaves them nil,
+	// so the callback samples time.Now when Fyne applies the update.
+	clockNow func() time.Time
+	clockDo  func(func())
 
 	overlay            *fyne.Container
 	win                fyne.Window
@@ -139,6 +154,10 @@ func WithTextRecognitionControl(set func(bool)) Option {
 func WithCaptureState(state func() frame.CaptureState) Option {
 	return func(s *session) { s.captureState = state }
 }
+
+// WithFirstRun defers live capture until the user has verified and saved an
+// emulator target in the first-run guide.
+func WithFirstRun(firstRun bool) Option { return func(s *session) { s.firstRun = firstRun } }
 
 func WithSupportContext(executable, root string) Option {
 	return func(s *session) {
@@ -190,25 +209,37 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	s.fitOverlayWindow()
 	w.SetFixedSize(true)
 	w.CenterOnScreen()
-	go s.loop()
-	s.startAutomaticUpdateChecks()
-	go func() {
-		if !s.wait(250 * time.Millisecond) {
-			return
-		}
-		fyne.Do(func() {
-			if s.stopped() {
-				return
-			}
-			s.applyInitialWindowAppearance()
-		})
-	}()
-	if s.initialAbout {
+	if s.firstRun {
+		// The selectable source is constructed above but is inert until loop starts.
+		// This keeps first-run probing under the guide's explicit user action.
 		w.Show()
-		s.openAbout()
+		s.openOnboarding()
+	} else {
+		s.startNormalCapture()
+		if s.initialAbout {
+			w.Show()
+			s.openAbout()
+		}
 	}
 	w.ShowAndRun()
 	return nil
+}
+
+func (s *session) startNormalCapture() {
+	s.captureStartOnce.Do(func() {
+		go s.loop()
+		s.startAutomaticUpdateChecks()
+		go func() {
+			if !s.wait(250 * time.Millisecond) {
+				return
+			}
+			fyne.Do(func() {
+				if !s.stopped() {
+					s.applyInitialWindowAppearance()
+				}
+			})
+		}()
+	})
 }
 
 func (s *session) overlayContent() fyne.CanvasObject {
@@ -246,7 +277,13 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	s.info.TextSize = overlayTextSize(11, scale)
 	s.info.Alignment = fyne.TextAlignCenter
 
-	set := widget.NewButton("设置", s.openSettings)
+	set := widget.NewButton("设置", func() {
+		if s.firstRun {
+			s.openOnboarding()
+			return
+		}
+		s.openSettings()
+	})
 	swap := widget.NewButton("换边", s.swapSide)
 	diag := widget.NewButton("诊断", s.openDiagnostics)
 	about := widget.NewButton("关于", s.openAbout)
@@ -336,6 +373,7 @@ func (s *session) stop() {
 		s.stopDiagnostics()
 		s.mu.Lock()
 		aboutCancel, captureCancel := s.aboutCancel, s.captureCancel
+		onboardingCancel := s.onboardingCancel
 		updateCancel, updateService := s.updateCancel, s.updateService
 		s.mu.Unlock()
 		if aboutCancel != nil {
@@ -343,6 +381,9 @@ func (s *session) stop() {
 		}
 		if captureCancel != nil {
 			captureCancel()
+		}
+		if onboardingCancel != nil {
+			onboardingCancel()
 		}
 		if updateCancel != nil {
 			updateCancel()
@@ -556,6 +597,9 @@ func (s *session) captureOnce() {
 		_, leftBefore := s.left.LastEvent()
 		_, rightBefore := s.right.LastEvent()
 		s.observeBeads(f)
+		if f.CaptureMethod == capture.MethodMuMuSDK && !f.CapturedAt.IsZero() && !f.AnalyzedAt.Before(f.CapturedAt) {
+			s.lastMuMuAnalysis = f.AnalyzedAt.Sub(f.CapturedAt)
+		}
 		s.traceConfirmed(trace, leftBefore, rightBefore, time.Now())
 		lc, rc := countReady(f.Beads)
 		s.debugf("fight=%v scene=%s hold=%v beads L=%d R=%d side=%s leftCD=%s rightCD=%s",
@@ -648,15 +692,59 @@ func (s *session) observeRoundOpening(f frame.Frame) {
 	s.armRoundBaseline()
 }
 
-func (s *session) observeBeads(f frame.Frame) {
-	// The same pixels may be polled repeatedly, especially at reduced source FPS.
-	if f.Duplicate {
-		return
+// leidianADBObservationGap permits the documented 2–15 fps ADB capture rate:
+// a 2 fps frame is normally 500ms apart, and one second leaves room for ADB
+// process startup, screencap, PNG decoding, and scheduler jitter. It remains a
+// bounded evidence window, so multi-second stale frames still rebaseline rather
+// than backfilling a substitute event.
+const leidianADBObservationGap = time.Second
+
+// mumuObservationGap bounds the interval between two successful SDK
+// acquisition timestamps: after the first capture, its local analysis must
+// finish, the loop waits until its configured poll cadence, then the next
+// capture may consume its configured caller budget. Thus the bound is
+// Capture.TimeoutMS + max(fight poll interval, preceding analysis duration).
+// This is a scheduling/evidence bound, not timer latency compensation.
+func mumuObservationGap(timeoutMS, pollMS int, precedingAnalysis time.Duration) time.Duration {
+	captureBudget := time.Duration(timeoutMS) * time.Millisecond
+	if captureBudget <= 0 {
+		captureBudget = 1200 * time.Millisecond
 	}
+	poll := time.Duration(pollMS) * time.Millisecond
+	if poll < 16*time.Millisecond {
+		poll = 16 * time.Millisecond
+	}
+	if precedingAnalysis > poll {
+		poll = precedingAnalysis
+	}
+	return captureBudget + poll
+}
+
+func (s *session) observationGap(method string) time.Duration {
+	if method == capture.MethodLeidianADB {
+		return leidianADBObservationGap
+	}
+	if method == capture.MethodMuMuSDK {
+		return mumuObservationGap(s.cfg.Capture.TimeoutMS, s.cfg.UI.PollIntervalMS, s.lastMuMuAnalysis)
+	}
+	// Preserve the existing short interruption boundary for ordinary window
+	// capture, which should supply frames at the configured poll cadence.
 	gap := time.Duration(s.cfg.UI.PollIntervalMS*3) * time.Millisecond
 	if gap < 150*time.Millisecond {
-		gap = 150 * time.Millisecond
+		return 150 * time.Millisecond
 	}
+	return gap
+}
+
+func (s *session) observeBeads(f frame.Frame) {
+	// The same pixels may be polled repeatedly, especially at reduced source FPS.
+	// A duplicate can still be shown as current HUD state, but it cannot bridge
+	// two fresh votes: that would turn a displayed value into timer evidence.
+	if f.Duplicate {
+		s.invalidateObservation(f.CapturedAt)
+		return
+	}
+	gap := s.observationGap(f.CaptureMethod)
 	s.left.SetObservationGap(gap)
 	s.right.SetObservationGap(gap)
 	lc, rc := countReady(f.Beads)
@@ -900,99 +988,151 @@ func clockColor(secs []float64) color.NRGBA {
 }
 
 func (s *session) refreshClock() {
-	s.refreshClockAt(time.Now())
+	s.queueClockRefresh(nil)
 }
 
+// refreshClockAt provides an explicit clock only for deterministic UI tests.
 func (s *session) refreshClockAt(now time.Time) {
+	s.queueClockRefresh(func() time.Time { return now })
+}
+
+type clockPresentation struct {
+	text, eventText, altText string
+	color                    color.NRGBA
+	altColor                 color.NRGBA
+	dual                     bool
+	leftEvent, rightEvent    uint64
+	scale                    float64
+}
+
+// clockPresentationLocked produces every value that can change as wall time
+// advances. The caller must hold s.mu; SideClock event anchors remain untouched.
+func (s *session) clockPresentationLocked(now time.Time) clockPresentation {
+	secs := s.oppRemaining(now)
+	dual, altText, altColor := s.dualClockText(now)
+	leftEvent, rightEvent := s.visibleEventSerials()
+	return clockPresentation{
+		text:       timerapp.FormatCD(secs),
+		eventText:  s.detectedText(),
+		color:      clockColor(secs),
+		dual:       dual,
+		altText:    altText,
+		altColor:   altColor,
+		leftEvent:  leftEvent,
+		rightEvent: rightEvent,
+		scale:      s.cfg.UI.FontScale,
+	}
+}
+
+func (s *session) queueClockRefresh(now func() time.Time) {
 	if s.stopped() || s.cd == nil {
 		return
 	}
+	preparedAt := time.Now()
 	s.mu.Lock()
-	secs := s.oppRemaining(now)
-	eventText := s.detectedText()
-	txt := timerapp.FormatCD(secs)
-	col := clockColor(secs)
-	dual, altText, altColor := s.dualClockText(now)
-	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor
 	trace := s.traceFrame
-	leftEvent, rightEvent := s.visibleEventSerials()
+	// Prepared values are diagnostic evidence only. UI values are deliberately
+	// not cached or applied until the callback obtains its apply-time clock.
+	preparedNow := time.Now()
+	if now != nil {
+		preparedNow = now()
+	} else if s.clockNow != nil {
+		preparedNow = s.clockNow()
+	}
+	prepared := s.clockPresentationLocked(preparedNow)
+	s.clockRevision++
+	revision := s.clockRevision
+	side, leftNinja, rightNinja := s.side, s.leftNinja, s.rightNinja
+	leftCount, rightCount := s.left.EventCount(), s.right.EventCount()
+	s.mu.Unlock()
 	if trace.recorder != nil && trace.id != 0 {
-		opponentSide := ""
-		opponentNinja := ""
-		switch s.side {
+		opponentSide, opponentNinja := "", ""
+		switch side {
 		case "left":
-			opponentSide, opponentNinja = "right", s.rightNinja
+			opponentSide, opponentNinja = "right", rightNinja
 		case "right":
-			opponentSide, opponentNinja = "left", s.leftNinja
+			opponentSide, opponentNinja = "left", leftNinja
 		}
 		trace.recorder.RecordReplayUIState(diagnostics.ReplayUIState{FrameID: trace.id,
-			PlayerSide: s.side, OpponentSide: opponentSide, OpponentNinja: opponentNinja,
-			PrimaryText: txt, AlternateText: altText, EventText: eventText,
-			LeftEventCount: s.left.EventCount(), RightEventCount: s.right.EventCount(), PreparedAt: time.Now()})
+			PlayerSide: side, OpponentSide: opponentSide, OpponentNinja: opponentNinja,
+			PrimaryText: prepared.text, AlternateText: prepared.altText, EventText: prepared.eventText,
+			LeftEventCount: leftCount, RightEventCount: rightCount, PreparedAt: preparedAt})
 	}
-	if same && (trace.id == 0 || trace == s.traceClock) {
+	trace.mark("queued", preparedAt)
+	do := s.clockDo
+	if do == nil {
+		do = fyne.Do
+	}
+	do(func() {
+		// Sample wall time only after this callback reaches Fyne's UI queue. The
+		// optional replacements are test-only; production always executes time.Now.
+		appliedNow := time.Now()
+		if now != nil {
+			appliedNow = now()
+		} else if s.clockNow != nil {
+			appliedNow = s.clockNow()
+		}
+		s.applyClockRefresh(revision, trace, appliedNow)
+	})
+}
+
+// applyClockRefresh is called on the Fyne thread after it samples the actual
+// application time. It checks revision before using that time for presentation.
+func (s *session) applyClockRefresh(revision uint64, trace traceRef, appliedNow time.Time) {
+	if s.stopped() {
+		return
+	}
+	s.mu.Lock()
+	if s.clockRevision != revision {
 		s.mu.Unlock()
 		return
 	}
-	s.lastCD, s.lastEventText, s.lastClockColor = txt, eventText, col
-	s.lastDual, s.lastAlt, s.lastAltColor = dual, altText, altColor
-	s.clockRevision++
-	revision := s.clockRevision
+	presentation := s.clockPresentationLocked(appliedNow)
+	// Caches describe the values actually applied, never a merely queued value.
+	s.lastCD, s.lastEventText, s.lastClockColor = presentation.text, presentation.eventText, presentation.color
+	s.lastDual, s.lastAlt, s.lastAltColor = presentation.dual, presentation.altText, presentation.altColor
 	s.mu.Unlock()
-	trace.mark("queued", time.Now())
-	fyne.Do(func() {
-		if s.stopped() {
-			return
+
+	clockSize := s.cd.MinSize()
+	layoutChanged := false
+	if s.alternateBox != nil {
+		layoutChanged = s.alternateBox.Visible() != presentation.dual || s.altCD.Text != presentation.altText
+		if presentation.dual {
+			s.primaryLabel.Show()
+			s.alternateBox.Show()
+			s.cd.TextSize = overlayTextSize(32, presentation.scale)
+		} else {
+			s.primaryLabel.Hide()
+			s.alternateBox.Hide()
+			s.cd.TextSize = overlayTextSize(44, presentation.scale)
 		}
-		s.mu.Lock()
-		current := s.clockRevision == revision
-		s.mu.Unlock()
-		if !current {
-			return
-		}
-		clockSize := s.cd.MinSize()
-		layoutChanged := false
-		if s.alternateBox != nil {
-			layoutChanged = s.alternateBox.Visible() != dual || s.altCD.Text != altText
-			s.mu.Lock()
-			scale := s.cfg.UI.FontScale
-			s.mu.Unlock()
-			if dual {
-				s.primaryLabel.Show()
-				s.alternateBox.Show()
-				s.cd.TextSize = overlayTextSize(32, scale)
-			} else {
-				s.primaryLabel.Hide()
-				s.alternateBox.Hide()
-				s.cd.TextSize = overlayTextSize(44, scale)
-			}
-			s.altCD.Text, s.altCD.Color = altText, altColor
-			s.altCD.Refresh()
-		}
-		var badgeSize fyne.Size
-		if s.eventTag != nil {
-			badgeSize = s.eventTag.MinSize()
-		}
-		if s.cd.Text != txt || s.cd.Color != col {
-			s.cd.Text = txt
-			s.cd.Color = col
-			s.cd.Refresh()
-		}
-		if s.eventTag != nil && s.eventTag.Text != eventText {
-			s.eventTag.Text = eventText
-			s.eventTag.Refresh()
-		}
-		// canvas.Text.Refresh repaints but does not reflow the neighboring badge.
-		// Going from "—" to a multi-digit clock must also recompute its row layout.
-		if s.overlay != nil && (layoutChanged || s.cd.MinSize() != clockSize || (s.eventTag != nil && s.eventTag.MinSize() != badgeSize)) {
-			s.overlay.Refresh()
-			s.fitOverlayWindow()
-		}
-		if trace.recorder != nil && trace.id != 0 {
-			trace.recorder.CarryEvents(trace.id, leftEvent, rightEvent)
-		}
-		s.traceApplied(trace, false)
-	})
+		s.altCD.Text, s.altCD.Color = presentation.altText, presentation.altColor
+		s.altCD.Refresh()
+	}
+	var badgeSize fyne.Size
+	if s.eventTag != nil {
+		badgeSize = s.eventTag.MinSize()
+	}
+	if s.cd.Text != presentation.text || s.cd.Color != presentation.color {
+		s.cd.Text = presentation.text
+		s.cd.Color = presentation.color
+		s.cd.Refresh()
+	}
+	if s.eventTag != nil && s.eventTag.Text != presentation.eventText {
+		s.eventTag.Text = presentation.eventText
+		s.eventTag.Refresh()
+	}
+	// canvas.Text.Refresh repaints but does not reflow the neighboring badge.
+	// Going from "—" to a multi-digit clock must also recompute its row layout.
+	if s.overlay != nil && (layoutChanged || s.cd.MinSize() != clockSize || (s.eventTag != nil && s.eventTag.MinSize() != badgeSize)) {
+		s.overlay.Refresh()
+		s.fitOverlayWindow()
+	}
+	if trace.recorder != nil && trace.id != 0 {
+		trace.recorder.RecordReplayUIApplied(trace.id, presentation.text, presentation.altText, presentation.eventText)
+		trace.recorder.CarryEvents(trace.id, presentation.leftEvent, presentation.rightEvent)
+	}
+	s.traceApplied(trace, false)
 }
 
 func (s *session) refreshOverlay() {
@@ -1173,7 +1313,7 @@ func sceneName(scene string) string {
 	case "blank":
 		return "画面遮挡"
 	case "unsupported-resolution":
-		return "画面比例未校准"
+		return "画面比例未校准（当前分辨率不支持）"
 	case "":
 		return "未知"
 	default:
@@ -1245,9 +1385,35 @@ func (s *session) updateFeeds() *updates.FeedService {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.updateService == nil {
-		s.updateService = updates.NewFeedService(updates.NewClient())
+		s.updateService = updates.NewFeedService(updates.NewClientForSource(updates.Source(s.cfg.UI.UpdateSource)))
 	}
 	return s.updateService
+}
+
+func (s *session) setUpdateSource(source updates.Source) error {
+	if !source.Valid() {
+		return fmt.Errorf("无效更新源 %q", source)
+	}
+	s.mu.Lock()
+	if s.cfg.UI.UpdateSource == string(source) {
+		s.mu.Unlock()
+		return nil
+	}
+	oldService, oldCancel := s.updateService, s.updateCancel
+	s.cfg.UI.UpdateSource, s.updateService, s.updateCancel = string(source), nil, nil
+	s.updateFeed, s.updateNotice = updates.Feed{}, ""
+	err := s.saveSettingsLocked()
+	s.mu.Unlock()
+	if oldCancel != nil {
+		oldCancel()
+	}
+	if oldService != nil {
+		oldService.Close()
+	}
+	if err == nil {
+		s.startAutomaticUpdateChecks()
+	}
+	return err
 }
 
 func (s *session) startAutomaticUpdateChecks() {
@@ -1260,7 +1426,7 @@ func (s *session) startAutomaticUpdateChecks() {
 	s.updateCancel = cancel
 	service := s.updateService
 	if service == nil {
-		service = updates.NewFeedService(updates.NewClient())
+		service = updates.NewFeedService(updates.NewClientForSource(updates.Source(s.cfg.UI.UpdateSource)))
 		s.updateService = service
 	}
 	s.mu.Unlock()
@@ -1296,6 +1462,12 @@ func (s *session) stopOnceDoneLocked() bool {
 
 func (s *session) handleAutomaticUpdateResult(result updates.MonitorResult) {
 	if result.Err != nil || !result.Notify || s.stopped() {
+		return
+	}
+	s.mu.Lock()
+	selected := updates.Source(s.cfg.UI.UpdateSource)
+	s.mu.Unlock()
+	if result.Feed.Latest.UpdateSource() != selected {
 		return
 	}
 	fyne.Do(func() {

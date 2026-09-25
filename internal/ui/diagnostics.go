@@ -425,11 +425,11 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 		probe.Disable()
 		s.diagnosticLabel.SetText("正在通过独立进程验证 MuMu SDK…")
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), mumu.HelperTransactionTimeout)
 			defer cancel()
 			result, err := support.ProbeSDK(ctx, executable, mumu.Options{
 				InstallDir: target.InstallDir, DLLPath: target.DLLPath, Instance: target.Instance,
-				DisplayID: target.DisplayID, Package: target.Package,
+				DisplayID: target.DisplayID, Package: target.Package, Manual: target.Selection == "manual" || (target.Selection != "auto" && (target.InstallDir != "" || target.Instance != 0 || target.DLLPath != "")),
 			})
 			fyne.Do(func() {
 				if s.stopped() || s.diagnosticWindow != w {
@@ -488,14 +488,14 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 				if executable == "" {
 					executable, _ = os.Executable()
 				}
-				probeCtx, stopProbe := context.WithTimeout(ctx, 15*time.Second)
+				probeCtx, stopProbe := context.WithTimeout(ctx, mumu.HelperTransactionTimeout)
 				result, probeErr := support.ProbeSDK(probeCtx, executable, mumu.Options{
 					InstallDir: target.InstallDir, DLLPath: target.DLLPath, Instance: target.Instance,
-					DisplayID: target.DisplayID, Package: target.Package,
+					DisplayID: target.DisplayID, Package: target.Package, Manual: target.Selection == "manual" || (target.Selection != "auto" && (target.InstallDir != "" || target.Instance != 0 || target.DLLPath != "")),
 				})
 				stopProbe()
 				if probeErr != nil {
-					result = mumu.ProbeResult{Requested: mumu.Options{InstallDir: target.InstallDir, DLLPath: target.DLLPath, Instance: target.Instance, DisplayID: target.DisplayID, Package: target.Package}, FailureStage: "SDK 自检子进程", Error: probeErr.Error()}
+					result = mumu.ProbeResult{Requested: mumu.Options{InstallDir: target.InstallDir, DLLPath: target.DLLPath, Instance: target.Instance, DisplayID: target.DisplayID, Package: target.Package, Manual: target.Selection == "manual" || (target.Selection != "auto" && (target.InstallDir != "" || target.Instance != 0 || target.DLLPath != ""))}, FailureStage: "SDK 自检子进程", Error: probeErr.Error()}
 				}
 				probeResult = &result
 			}

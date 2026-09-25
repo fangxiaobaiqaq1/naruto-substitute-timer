@@ -50,6 +50,41 @@ func TestCaptureNewSubstituteAtOldClockBoundary(t *testing.T) {
 	}
 }
 
+func TestClockCallbackUsesApplyTimeAfterQueueDelay(t *testing.T) {
+	a := fynetest.NewApp()
+	t.Cleanup(a.Quit)
+	base := time.Unix(1_700_000_000, 0)
+	now := base
+	var queued []func()
+	s := &session{cfg: config.Default(), side: "left", clockNow: func() time.Time { return now }, clockDo: func(fn func()) {
+		queued = append(queued, fn)
+	}}
+	content := s.overlayContent()
+	fynetest.NewTempWindow(t, content)
+	s.right.Observe(4, true, base.Add(-time.Millisecond), s.cooldown(), 1)
+	s.right.Observe(3, true, base, s.cooldown(), 1)
+
+	s.mu.Lock()
+	prepared := s.clockPresentationLocked(now)
+	s.mu.Unlock()
+	if prepared.text != "15.0" {
+		t.Fatalf("prepared text = %q, want 15.0", prepared.text)
+	}
+	s.refreshClock()
+	if len(queued) != 1 {
+		t.Fatalf("queued callbacks = %d, want 1", len(queued))
+	}
+
+	now = now.Add(500 * time.Millisecond)
+	queued[0]()
+	if s.cd.Text != "14.5" {
+		t.Fatalf("applied text after 500ms queue delay = %q, want 14.5 (not stale 15.0)", s.cd.Text)
+	}
+	if s.lastCD != "14.5" {
+		t.Fatalf("applied countdown cache = %q, want 14.5", s.lastCD)
+	}
+}
+
 func TestEventBadgeRefreshesWhenRoundedClockTextDoesNotChange(t *testing.T) {
 	a := fynetest.NewApp()
 	t.Cleanup(a.Quit)

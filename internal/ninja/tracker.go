@@ -83,10 +83,8 @@ func (t *Tracker) Read(reader *Reader, img *image.RGBA, roi image.Rectangle, sca
 	return unavailable()
 }
 
-// ReadWithAvatar keeps title and portrait evidence independent until a current
-// frame resolves them. It deliberately does not reuse title/portrait identity
-// from prior frames; Tracker still provides only the existing bounded geometry
-// hint and never a name.
+// ReadWithAvatar keeps the legacy fixed-ROI evidence path for callers without
+// current content-area/profile context.
 func (t *Tracker) ReadWithAvatar(reader *Reader, avatar *AvatarTracker, img *image.RGBA, titleROI, avatarROI image.Rectangle, scale float64, now time.Time) Readout {
 	title := t.Read(reader, img, titleROI, scale, now)
 	return reader.ResolveEvidence(img, titleROI, avatarROI, scale, title, avatar, now)

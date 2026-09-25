@@ -38,7 +38,13 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			// interval must not accidentally stretch all of the name lettering.
 			scale := float64(area.W) / 960
 			first := image.Pt(row[0].X, row[0].Y)
-			identified[index] = e.nameTracker[profileIndex][index].ReadWithAvatar(e.names, &e.avatarTracker[profileIndex][index], img, ninja.NameRegion(first, scale, index == 0), ninja.AvatarRegion(first, scale, index == 0), scale, at)
+			// First localize the current portrait within this selected content-area
+			// profile/side. A successful match supplies a current title anchor;
+			// fixed first-bead regions remain the fallback for absent/covered avatars.
+			identified[index] = e.names.ReadLocalizedWithAvatar(
+				&e.nameTracker[profileIndex][index], &e.avatarTracker[profileIndex][index], img, area, profile, index == 0,
+				ninja.NameRegion(first, scale, index == 0), ninja.AvatarRegion(first, scale, index == 0), scale, at,
+			)
 			// Only a recognized six-slot NAME permits usable slots five and six.
 			// A brief label gap retains six UNKNOWN placeholders, never extra votes.
 			if len(row) == 4 && identified[index].Slots == 6 {

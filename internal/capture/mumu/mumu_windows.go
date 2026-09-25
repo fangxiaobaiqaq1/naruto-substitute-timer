@@ -15,14 +15,6 @@ import (
 	"unsafe"
 )
 
-type Options struct {
-	InstallDir string `json:"install_dir"`
-	DLLPath    string `json:"dll_path,omitempty"`
-	Instance   int    `json:"instance"`
-	DisplayID  int    `json:"display_id"`
-	Package    string `json:"package,omitempty"`
-}
-
 type Client struct {
 	mu                           sync.Mutex
 	dll                          *syscall.DLL

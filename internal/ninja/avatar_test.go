@@ -12,6 +12,7 @@ import (
 
 	xdraw "golang.org/x/image/draw"
 	"narutotimer/assets"
+	"narutotimer/internal/detect"
 )
 
 func TestEmbeddedASAvatarCatalogIsBoundedAndValid(t *testing.T) {
@@ -90,6 +91,126 @@ func TestAvatarRegionUsesOneReferenceGeometry(t *testing.T) {
 		if left.Empty() || right.Empty() || left.Dx() < int(60*s)-2 || right.Dx() < int(60*s)-2 {
 			t.Fatalf("width %d: left=%v right=%v", width, left, right)
 		}
+	}
+}
+
+func oneAvatarCatalog(t testing.TB, id string) (*avatarCatalog, image.Image) {
+	t.Helper()
+	all, err := loadEmbeddedAvatarCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := all.byID[id]
+	if entry == nil {
+		t.Fatalf("missing avatar %s", id)
+	}
+	portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &avatarCatalog{entries: []*avatarEntry{entry}, byID: map[string]*avatarEntry{id: entry}}, portrait
+}
+
+func TestAvatarLocalizeReturnsCurrentShiftedAnchor(t *testing.T) {
+	catalog, portrait := oneAvatarCatalog(t, "90511")
+	area := detect.ContentArea{X: 20, Y: 10, W: 960, H: 540}
+	img := image.NewRGBA(image.Rect(0, 0, 1020, 580))
+	at := image.Pt(70, 31) // Deliberately shifted inside the left bounded HUD side.
+	draw.Draw(img, image.Rectangle{Min: at, Max: at.Add(portrait.Bounds().Size())}, portrait, portrait.Bounds().Min, draw.Src)
+	var tracker AvatarTracker
+	got := tracker.Localize(catalog, img, area, "camp", true, 1, time.Unix(100, 0))
+	if got.ID != "90511" || got.Rect.Min != at || got.Rect.Size() != portrait.Bounds().Size() || got.Side != "left" || got.Profile != "camp" {
+		t.Fatalf("localized=%+v want anchor=%v", got, at)
+	}
+}
+
+func TestLocalizedAvatarDerivesShiftedTitleROI(t *testing.T) {
+	catalog, portrait := oneAvatarCatalog(t, "90511")
+	r := NewReader()
+	r.avatars = catalog
+	img := image.NewRGBA(image.Rect(0, 0, 960, 540))
+	avatarAt := image.Pt(70, 31)
+	draw.Draw(img, image.Rectangle{Min: avatarAt, Max: avatarAt.Add(portrait.Bounds().Size())}, portrait, portrait.Bounds().Min, draw.Src)
+	data, err := templates.ReadFile("templates/obito.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	title, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	roi := NameRegionFromAvatar(image.Rectangle{Min: avatarAt, Max: avatarAt.Add(portrait.Bounds().Size())}, 1, true)
+	at := roi.Min.Add(image.Pt(12, 7))
+	draw.Draw(img, image.Rectangle{Min: at, Max: at.Add(title.Bounds().Size())}, title, title.Bounds().Min, draw.Src)
+	var names Tracker
+	var avatars AvatarTracker
+	got := r.ReadLocalizedWithAvatar(&names, &avatars, img, detect.ContentArea{W: 960, H: 540}, "camp", true, NameRegion(image.Pt(93, 61), 1, true), AvatarRegion(image.Pt(93, 61), 1, true), 1, time.Unix(100, 0))
+	if got.Name != Obito || got.TitleName != Obito || got.AvatarName != Obito || got.Slots != 4 || got.Palette != Purple {
+		t.Fatalf("shifted localized fusion=%+v", got)
+	}
+}
+
+func TestAvatarLocalizationSeparatesProfileSideAndBlankFrames(t *testing.T) {
+	catalog, portrait := oneAvatarCatalog(t, "90511")
+	img := image.NewRGBA(image.Rect(0, 0, 960, 540))
+	at := image.Pt(70, 31)
+	draw.Draw(img, image.Rectangle{Min: at, Max: at.Add(portrait.Bounds().Size())}, portrait, portrait.Bounds().Min, draw.Src)
+	var tracker AvatarTracker
+	now := time.Unix(100, 0)
+	if got := tracker.Localize(catalog, img, detect.ContentArea{W: 960, H: 540}, "camp", true, 1, now); got.Name != Obito || got.Rect.Min != at {
+		t.Fatalf("left camp=%+v", got)
+	}
+	if got := tracker.Localize(catalog, img, detect.ContentArea{W: 960, H: 540}, "camp", false, 1, now.Add(time.Millisecond)); got.Name != "" || !got.Rect.Empty() {
+		t.Fatalf("left anchor crossed into right side=%+v", got)
+	}
+	duel := image.NewRGBA(img.Bounds())
+	duelAt := image.Pt(110, 31)
+	draw.Draw(duel, image.Rectangle{Min: duelAt, Max: duelAt.Add(portrait.Bounds().Size())}, portrait, portrait.Bounds().Min, draw.Src)
+	if got := tracker.Localize(catalog, duel, detect.ContentArea{W: 960, H: 540}, "duel", true, 1, now.Add(2*time.Millisecond)); got.Name != Obito || got.Rect.Min != duelAt || got.Profile != "duel" {
+		t.Fatalf("camp anchor crossed into duel=%+v", got)
+	}
+	blank := image.NewRGBA(img.Bounds())
+	if got := tracker.Localize(catalog, blank, detect.ContentArea{W: 960, H: 540}, "duel", true, 1, now.Add(3*time.Millisecond)); got.Name != "" || !got.Rect.Empty() {
+		t.Fatalf("blank frame reused localized anchor=%+v", got)
+	}
+}
+
+func TestLocalizedAvatarFailureUsesFixedROIFallback(t *testing.T) {
+	r := NewReader()
+	img := image.NewRGBA(image.Rect(0, 0, 960, 540))
+	data, err := templates.ReadFile("templates/obito.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	title, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := NameRegion(image.Pt(93, 61), 1, true)
+	at := fixed.Min.Add(image.Pt(12, 7))
+	draw.Draw(img, image.Rectangle{Min: at, Max: at.Add(title.Bounds().Size())}, title, title.Bounds().Min, draw.Src)
+	var names Tracker
+	var avatars AvatarTracker
+	got := r.ReadLocalizedWithAvatar(&names, &avatars, img, detect.ContentArea{W: 960, H: 540}, "camp", true, fixed, AvatarRegion(image.Pt(93, 61), 1, true), 1, time.Unix(100, 0))
+	if got.Name != Obito || got.AvatarName != "" {
+		t.Fatalf("fixed fallback=%+v", got)
+	}
+}
+
+func TestGenericAvatarLocalizationDoesNotInventSpecialPolicy(t *testing.T) {
+	// 90009 is an embedded base avatar and has no reviewed special policy.
+	catalog, portrait := oneAvatarCatalog(t, "90009")
+	img := image.NewRGBA(image.Rect(0, 0, 960, 540))
+	at := image.Pt(70, 31)
+	draw.Draw(img, image.Rectangle{Min: at, Max: at.Add(portrait.Bounds().Size())}, portrait, portrait.Bounds().Min, draw.Src)
+	var tracker AvatarTracker
+	m := tracker.Localize(catalog, img, detect.ContentArea{W: 960, H: 540}, "camp", true, 1, time.Unix(100, 0))
+	if m.Name == "" {
+		t.Fatal("generic current avatar did not localize")
+	}
+	got := avatarReadout(m)
+	if got.Slots != 0 || got.Palette != "" || got.RowOffsetY != 0 {
+		t.Fatalf("generic avatar invented special policy: %+v", got)
 	}
 }
 

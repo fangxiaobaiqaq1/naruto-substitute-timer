@@ -118,6 +118,25 @@ func TestSideClockConfirmUsesFirstCapture(t *testing.T) {
 	}
 }
 
+func TestSideClockHalfSecondConfirmationUsesFirstCapture(t *testing.T) {
+	var c SideClock
+	base := time.Unix(1_700_000_000, 0)
+	first := base.Add(100 * time.Millisecond)
+	confirmation := first.Add(500 * time.Millisecond)
+	c.Observe(4, true, base, 15*time.Second, 2)
+	c.Observe(3, true, first, 15*time.Second, 2)
+	c.Observe(3, true, confirmation, 15*time.Second, 2)
+
+	at, serial := c.LastEvent()
+	if serial != 1 || !at.Equal(first) {
+		t.Fatalf("event=%v/%d, want first lower frame %v", at, serial, first)
+	}
+	got := c.LatestRemaining(confirmation)
+	if len(got) != 1 || math.Abs(got[0]-14.5) > 1e-9 {
+		t.Fatalf("remaining at confirmation = %v, want 14.5 from first capture", got)
+	}
+}
+
 func TestSideClockFlickerDoesNotRestart(t *testing.T) {
 	var c SideClock
 	now := time.Unix(1_700_000_000, 0)
