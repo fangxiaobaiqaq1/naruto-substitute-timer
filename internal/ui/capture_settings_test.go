@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"reflect"
+
 	fynetest "fyne.io/fyne/v2/test"
 	"narutotimer/internal/capture"
 	"narutotimer/internal/capture/mumu"
@@ -24,7 +26,7 @@ func TestCaptureSelectionAppliesAndPersistsWithoutRestart(t *testing.T) {
 	s.openSettings()
 	defer s.settings.Close()
 	s.settingsTabs.SelectIndex(1)
-	apply := overlayButton(s.settings.Content(), "使用选中的进程")
+	apply := overlayButton(s.settings.Content(), "保存并应用")
 	if apply == nil {
 		t.Fatal("missing apply")
 	}
@@ -71,6 +73,67 @@ func TestCaptureStateTextSeparatesSavedAndAppliedTargets(t *testing.T) {
 	}
 }
 
+func TestCaptureProviderOptionsAndDraftPreservation(t *testing.T) {
+	for _, method := range []string{"auto", capture.MethodMuMuSDK, capture.MethodLeidianADB, capture.MethodPrintWindow} {
+		if captureProviderLabel(method) == "" || captureProviderFromLabel(captureProviderLabel(method)) != method {
+			t.Fatalf("missing or non-round-trippable active option %q", method)
+		}
+	}
+
+	original := config.Default().Capture
+	original.Provider = "auto"
+	original.PreferredMethods = []string{capture.MethodLeidianADB, capture.MethodPrintWindow, capture.MethodMuMuSDK}
+	if got := captureConfigWithProvider(original, "auto"); !reflect.DeepEqual(got, original) {
+		t.Fatalf("auto config changed without a provider change: got %+v want %+v", got, original)
+	}
+	if got := captureConfigWithProvider(original, capture.MethodLeidianADB); got.Provider != capture.MethodLeidianADB || !reflect.DeepEqual(got.PreferredMethods, original.PreferredMethods) {
+		t.Fatalf("provider switch must be draft-only and retain fallbacks: %+v", got)
+	}
+}
+
+func TestCaptureSelectingLeidianIsDraftOnlyUntilApply(t *testing.T) {
+	original := config.Default().Capture
+	draft := captureConfigWithProvider(original, capture.MethodLeidianADB)
+	if original.Provider != capture.MethodMuMuSDK || draft.Provider != capture.MethodLeidianADB {
+		t.Fatalf("provider selection must change only the draft: saved=%+v draft=%+v", original, draft)
+	}
+	if !reflect.DeepEqual(original.PreferredMethods, draft.PreferredMethods) {
+		t.Fatalf("provider selection unexpectedly rewrote fallbacks: saved=%+v draft=%+v", original, draft)
+	}
+}
+
+func TestCaptureOpenDoesNotCoerceAutoOrPrintWindow(t *testing.T) {
+	for _, method := range []string{"auto", capture.MethodPrintWindow} {
+		cfg := config.Default().Capture
+		cfg.Provider = method
+		cfg.PreferredMethods = []string{capture.MethodPrintWindow, capture.MethodMuMuSDK}
+		if got := captureConfigWithProvider(cfg, captureProvider(cfg)); !reflect.DeepEqual(got, cfg) {
+			t.Fatalf("opening %s rewrote config: got %+v want %+v", method, got, cfg)
+		}
+	}
+}
+
+func TestCaptureDiscoveryRejectsStaleProviderOrGeneration(t *testing.T) {
+	a := fynetest.NewApp()
+	defer a.Quit()
+	oldView := fynetest.NewTempWindow(t, nil)
+	defer oldView.Close()
+	newView := fynetest.NewTempWindow(t, nil)
+	defer newView.Close()
+	if captureDiscoveryCanApply(oldView, oldView, 2, 2, capture.MethodLeidianADB, capture.MethodLeidianADB) != true {
+		t.Fatal("current discovery should apply")
+	}
+	for _, stale := range []bool{
+		captureDiscoveryCanApply(oldView, oldView, 1, 2, capture.MethodLeidianADB, capture.MethodLeidianADB),
+		captureDiscoveryCanApply(oldView, oldView, 2, 2, capture.MethodLeidianADB, capture.MethodMuMuSDK),
+		captureDiscoveryCanApply(oldView, newView, 2, 2, capture.MethodLeidianADB, capture.MethodLeidianADB),
+	} {
+		if stale {
+			t.Fatal("stale discovery result may overwrite newer selection")
+		}
+	}
+}
+
 func TestCaptureProbeSelectionUsesSoleAutomaticCandidate(t *testing.T) {
 	items := []mumu.ProcessChoice{{Instance: mumu.Instance{Root: `E:\MuMu`, Index: 2, Name: "训练"}}}
 	got, err := captureProbeSelection(0, items, "", "0", config.MuMuCaptureConfig{Selection: "auto", Package: "com.tencent.KiHan"})
@@ -79,6 +142,32 @@ func TestCaptureProbeSelectionUsesSoleAutomaticCandidate(t *testing.T) {
 	}
 	if got.Selection != "manual" || got.InstallDir != `E:\MuMu` || got.Instance != 2 || got.Package != "com.tencent.KiHan" {
 		t.Fatalf("unexpected probe target: %+v", got)
+	}
+}
+
+func TestCaptureConfigForMuMuProbeKeepsSoleAutomaticTargetForSave(t *testing.T) {
+	items := []mumu.ProcessChoice{{Instance: mumu.Instance{Root: `E:\MuMu`, Index: 2, Name: "训练"}}}
+	target, err := captureProbeSelection(0, items, "", "0", config.MuMuCaptureConfig{Selection: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := config.Default().Capture
+	base.PreferredMethods = []string{capture.MethodLeidianADB, capture.MethodPrintWindow, capture.MethodMuMuSDK}
+	draft := captureConfigForMuMuProbe(base, target)
+	if draft.Provider != capture.MethodMuMuSDK || !reflect.DeepEqual(draft.PreferredMethods, base.PreferredMethods) {
+		t.Fatalf("probe unexpectedly rewrote configured fallbacks: %+v", draft)
+	}
+	if draft.MuMu.Selection != "manual" || draft.MuMu.InstallDir != `E:\MuMu` || draft.MuMu.Instance != 2 {
+		t.Fatalf("save draft reverted from verified target: %+v", draft.MuMu)
+	}
+}
+
+func TestCaptureConfigForMuMuProbeChangesWhenTargetChanges(t *testing.T) {
+	probed := captureConfigForMuMuProbe(config.Default().Capture, config.MuMuCaptureConfig{Selection: "manual", InstallDir: `E:\MuMu`, Instance: 2})
+	changed := captureConfigForMuMuProbe(probed, config.MuMuCaptureConfig{Selection: "manual", InstallDir: `E:\MuMu`, Instance: 3})
+	if reflect.DeepEqual(probed, changed) {
+		t.Fatalf("changing the MuMu target must invalidate the probed save config: %+v", changed.MuMu)
 	}
 }
 

@@ -5,9 +5,10 @@ import (
 	"image"
 	"image/draw"
 	"testing"
+	"time"
 )
 
-func TestMadaraCanonicalTitleKeepsSixWarmSlotsOnBothSides(t *testing.T) {
+func TestMadaraCanonicalTitleUsesFourWarmSlotsOnBothSides(t *testing.T) {
 	data, err := templates.ReadFile("templates/madara.png")
 	if err != nil {
 		t.Fatal(err)
@@ -27,14 +28,25 @@ func TestMadaraCanonicalTitleKeepsSixWarmSlotsOnBothSides(t *testing.T) {
 			at := image.Pt(roi.Min.X+12, roi.Min.Y+7)
 			draw.Draw(img, image.Rectangle{Min: at, Max: at.Add(template.Bounds().Size())}, template, template.Bounds().Min, draw.Src)
 			got := NewReader().Read(img, roi, 1)
-			if got.Name != Madara || got.Slots != 6 || got.Palette != Warm || got.RowOffsetY != 0 {
+			if got.Name != Madara || got.Slots != 4 || got.Palette != Warm || got.RowOffsetY != 0 {
 				t.Fatalf("canonical Madara readout=%+v", got)
+			}
+
+			reader := NewReader()
+			var tracker Tracker
+			atTime := time.Unix(1700000000, 0)
+			if got := tracker.Read(reader, img, roi, 1, atTime); got.Name != Madara || got.Slots != 4 || got.Unverified {
+				t.Fatalf("canonical current-frame title=%+v", got)
+			}
+			draw.Draw(img, roi, image.Black, image.Point{}, draw.Src)
+			if got := tracker.Read(reader, img, roi, 1, atTime.Add(time.Millisecond)); got.Name != "" || !got.Unverified || got.Slots != 4 || got.Palette != "" || got.PaletteHint != Warm {
+				t.Fatalf("missing current title retained identity or bean state: %+v", got)
 			}
 		})
 	}
 }
 
-func TestMadaraSixSlotPolicyAcceptsWarmAndBlueBodiesOnBothSides(t *testing.T) {
+func TestMadaraFourSlotPolicyAcceptsWarmAndBlueBodiesOnBothSides(t *testing.T) {
 	for _, side := range []string{"left", "right"} {
 		for _, body := range []struct {
 			name string
@@ -44,14 +56,14 @@ func TestMadaraSixSlotPolicyAcceptsWarmAndBlueBodiesOnBothSides(t *testing.T) {
 			{"blue", 190},
 		} {
 			t.Run(side+"/"+body.name, func(t *testing.T) {
-				// This verifies the identity policy rather than JPEG-sensitive RGB
-				// classification: six warm slots are activated on either backend side.
+				// This verifies the exact title policy rather than JPEG-sensitive RGB
+				// classification: the canonical title keeps the native four-slot row.
 				out := avatarReadout(AvatarMatch{Name: Madara})
 				if out.Name != Madara || out.Slots != 0 || out.Palette != "" {
 					t.Fatalf("avatar-only non-catalog Madara policy=%+v", out)
 				}
-				readout := Readout{Name: Madara, Slots: 6, Palette: Warm}
-				if readout.Slots != 6 || readout.Palette != Warm || body.gray == 0 {
+				readout := Readout{Name: Madara, Slots: 4, Palette: Warm}
+				if readout.Slots != 4 || readout.Palette != Warm || body.gray == 0 {
 					t.Fatalf("%s policy=%+v", body.name, readout)
 				}
 			})

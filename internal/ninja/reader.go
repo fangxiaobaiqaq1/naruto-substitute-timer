@@ -89,7 +89,7 @@ func NewReaderWithAvatars(options AvatarOptions) *Reader {
 		rowOffsetY      float64
 		requirePortrait bool
 	}{
-		{"hashirama", Hashirama, 6, Warm, 0, false}, {"hashirama_alt", Hashirama, 6, Warm, 0, false}, {"madara", Madara, 6, Warm, 0, false},
+		{"hashirama", Hashirama, 6, Warm, 0, false}, {"hashirama_alt", Hashirama, 6, Warm, 0, false}, {"madara", Madara, 4, Warm, 0, false},
 		{"obito", Obito, 4, Purple, 0, false}, {"naruto", Naruto, 4, Red, 0, false}, {"naruto_right", Naruto, 4, Red, 0, false},
 		{"obito_current", Obito, 4, Purple, 0, false},
 		{"sasuke_xiayin", SasukeXiayin, 4, Xiayin, 9, false},

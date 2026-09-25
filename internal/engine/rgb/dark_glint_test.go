@@ -20,7 +20,7 @@ func TestDarkSweepUsesBothCurrentLobesAcrossPalettes(t *testing.T) {
 		dark, rim color.RGBA
 	}{
 		{"ordinary", ninja.Readout{}, color.RGBA{28, 54, 98, 255}, color.RGBA{35, 150, 190, 255}},
-		{"warm-six", ninja.Readout{Name: ninja.Madara, Slots: 6, Palette: ninja.Warm}, color.RGBA{28, 54, 98, 255}, color.RGBA{35, 150, 190, 255}},
+		{"warm-four", ninja.Readout{Name: ninja.Madara, Slots: 4, Palette: ninja.Warm}, color.RGBA{28, 54, 98, 255}, color.RGBA{35, 150, 190, 255}},
 		{"purple", ninja.Readout{Name: ninja.Obito, Slots: 4, Palette: ninja.Purple}, color.RGBA{40, 15, 80, 255}, color.RGBA{200, 50, 240, 255}},
 		{"red", ninja.Readout{Name: ninja.Naruto, Slots: 4, Palette: ninja.Red}, color.RGBA{70, 25, 20, 255}, color.RGBA{240, 65, 18, 255}},
 	} {

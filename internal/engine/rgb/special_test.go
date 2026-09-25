@@ -11,6 +11,7 @@ import (
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/ninja"
+	"time"
 )
 
 func TestReportedSpecialNinjaBeans(t *testing.T) {
@@ -19,7 +20,7 @@ func TestReportedSpecialNinjaBeans(t *testing.T) {
 		x, y, slots, ready int
 	}{
 		{"hashirama-full", ninja.Hashirama, 88, 44, 6, 6}, {"hashirama-three", ninja.Hashirama, 81, 59, 6, 3}, {"hashirama-four", ninja.Hashirama, 83, 52, 6, 4},
-		{"madara-full", ninja.Madara, 92, 61, 6, 6}, {"madara-four", ninja.Madara, 91, 58, 6, 4},
+		{"madara-full", ninja.Madara, 92, 61, 4, 4}, {"madara-four", ninja.Madara, 91, 58, 4, 4},
 		{"obito-full", ninja.Obito, 86, 55, 4, 4}, {"obito-two", ninja.Obito, 87, 56, 4, 2},
 		{"naruto-full", ninja.Naruto, 93, 56, 4, 4}, {"naruto-two", ninja.Naruto, 87, 61, 4, 2},
 	} {
@@ -61,6 +62,82 @@ func TestReportedSpecialNinjaBeans(t *testing.T) {
 			}
 			if count != tc.ready {
 				t.Fatalf("read %d/%d want %d/%d: %+v", count, len(beads), tc.ready, tc.slots, beads)
+			}
+		})
+	}
+}
+
+// The canonical Madara title has four total slots. Exercise the normal
+// four-position layout rather than truncating a generated six-slot row, and
+// decide zero/partial/full states solely from pixels in each fresh frame.
+func TestMadaraCanonicalTitleUsesNativeFourSlotPositionsAndCurrentPixels(t *testing.T) {
+	area := detect.ContentArea{W: 960, H: 540}
+	for _, side := range []string{"left", "right"} {
+		t.Run(side, func(t *testing.T) {
+			layout := engine.NewConfiguredLayout(detect.ModeAuto, config.Default().Layout)
+			allPositions := layout.PositionsIn("camp", area)
+			positions := make([]detect.BeadPosition, 0, 4)
+			sideIndex := 0
+			if side == "right" {
+				sideIndex = 1
+			}
+			for _, p := range allPositions {
+				if p.Side == side {
+					positions = append(positions, p)
+				}
+			}
+			if len(positions) != 4 {
+				t.Fatalf("configured %s four-slot layout=%+v", side, positions)
+			}
+			first := positions[0]
+			for _, tc := range []struct {
+				name  string
+				ready int
+			}{{"zero", 0}, {"partial", 2}, {"full", 4}} {
+				t.Run(tc.name, func(t *testing.T) {
+					img := image.NewRGBA(image.Rect(0, 0, area.W, area.H))
+					roi := ninja.NameRegion(image.Pt(first.X, first.Y), 1, side == "left")
+					name := loadRGBA(t, "../../ninja/templates/madara.png")
+					at := roi.Min.Add(image.Pt(12, 7))
+					draw.Draw(img, image.Rectangle{Min: at, Max: at.Add(name.Bounds().Size())}, name, name.Bounds().Min, draw.Src)
+					for i, p := range positions {
+						c := color.RGBA{28, 54, 98, 255}
+						if i < tc.ready {
+							c = warmTestColor
+						}
+						draw.Draw(img, image.Rect(p.X-3, p.Y-4, p.X+4, p.Y+5), image.NewUniform(c), image.Point{}, draw.Src)
+					}
+					e := &Engine{names: ninja.NewReader()}
+					allGenerated, names := e.specialPositionsForAt("camp", img, allPositions, area, time.Unix(1700000000, 0))
+					if len(allGenerated) != 8 {
+						t.Fatalf("canonical title expanded the two native four-slot rows: %d positions", len(allGenerated))
+					}
+					gotPositions := make([]detect.BeadPosition, 0, 4)
+					for _, p := range allGenerated {
+						if p.Side == side {
+							gotPositions = append(gotPositions, p)
+						}
+					}
+					if names[sideIndex].Name != ninja.Madara || names[sideIndex].Slots != 4 || names[sideIndex].Palette != ninja.Warm {
+						t.Fatalf("canonical title readout=%+v", names[sideIndex])
+					}
+					if len(gotPositions) != 4 {
+						t.Fatalf("generated positions=%d, want native four-slot row: %+v", len(gotPositions), gotPositions)
+					}
+					beads := sampleCalibratedSpecial(img, gotPositions, area, config.Default().Vision, names)
+					ready := 0
+					for _, bead := range beads {
+						if bead.Unknown {
+							t.Fatalf("%s state became unknown: %+v", tc.name, beads)
+						}
+						if bead.Lit {
+							ready++
+						}
+					}
+					if ready != tc.ready {
+						t.Fatalf("current-frame %s=%d/4, want %d/4: %+v", tc.name, ready, tc.ready, beads)
+					}
+				})
 			}
 		})
 	}

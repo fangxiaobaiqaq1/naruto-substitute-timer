@@ -34,8 +34,8 @@ func TestSuppliedVideoRecognitionEvidence(t *testing.T) {
 		// These are actual 1280x720 MuMu frames. The Itachi assertion exercises
 		// the video-derived current-title template at both supplied recordings;
 		// its 13px energy row offset must expose the four current beans.
-		{"2026-09-23 16-33-17", ninja.Madara, ninja.ItachiHyakusen, 6, 4, 4, 4, "frame-03.png"},
-		{"2026-09-23 16-33-25", ninja.Madara, ninja.ItachiHyakusen, 6, 4, 4, 4, "frame-15.png"},
+		{"2026-09-23 16-33-17", ninja.Madara, ninja.ItachiHyakusen, 4, 4, 4, 4, "frame-03.png"},
+		{"2026-09-23 16-33-25", ninja.Madara, ninja.ItachiHyakusen, 4, 4, 4, 4, "frame-15.png"},
 		{"2026-09-23 16-36-05", ninja.Hashirama, ninja.MinatoKyubi, 6, 4, 5, 0, "frame-02.png"},
 		{"2026-09-23 16-39-30", ninja.Obito, ninja.SasukeXiayin, 4, 4, 4, 2, "frame-05.png"},
 	}

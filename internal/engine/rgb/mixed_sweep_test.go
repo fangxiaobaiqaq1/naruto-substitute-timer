@@ -11,7 +11,7 @@ import (
 	"narutotimer/internal/ninja"
 )
 
-// Native SDK evidence of simultaneous full purple / five-of-six warm slots.
+// Native SDK evidence of simultaneous full purple / canonical four-slot warm rows.
 // The user's compressed desktop MP4 identifies the symptom, but is not a
 // substitute for these original pixels when checking thresholds and geometry.
 func TestNativeMixedSweepCurrentPixels(t *testing.T) {
@@ -30,7 +30,7 @@ func TestNativeMixedSweepCurrentPixels(t *testing.T) {
 			for i, path := range files {
 				got := e.AnalyzeAt(loadRGBA(t, path), time.Unix(100, 0).Add(time.Duration(i)*20*time.Millisecond))
 				left, right := countReady(got.Beads)
-				if got.LeftNinja != ninja.SasukeXiayin || got.RightNinja != ninja.Madara || got.LeftSlots != 4 || got.RightSlots != 6 || knownCount(got.Beads) != 10 || left != 4 || right != 5 {
+				if got.LeftNinja != ninja.SasukeXiayin || got.RightNinja != ninja.Madara || got.LeftSlots != 4 || got.RightSlots != 4 || knownCount(got.Beads) != 8 || left != 4 || right != 4 {
 					t.Errorf("%s: %q/%q counts %d/%d: %+v", filepath.Base(path), got.LeftNinja, got.RightNinja, left, right, got.Beads)
 				}
 			}

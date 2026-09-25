@@ -33,12 +33,12 @@ func TestWarmSweepSequenceRejectsFalseEventsAndKeepsRealDrop(t *testing.T) {
 	area := detect.ContentArea{W: 960, H: 540}
 	base := image.NewRGBA(image.Rect(0, 0, area.W, area.H))
 	var positions []detect.BeadPosition
-	for i := range 6 {
+	for i := range 4 {
 		p := detect.BeadPosition{Bead: detect.Bead{Side: "right", Idx: i}, X: 200 - 15*i, Y: 100}
 		positions = append(positions, p)
 		draw.Draw(base, image.Rect(p.X-3, p.Y-5, p.X+4, p.Y+6), image.NewUniform(warmTestColor), image.Point{}, draw.Src)
 	}
-	readouts := [2]ninja.Readout{{}, {Name: ninja.Madara, Slots: 6, Palette: ninja.Warm}}
+	readouts := [2]ninja.Readout{{}, {Name: ninja.Madara, Slots: 4, Palette: ninja.Warm}}
 	var clock app.SideClock
 	clock.SetObservationGap(150 * time.Millisecond)
 	start := time.Unix(1700000000, 0)
@@ -53,46 +53,46 @@ func TestWarmSweepSequenceRejectsFalseEventsAndKeepsRealDrop(t *testing.T) {
 		if ready != wantReady || known != wantKnown {
 			t.Fatalf("frame %d: ready=%d known=%d, want %d/%d: %+v", step, ready, known, wantReady, wantKnown, beads)
 		}
-		if known == 6 {
+		if known == 4 {
 			clock.Observe(ready, true, at, 15*time.Second, 2)
 		} else {
 			clock.InvalidateObservation(at)
 		}
 		return at
 	}
-	feed(base, 6, 6)
+	feed(base, 4, 4)
 	for range 3 {
 		for _, p := range positions {
 			sweep := copyWarmFrame(base)
 			whiteWarmSweep(sweep, p.X, p.Y)
-			feed(sweep, 6, 6)
-			feed(sweep, 6, 6)
-			feed(base, 6, 6)
+			feed(sweep, 4, 4)
+			feed(sweep, 4, 4)
+			feed(base, 4, 4)
 		}
 	}
-	last := positions[5]
+	last := positions[3]
 	covered := copyWarmFrame(base)
 	draw.Draw(covered, image.Rect(last.X-6, last.Y-8, last.X+7, last.Y+9), image.White, image.Point{}, draw.Src)
-	feed(covered, 5, 5)
-	feed(covered, 5, 5)
-	feed(base, 6, 6)
+	feed(covered, 3, 3)
+	feed(covered, 3, 3)
+	feed(base, 4, 4)
 	if clock.EventCount() != 0 {
 		t.Fatalf("idle sweep/occlusion invented %d substitutes", clock.EventCount())
 	}
 	drop := copyWarmFrame(base)
 	draw.Draw(drop, image.Rect(last.X-3, last.Y-5, last.X+4, last.Y+6), image.NewUniform(color.RGBA{28, 54, 98, 255}), image.Point{}, draw.Src)
-	firstDrop := feed(drop, 5, 6)
-	feed(drop, 5, 6)
+	firstDrop := feed(drop, 3, 4)
+	feed(drop, 3, 4)
 	confirmedAt, _ := clock.LastEvent()
 	if clock.EventCount() != 1 || !confirmedAt.Equal(firstDrop) {
-		t.Fatalf("real 6->5->5 must create one event at first drop: count=%d at=%v want=%v", clock.EventCount(), confirmedAt, firstDrop)
+		t.Fatalf("real 4->3->3 must create one event at first drop: count=%d at=%v want=%v", clock.EventCount(), confirmedAt, firstDrop)
 	}
 }
 
-func TestWarmWhiteCoreRequiresFilledBoundedBodyAndSixSlotIdentity(t *testing.T) {
+func TestWarmWhiteCoreRequiresFilledBoundedBodyAndCanonicalFourSlotIdentity(t *testing.T) {
 	area := detect.ContentArea{W: 960, H: 540}
 	p := detect.BeadPosition{Bead: detect.Bead{Side: "right"}, X: 100, Y: 100}
-	readouts := [2]ninja.Readout{{}, {Name: ninja.Madara, Slots: 6, Palette: ninja.Warm}}
+	readouts := [2]ninja.Readout{{}, {Name: ninja.Madara, Slots: 4, Palette: ninja.Warm}}
 	for _, kind := range []string{"white cover", "warm wash", "finite wash", "empty rim", "upper body only", "lower body only", "filled"} {
 		t.Run(kind, func(t *testing.T) {
 			img := image.NewRGBA(image.Rect(0, 0, area.W, area.H))
@@ -125,7 +125,7 @@ func TestWarmWhiteCoreRequiresFilledBoundedBodyAndSixSlotIdentity(t *testing.T) 
 				if !bead.Lit || bead.Unknown {
 					t.Fatalf("filled current body lost: %+v", bead)
 				}
-				for _, untrusted := range []ninja.Readout{{}, {Name: ninja.Madara, Slots: 4, Palette: ninja.Warm}, {Name: ninja.Madara, Slots: 6, Palette: ninja.Warm, Unverified: true}} {
+				for _, untrusted := range []ninja.Readout{{}, {Name: ninja.Madara, Slots: 6, Palette: ninja.Warm}, {Name: ninja.Madara, Slots: 4, Palette: ninja.Warm, Unverified: true}} {
 					bead = sampleCalibratedSpecial(img, []detect.BeadPosition{p}, area, config.Default().Vision, [2]ninja.Readout{{}, untrusted})[0]
 					if !bead.Unknown {
 						t.Fatalf("unverified/wrong topology supplied white votes: %+v -> %+v", untrusted, bead)
@@ -155,7 +155,7 @@ func TestNativeMadaraWarmBodySurvivesSyntheticSweep(t *testing.T) {
 	full := loadRGBA(t, fullPath)
 	baseline := e.Analyze(full)
 	_, count := countReady(baseline.Beads)
-	if baseline.RightNinja != ninja.Madara || baseline.RightSlots != 6 || count != 6 {
+	if baseline.RightNinja != ninja.Madara || baseline.RightSlots != 4 || count != 4 {
 		t.Fatalf("unexpected native fixture: %+v", baseline)
 	}
 	for _, p := range baseline.Beads {
@@ -166,7 +166,7 @@ func TestNativeMadaraWarmBodySurvivesSyntheticSweep(t *testing.T) {
 		whiteWarmSweep(img, p.X, p.Y)
 		got := e.Analyze(img)
 		left, right := countReady(got.Beads)
-		if left != 4 || right != 6 || knownCount(got.Beads) != 10 {
+		if left != 4 || right != 4 || knownCount(got.Beads) != 8 {
 			t.Errorf("sweep on native %s: %+v", p.Label, got.Beads)
 		}
 	}
