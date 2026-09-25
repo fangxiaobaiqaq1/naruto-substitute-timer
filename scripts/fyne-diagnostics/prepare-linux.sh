@@ -9,10 +9,13 @@ script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 project_directory=$(cd -- "$script_directory/../.." && pwd)
 output_path=$(mkdir -p -- "$output_directory" && cd -- "$output_directory" && pwd)
 
+go_binary=${GO:-go}
+
 cd -- "$project_directory"
-module_version=$(go list -m -f '{{.Version}}' fyne.io/fyne/v2)
-module_replace=$(go list -m -f '{{with .Replace}}{{.Path}}{{end}}' fyne.io/fyne/v2)
-module_directory=$(go list -m -f '{{.Dir}}' fyne.io/fyne/v2)
+module_json=$("$go_binary" list -m -json fyne.io/fyne/v2)
+module_version=$(printf '%s\n' "$module_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["Version"])')
+module_replace=$(printf '%s\n' "$module_json" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("Replace", {}).get("Path", ""))')
+module_directory=$(printf '%s\n' "$module_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["Dir"])')
 if [[ $module_version != v2.6.3 || -n $module_replace || ! -d $module_directory ]]; then
     echo "The diagnostics renderer overlay supports unmodified fyne.io/fyne/v2 v2.6.3 only." >&2
     exit 1
@@ -82,10 +85,10 @@ source_path.mkdir(parents=True, exist_ok=True)
 (source_path / "timer_diagnostics_frame.go").write_text(hook_path.read_text())
 PY
 
-gofmt -w "$output_path/_source/loop.go" "$output_path/_source/window.go" "$output_path/_source/timer_diagnostics_frame.go"
+"${go_binary%/go}/gofmt" -w "$output_path/_source/loop.go" "$output_path/_source/window.go" "$output_path/_source/timer_diagnostics_frame.go"
 cp go.mod "$output_path/diagnostics.mod"
 cp go.sum "$output_path/diagnostics.sum"
-go mod edit -modfile="$output_path/diagnostics.mod" "-replace=fyne.io/fyne/v2=$module_alias"
+"$go_binary" mod edit -modfile="$output_path/diagnostics.mod" "-replace=fyne.io/fyne/v2=$module_alias"
 
 python3 - "$module_alias" "$output_path/_source" "$output_path/overlay.json" <<'PY'
 import json
