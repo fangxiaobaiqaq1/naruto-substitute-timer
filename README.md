@@ -40,14 +40,14 @@ Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 
 ## 开发
 
-Go 1.26.1、Windows x64 C/C++ 工具链（cgo）：
+Windows 原生构建的验收路径需要 Go 1.26.1、PowerShell 和 Fyne 所需的 Windows x64 C/C++ 工具链（cgo）。在 Developer PowerShell 中：
 
 ```powershell
 $env:TIMER_VERSION = "v0.2.5"
 .\build.bat
 ```
 
-正式构建通过脚本接入原生绘制诊断，输出到 `bin/`。安装包构建及测试见 [开发与发布](docs/开发与发布.md)。部分历史图像回归需要本地 `inbox/` 证据，不随仓库分发；便携资源、更新协议、配置和合成界面测试可独立运行。
+脚本先执行 `scripts\fyne-diagnostics\prepare.ps1`，再生成 `bin\timer-app.exe`（以及其余四个 EXE）；不要用 `CGO_ENABLED=0` 替代该构建。Linux 可用已安装的 MinGW-w64/llvm-mingw 交叉编译，具体的可复现命令、工具链版本和边界见 [开发与发布](docs/开发与发布.md)。交叉编译产物不等同于 Windows 运行验收。部分历史图像回归需要本地 `inbox/` 证据，不随仓库分发；便携资源、更新协议、配置和合成界面测试可独立运行。
 
 代码入口：`cmd/timer-app`、`internal/ui`、`internal/frame`、`internal/engine`、`internal/updates`。
 

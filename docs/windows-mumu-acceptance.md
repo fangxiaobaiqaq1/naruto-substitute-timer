@@ -5,8 +5,8 @@ checks do **not** validate the MuMu SDK, Fyne/CGO renderer, or runtime capture.
 
 ## Prerequisites
 
-- Windows x64, Go 1.26.1, and the C/C++ toolchain required by Fyne.
-- PowerShell and a running MuMu instance with `com.tencent.KiHan` installed.
+- Windows x64, Go 1.26.1, Windows PowerShell, and the x64 C/C++ toolchain required by Fyne with `CGO_ENABLED=1`. Use an x64 Developer PowerShell or an MSYS2 UCRT64 environment whose compiler, `pkg-config`, headers, and Windows SDK libraries are on `PATH`; do not use `CGO_ENABLED=0` as a substitute.
+- A running MuMu instance with `com.tencent.KiHan` installed.
 - MuMu SDK DLL discoverable from the selected MuMu installation.
 - Optional: GStreamer if replaying the supplied MP4 evidence.
 

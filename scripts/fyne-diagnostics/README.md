@@ -15,6 +15,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fyne-diagnostics/pre
 go build -modfile bin/fyne-diagnostics/diagnostics.mod -overlay bin/fyne-diagnostics/overlay.json -o bin/timer-app-debug.exe ./cmd/timer-app
 ```
 
+For a Linux-hosted cgo cross-build, `prepare-linux.sh` is the auditable equivalent: it requires Bash, Python 3, Go 1.26.1 and an already-installed x64 MinGW-w64/llvm-mingw compiler; it creates a symlink alias where Windows uses a junction. It verifies the same module version and source anchors, and writes only the chosen output directory:
+
+```bash
+export GOOS=windows GOARCH=amd64 CGO_ENABLED=1
+export CC=/path/to/x86_64-w64-mingw32-gcc
+scripts/fyne-diagnostics/prepare-linux.sh bin/fyne-diagnostics-linux
+go build -modfile bin/fyne-diagnostics-linux/diagnostics.mod \
+  -overlay bin/fyne-diagnostics-linux/overlay.json -o bin/timer-app.exe ./cmd/timer-app
+```
+
+This creates a PE file only; it is not a Windows Fyne, MuMu SDK, or emulator runtime validation.
+
 The application discovers the additional method with an optional structural
 interface, so ordinary `go build` and `go test` also work without the overlay:
 
