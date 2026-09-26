@@ -72,6 +72,8 @@ type session struct {
 	roundBaseline       [2]bool // Each side leaves opening calibration independently.
 	roundOpeningActive  bool    // Opening marker can briefly disappear behind animation effects.
 	roundOpeningSeenAt  time.Time
+	lastBeadAt          time.Time
+	cadenceEMA          time.Duration
 	syncLeft            bool
 	syncRight           bool
 	scene               string
@@ -653,9 +655,31 @@ func (s *session) observeBeads(f frame.Frame) {
 	if f.Duplicate {
 		return
 	}
+	// The observation gap guards against bridging unrelated states across a
+	// capture blackout. It must therefore scale with the REAL frame cadence:
+	// engine work (recognition scans) can push inter-frame intervals far past
+	// the poll interval, and a fixed floor would then treat every frame as a
+	// discontinuity, resetting the baseline so a real bead drop can never
+	// gather its confirmation frames. Track an EMA of actual intervals.
+	interval := time.Duration(0)
+	if !s.lastBeadAt.IsZero() && f.CapturedAt.After(s.lastBeadAt) {
+		interval = f.CapturedAt.Sub(s.lastBeadAt)
+	}
+	if s.cadenceEMA <= 0 {
+		s.cadenceEMA = interval
+	} else if interval > 0 {
+		s.cadenceEMA = s.cadenceEMA*3/4 + interval/4
+	}
+	s.lastBeadAt = f.CapturedAt
 	gap := time.Duration(s.cfg.UI.PollIntervalMS*3) * time.Millisecond
+	if adaptive := s.cadenceEMA * 3; adaptive > gap {
+		gap = adaptive
+	}
 	if gap < 150*time.Millisecond {
 		gap = 150 * time.Millisecond
+	}
+	if gap > 8*time.Second {
+		gap = 8 * time.Second
 	}
 	s.left.SetObservationGap(gap)
 	s.right.SetObservationGap(gap)

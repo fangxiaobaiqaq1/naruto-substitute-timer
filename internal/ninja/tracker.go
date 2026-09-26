@@ -50,10 +50,18 @@ func (t *Tracker) Read(reader *Reader, img *image.RGBA, roi image.Rectangle, sca
 			view := img.SubImage(region).(*image.RGBA)
 			score, err := (match.NCC{}).Match(match.Query{Image: view, ROI: region, Prepared: t.hint.template})
 			if err == nil && score.Value >= .80 {
-				t.hint.rect = t.hint.rect.Add(score.Peak.Sub(t.hint.rect.Min))
-				t.hint.Score = score.Value
-				t.verifiedAt = now
-				return t.hint.Readout
+				// A special template stays double-gated: the stored pixels AND
+				// the fixed portrait must both be current. A kept title alone
+				// may never keep an energy-gauge geometry alive.
+				if t.hint.portrait == nil || itachiPortraitEvidence(img, scale, t.hint.portrait, t.hint.portraitSize) {
+					t.hint.rect = t.hint.rect.Add(score.Peak.Sub(t.hint.rect.Min))
+					t.hint.Score = score.Value
+					t.verifiedAt = now
+					// A verified title clears any old failed-search backoff so a
+					// subsequent occlusion still gets its bounded full-ROI search.
+					t.retryAfter = time.Time{}
+					return t.hint.Readout
+				}
 			}
 		}
 		if now.Sub(t.verifiedAt) > time.Second {

@@ -186,13 +186,16 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 		if xiayin {
 			palette = xiayinPalette(img, positions, side.String(), w, h)
 		}
-		var states []detect.BeadState
+		var row []detect.BeadPosition
 		start := len(out)
 		for _, p := range positions {
-			if p.Side != side.String() {
-				continue
+			if p.Side == side.String() {
+				row = append(row, p)
 			}
-			if identified[index].Unverified {
+		}
+		var states []detect.BeadState
+		if identified[index].Unverified {
+			for _, p := range row {
 				// Keep the row topology, but decide each bean from this frame only.
 				// Hints permit current saturated purple bodies; Xiayin also permits
 				// spatially isolated red cores. White flares/gold remain unknown.
@@ -210,119 +213,27 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 				}
 				states = append(states, st)
 				out = append(out, engine.BeadInfo{X: p.X, Y: p.Y, Label: label(side, p.Idx), Lit: st == detect.StateLight, Unknown: st == detect.StateUnknown, Conf: conf})
-				continue
 			}
-			gap := beadHalfPitch(positions, p, 2*w)
-			redHighlight := palette == ninja.Red && redLowerBody(img, p, w, h)
-			purpleHighlight := palette == ninja.Purple && (purpleGlintBody(img, p, w, h, gap) || purplePairedBody(img, p, w, h, gap))
-			goldHighlight := (palette == "" || palette == ninja.Warm) && goldGlintBody(img, p, w, h)
-			blueHighlight := (palette == "" || palette == ninja.Warm) && blueGlintBody(img, p, w, h, gap)
-			// 神驹佑将 uses the established four-slot layout, but its bounded warm
-			// body has the same current-pixel white-glint proof as a six-slot warm
-			// variant. This stays restricted to the exact, current-frame title;
-			// topology hints and other four-slot identities cannot enable it.
-			warmHighlight := palette == ninja.Warm && (identified[index].Slots == 6 || (identified[index].Name == ninja.Madara && identified[index].Slots == 4)) && warmGlintBody(img, p, w, h)
-			light, dark, gold, paleGold, blue, total := 0, 0, 0, 0, 0, 0
-			for dy := -h / 2; dy <= h/2; dy++ {
-				for dx := -w / 2; dx <= w/2; dx++ {
-					if !detect.InBeadDiamond(0, 0, w, h, dx, dy) {
-						continue
+		} else {
+			// A hand-calibrated offset (energy-gauge variants) can drift a few
+			// pixels at some window renderings, and the 5x7 calibrated core then
+			// misses every diamond. When a whole row stays unknown, re-sample
+			// it on a bounded offset grid and keep the best legal row. Identity
+			// stays independent; all evidence is still this frame's pixels.
+			rowInfos, rowStates := sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], image.Point{})
+			if allUnknownStates(rowStates) && len(row) >= 2 {
+				for _, delta := range []image.Point{{3, 0}, {-3, 0}, {0, -3}, {0, 3}, {6, 0}, {-6, 0}, {0, -6}, {0, 6}} {
+					candidateInfos, candidateStates := sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], delta)
+					if rowInfosScore(candidateInfos) > rowInfosScore(rowInfos) {
+						rowInfos, rowStates = candidateInfos, candidateStates
 					}
-					total++
-					if !image.Pt(p.X+dx, p.Y+dy).In(img.Bounds()) {
-						continue
-					}
-					c := img.RGBAAt(p.X+dx, p.Y+dy)
-					r, g, b := int(c.R), int(c.G), int(c.B)
-					if blueHighlight && g >= 190 && b >= 185 && g+15 >= r && b+45 >= r {
-						light++
-						blue++
-						continue
-					}
-					if warmHighlight && r >= 235 && g >= 210 && r+12 >= g && g >= b {
-						light++
-						continue
-					}
-					if purpleHighlight && r >= 235 && b >= 235 && g >= 210 && r+12 >= g && b+12 >= g {
-						light++
-						continue
-					}
-					// The gold idle glint clips the middle to white. Accept that
-					// white only with BOTH current gold body lobes and bounded
-					// spatial contrast; not a nearby rim, bar, or cached count.
-					if goldHighlight && r >= 235 && g >= 210 && r+12 >= g && g >= b {
-						light++
-						gold++
-						continue
-					}
-					// Naruto's charged red bean can flash yellow/white in its core.
-					// This exception needs the exact skin and its own red lower body;
-					// a bright rim/white cover on an empty core is not enough.
-					if redHighlight && r >= 235 && g >= 190 && r >= g && g >= b {
-						light++
-						continue
-					}
-					if st := specialPixel(palette, r, g, b); st != detect.StateUnknown {
-						if st == detect.StateLight {
-							light++
-						} else {
-							dark++
-						}
-						continue
-					}
-					switch {
-					case r >= 190 && g >= 110 && r-b >= 80 && g-b >= 70:
-						light++
-						gold++
-					case r >= 210 && g >= 180 && r-b >= 35 && g-b >= 30:
-						paleGold++
-					case g >= 120 && b >= 150 && b-r >= 20:
-						light++
-						blue++
-					case detect.DarkRange.Contains(r, g, b) && b-r >= 15 && b-g >= 8:
-						dark++
+					if !allUnknownStates(rowStates) {
+						break
 					}
 				}
 			}
-			// A gold sparkle fades towards pale yellow. Count this highlight
-			// only with substantial saturated gold in the same calibrated core;
-			// white or pale effects alone remain unknown.
-			if gold*4 >= total {
-				light += paleGold
-				gold += paleGold
-			}
-			conf := float64(max(light, dark)) / float64(total)
-			margin := math.Abs(float64(light-dark)) / float64(total)
-			st := detect.StateUnknown
-			if conf >= max(0.60, cfg.UnknownBelow) && margin >= max(0.15, cfg.MinimumMargin) {
-				if light > dark {
-					st = detect.StateLight
-				} else {
-					st = detect.StateDark
-				}
-			}
-			if st == detect.StateUnknown && darkGlintBody(img, p, w, h, palette) {
-				st, conf = detect.StateDark, 1
-			}
-			guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
-			// Xiayin's alternate red skin still needs its own bounded body.
-			// Red bars/effects alone must not convert a purple row into ready beans.
-			if st == detect.StateLight && xiayin && palette == ninja.Red && !isolatedRedHalo(img, p, guard) {
-				st = detect.StateUnknown
-			}
-			if st == detect.StateLight && specialWash(img, p, palette, guard) {
-				if !warmHighlight && (palette != ninja.Purple || identified[index].Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard, gap))) {
-					st = detect.StateUnknown
-				}
-			}
-			if st == detect.StateLight && blue > light/2 && !blueBodyVisible(img, p, w, h) {
-				st = detect.StateUnknown
-			}
-			if st == detect.StateLight && gold > light/2 && !goldHighlight && !goldBodyVisible(img, p, w, h) {
-				st = detect.StateUnknown
-			}
-			states = append(states, st)
-			out = append(out, engine.BeadInfo{X: p.X, Y: p.Y, Label: label(side, p.Idx), Lit: st == detect.StateLight, Gold: st == detect.StateLight && gold > light/2, Unknown: st == detect.StateUnknown, Conf: conf})
+			out = append(out, rowInfos...)
+			states = rowStates
 		}
 		if !detect.IsPossiblePrefix(states) {
 			for i := start; i < len(out); i++ {
@@ -333,6 +244,159 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 		}
 	}
 	return out
+}
+
+// sampleCalibratedRow samples one side's complete bean row at calibrated
+// centers shifted by delta. It is the strict core sampler; the retry grid only
+// re-centers the diamond, every judgment stays at the calibrated thresholds.
+func sampleCalibratedRow(img *image.RGBA, row []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, palette ninja.Palette, xiayin bool, identified ninja.Readout, delta image.Point) ([]engine.BeadInfo, []detect.BeadState) {
+	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*float64(area.W)/detect.LogicWidth)))
+	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*float64(area.H)/detect.LogicHeight)))
+	var infos []engine.BeadInfo
+	var states []detect.BeadState
+	for _, p := range row {
+		p = detect.BeadPosition{Bead: p.Bead, X: p.X + delta.X, Y: p.Y + delta.Y}
+		gap := beadHalfPitch(row, p, 2*w)
+		redHighlight := palette == ninja.Red && redLowerBody(img, p, w, h)
+		purpleHighlight := palette == ninja.Purple && (purpleGlintBody(img, p, w, h, gap) || purplePairedBody(img, p, w, h, gap))
+		goldHighlight := (palette == "" || palette == ninja.Warm) && goldGlintBody(img, p, w, h)
+		blueHighlight := (palette == "" || palette == ninja.Warm) && blueGlintBody(img, p, w, h, gap)
+		// 神驹佑将 uses the established four-slot layout, but its bounded warm
+		// body has the same current-pixel white-glint proof as a six-slot warm
+		// variant. This stays restricted to the exact, current-frame title;
+		// topology hints and other four-slot identities cannot enable it.
+		// A wrong topology (Madara with a stale/derived six-slot readout) is
+		// never a six-slot warm variant and must not enable white votes.
+		warmHighlight := palette == ninja.Warm && ((identified.Slots == 6 && identified.Name != ninja.Madara) || (identified.Name == ninja.Madara && identified.Slots == 4)) && warmGlintBody(img, p, w, h)
+		light, dark, gold, paleGold, blue, total := 0, 0, 0, 0, 0, 0
+		for dy := -h / 2; dy <= h/2; dy++ {
+			for dx := -w / 2; dx <= w/2; dx++ {
+				if !detect.InBeadDiamond(0, 0, w, h, dx, dy) {
+					continue
+				}
+				total++
+				if !image.Pt(p.X+dx, p.Y+dy).In(img.Bounds()) {
+					continue
+				}
+				c := img.RGBAAt(p.X+dx, p.Y+dy)
+				r, g, b := int(c.R), int(c.G), int(c.B)
+				if blueHighlight && g >= 190 && b >= 185 && g+15 >= r && b+45 >= r {
+					light++
+					blue++
+					continue
+				}
+				if warmHighlight && r >= 235 && g >= 210 && r+12 >= g && g >= b {
+					light++
+					continue
+				}
+				if purpleHighlight && r >= 235 && b >= 235 && g >= 210 && r+12 >= g && b+12 >= g {
+					light++
+					continue
+				}
+				// The gold idle glint clips the middle to white. Accept that
+				// white only with BOTH current gold body lobes and bounded
+				// spatial contrast; not a nearby rim, bar, or cached count.
+				if goldHighlight && r >= 235 && g >= 210 && r+12 >= g && g >= b {
+					light++
+					gold++
+					continue
+				}
+				// Naruto's charged red bean can flash yellow/white in its core.
+				// This exception needs the exact skin and its own red lower body;
+				// a bright rim/white cover on an empty core is not enough.
+				if redHighlight && r >= 235 && g >= 190 && r >= g && g >= b {
+					light++
+					continue
+				}
+				if st := specialPixel(palette, r, g, b); st != detect.StateUnknown {
+					if st == detect.StateLight {
+						light++
+					} else {
+						dark++
+					}
+					continue
+				}
+				switch {
+				case r >= 190 && g >= 110 && r-b >= 80 && g-b >= 70:
+					light++
+					gold++
+				case r >= 210 && g >= 180 && r-b >= 35 && g-b >= 30:
+					paleGold++
+				case g >= 120 && b >= 150 && b-r >= 20:
+					light++
+					blue++
+				case detect.DarkRange.Contains(r, g, b) && b-r >= 15 && b-g >= 8:
+					dark++
+				}
+			}
+		}
+		// A gold sparkle fades towards pale yellow. Count this highlight
+		// only with substantial saturated gold in the same calibrated core;
+		// white or pale effects alone remain unknown.
+		if gold*4 >= total {
+			light += paleGold
+			gold += paleGold
+		}
+		conf := float64(max(light, dark)) / float64(max(1, total))
+		margin := 0.0
+		if total > 0 {
+			margin = math.Abs(float64(light-dark)) / float64(total)
+		}
+		st := detect.StateUnknown
+		if conf >= max(0.60, cfg.UnknownBelow) && margin >= max(0.15, cfg.MinimumMargin) {
+			if light > dark {
+				st = detect.StateLight
+			} else {
+				st = detect.StateDark
+			}
+		}
+		if st == detect.StateUnknown && darkGlintBody(img, p, w, h, palette) {
+			st, conf = detect.StateDark, 1
+		}
+		guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
+		// Xiayin's alternate red skin still needs its own bounded body.
+		// Red bars/effects alone must not convert a purple row into ready beans.
+		if st == detect.StateLight && xiayin && palette == ninja.Red && !isolatedRedHalo(img, p, guard) {
+			st = detect.StateUnknown
+		}
+		if st == detect.StateLight && specialWash(img, p, palette, guard) {
+			if !warmHighlight && (palette != ninja.Purple || identified.Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard, gap))) {
+				st = detect.StateUnknown
+			}
+		}
+		if st == detect.StateLight && blue > light/2 && !blueBodyVisible(img, p, w, h) {
+			st = detect.StateUnknown
+		}
+		if st == detect.StateLight && gold > light/2 && !goldHighlight && !goldBodyVisible(img, p, w, h) {
+			st = detect.StateUnknown
+		}
+		states = append(states, st)
+		sideName := engine.Left
+		if p.Bead.Side == "right" {
+			sideName = engine.Right
+		}
+		infos = append(infos, engine.BeadInfo{X: p.X, Y: p.Y, Label: label(sideName, p.Bead.Idx), Lit: st == detect.StateLight, Gold: st == detect.StateLight && gold > light/2, Unknown: st == detect.StateUnknown, Conf: conf})
+	}
+	return infos, states
+}
+
+func allUnknownStates(states []detect.BeadState) bool {
+	for _, st := range states {
+		if st != detect.StateUnknown {
+			return false
+		}
+	}
+	return len(states) > 0
+}
+
+func rowInfosScore(infos []engine.BeadInfo) float64 {
+	score := 0.0
+	for _, info := range infos {
+		if !info.Unknown {
+			score += 1 + info.Conf
+		}
+	}
+	return score
 }
 
 func pickLayout(camp, duel []engine.BeadInfo) ([]engine.BeadInfo, string) {

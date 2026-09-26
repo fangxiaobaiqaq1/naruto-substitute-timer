@@ -6,6 +6,7 @@ import (
 	"image"
 	_ "image/png"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -137,8 +138,10 @@ func (r *Reader) Read(img *image.RGBA, roi image.Rectangle, scale float64) Reado
 
 type evidence struct {
 	Readout
-	template *match.PreparedNCC
-	rect     image.Rectangle
+	template     *match.PreparedNCC
+	rect         image.Rectangle
+	portrait     *match.PreparedNCC
+	portraitSize image.Point
 }
 
 func (r *Reader) read(img *image.RGBA, roi image.Rectangle, scale float64) evidence {
@@ -214,8 +217,15 @@ func (r *Reader) read(img *image.RGBA, roi image.Rectangle, scale float64) evide
 	if best.Score < 0.80 || best.Score-runnerUp < 0.08 {
 		return evidence{}
 	}
-	if best.Name == ItachiHyakusen && !itachiPortraitEvidence(img, scale, scaledNameForEvidence(prepared, best)) {
-		return evidence{}
+	// 百战鼬 requires two independent, current-frame signals: its complete title
+	// and its fixed right-HUD portrait. Keep the verified portrait template on
+	// the evidence so the Tracker's fast path can re-check it on later frames.
+	if best.Name == ItachiHyakusen {
+		t := scaledNameForEvidence(prepared, best)
+		if !itachiPortraitEvidence(img, scale, t.portrait, t.portraitSize) {
+			return evidence{}
+		}
+		best.portrait, best.portraitSize = t.portrait, t.portraitSize
 	}
 	return best
 }
@@ -233,7 +243,7 @@ func (r *Reader) ResolveEvidence(img *image.RGBA, titleROI image.Rectangle, avat
 	m := avatar.Read(r.avatars, img, avatarROI, scale, now)
 	out.AvatarName, out.AvatarScore = m.Name, m.Score
 	if title.Name != "" {
-		if m.Name != "" && !sameAvatarVariant(title.Name, m.Name) {
+		if m.Name != "" && !sameAvatarEvidence(title.Name, m) {
 			// A disagreement never enables a version-dependent geometry rule.
 			return Readout{TitleName: title.Name, AvatarName: m.Name, AvatarScore: m.Score}
 		}
@@ -261,6 +271,26 @@ func scaledNameForEvidence(prepared []scaledName, found evidence) scaledName {
 	return scaledName{}
 }
 
+func sameAvatarEvidence(title string, m AvatarMatch) bool {
+	if sameAvatarVariant(title, m.Name) {
+		return true
+	}
+	// The HUD keeps the base form in the title while an equipped seasonal skin
+	// changes only the portrait (骥玄凌霄 over 宇智波斑[神驹佑将]). The title's
+	// base role may therefore corroborate that skin, but the full title keeps
+	// authority: this must never turn the skin into the base variant or enable
+	// a skin-only geometry rule.
+	return m.BaseName != "" && normalizeAvatarName(avatarTitleRole(title)) == normalizeAvatarName(m.BaseName)
+}
+
+// avatarTitleRole extracts the ninja role before the first variant bracket.
+func avatarTitleRole(title string) string {
+	if i := strings.IndexAny(title, "[【「("); i >= 0 {
+		return title[:i]
+	}
+	return title
+}
+
 func avatarReadout(m AvatarMatch) Readout {
 	name := canonicalAvatarName(m.Name)
 	out := Readout{Name: name, AvatarName: name, AvatarScore: m.Score}
@@ -277,8 +307,8 @@ func avatarReadout(m AvatarMatch) Readout {
 	return out
 }
 
-func itachiPortraitEvidence(img *image.RGBA, scale float64, t scaledName) bool {
-	if t.portrait == nil || t.portraitSize.X <= 0 || t.portraitSize.Y <= 0 {
+func itachiPortraitEvidence(img *image.RGBA, scale float64, portrait *match.PreparedNCC, size image.Point) bool {
+	if portrait == nil || size.X <= 0 || size.Y <= 0 {
 		return false
 	}
 	bounds := img.Bounds()
@@ -287,11 +317,11 @@ func itachiPortraitEvidence(img *image.RGBA, scale float64, t scaledName) bool {
 	// special offset. Coordinates are normalized to the 960-wide HUD reference.
 	x0, x1, y0 := 847.5, 918.75, 7.5
 	rect := image.Rect(bounds.Min.X+int(math.Round(x0*scale)), bounds.Min.Y+int(math.Round(y0*scale)), bounds.Min.X+int(math.Round(x1*scale)), bounds.Min.Y+int(math.Round((y0+71)*scale))).Intersect(bounds)
-	if rect.Size() != t.portraitSize {
+	if rect.Size() != size {
 		return false
 	}
 	gray := match.ToGray(img)
-	score, err := (match.NCC{}).Match(match.Query{Image: img, Gray: gray, ROI: rect, Prepared: t.portrait})
+	score, err := (match.NCC{}).Match(match.Query{Image: img, Gray: gray, ROI: rect, Prepared: portrait})
 	return err == nil && score.Value >= .78
 }
 

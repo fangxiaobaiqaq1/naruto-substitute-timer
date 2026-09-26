@@ -66,8 +66,8 @@ func TestEmbeddedAvatarManifestMapsEveryIDToCanonicalMetadata(t *testing.T) {
 			t.Fatalf("skin lacks explicit base mapping: %+v", item)
 		}
 		entry := catalog.byID[item.ID]
-		if entry == nil || entry.name != avatarName(item) {
-			t.Fatalf("ID %s catalog=%+v want=%q", item.ID, entry, avatarName(item))
+		if entry == nil || entry.name != avatarName(item) || entry.baseName != avatarBaseName(item) {
+			t.Fatalf("ID %s catalog=%+v want=%q base=%q", item.ID, entry, avatarName(item), avatarBaseName(item))
 		}
 		if _, err := assets.ASAvatars.ReadFile("avatars/" + item.ID + ".png"); err != nil {
 			t.Fatalf("ID %s missing embedded png: %v", item.ID, err)
@@ -144,6 +144,37 @@ func TestAvatarRecognitionSurvivesScaledLeftAndRightROI(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestAvatarTitleFusionAllowsBaseTitleToCorroborateSkinWithoutChangingIdentity(t *testing.T) {
+	all, err := loadEmbeddedAvatarCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := all.byID["924851"]
+	if entry == nil {
+		t.Fatal("missing Madara skin")
+	}
+	portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewRGBA(portrait.Bounds())
+	draw.Draw(img, img.Bounds(), portrait, portrait.Bounds().Min, draw.Src)
+	r := &Reader{avatars: &avatarCatalog{entries: []*avatarEntry{entry}, byID: map[string]*avatarEntry{entry.id: entry}}}
+	var tracker AvatarTracker
+	got := r.ResolveEvidence(img, image.Rectangle{}, img.Bounds(), 1, Readout{Name: Madara, Slots: 4, Palette: Warm}, &tracker, time.Unix(1, 0))
+	// A cosmetic skin over the base title keeps the title's authority and its
+	// own policy; the skin name stays a display-only AvatarName field.
+	if got.Name != Madara || got.TitleName != Madara || got.AvatarName != entry.name || got.Slots != 4 || got.Palette != Warm {
+		t.Fatalf("base title/skin evidence=%+v", got)
+	}
+	// With the title obscured, the skin portrait remains display identity only:
+	// no slot count, palette, or geometry rule may come from a cosmetic skin.
+	tracker = AvatarTracker{}
+	if got := r.ResolveEvidence(img, image.Rectangle{}, img.Bounds(), 1, Readout{}, &tracker, time.Unix(2, 0)); got.Name != entry.name || got.Slots != 0 || got.Palette != "" || got.RowOffsetY != 0 {
+		t.Fatalf("cosmetic skin must stay display-only: %+v", got)
 	}
 }
 

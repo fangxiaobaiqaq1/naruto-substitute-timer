@@ -37,7 +37,10 @@ func loadLocalRGBA(t *testing.T, path string) *image.RGBA {
 }
 
 // The training HUD visibly includes Minato's energy gauge. Only a currently
-// verified complete title can move that side's sampling row.
+// verified complete title can move that side's sampling row. This capture
+// verifies BOTH complete titles (the training partner also runs
+// 波风水门[九喇嘛连结]); a row without a verified variant stays neutral, as
+// covered by TestEnergyGaugeOffsetIsExactVariantBound.
 func TestMinatoKyubiEnergyGaugeMovesOnlyVerifiedSideRow(t *testing.T) {
 	img := loadLocalRGBA(t, "../../../tmp/user-frames/minato-energy-training.png")
 	cfg, err := config.Load("../../../config.json")
@@ -48,15 +51,12 @@ func TestMinatoKyubiEnergyGaugeMovesOnlyVerifiedSideRow(t *testing.T) {
 	e := NewConfigured(layout, cfg.Vision)
 	e.Prefer("camp")
 	got := e.AnalyzeAt(img, time.Unix(1700000000, 0))
-	if got.LeftNinja != ninja.MinatoKyubi || got.LeftSlots != 4 || got.RightSlots != 4 {
+	if got.LeftNinja != ninja.MinatoKyubi || got.RightNinja != ninja.MinatoKyubi || got.LeftSlots != 4 || got.RightSlots != 4 {
 		t.Fatalf("identity/topology=%+v", got)
 	}
 	for _, bead := range got.Beads {
-		if bead.Label[0] == 'L' && bead.Y != 100 {
-			t.Fatalf("energy-gauge left row did not shift: %+v", bead)
-		}
-		if bead.Label[0] == 'R' && bead.Y != 82 {
-			t.Fatalf("unidentified right row moved: %+v", bead)
+		if bead.Y != 100 {
+			t.Fatalf("verified row did not shift uniformly: %+v", bead)
 		}
 	}
 }

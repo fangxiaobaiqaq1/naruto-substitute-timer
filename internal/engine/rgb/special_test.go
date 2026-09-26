@@ -10,6 +10,7 @@ import (
 
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
+	"narutotimer/internal/engine"
 	"narutotimer/internal/ninja"
 	"time"
 )
