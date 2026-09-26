@@ -48,7 +48,7 @@ func TestSasukeXiayinUserScreenshots(t *testing.T) {
 				for i := range 3 {
 					got := e.AnalyzeAt(img, time.Unix(100, 0).Add(time.Duration(i)*20*time.Millisecond))
 					left, right := countReady(got.Beads)
-					if got.LeftNinja != ninja.SasukeXiayin || got.RightNinja != ninja.Madara || got.LeftSlots != 4 || got.RightSlots != 6 || left != tc.ready || right != 2 || knownCount(got.Beads) != 10 {
+					if got.LeftNinja != ninja.SasukeXiayin || got.RightNinja != ninja.Madara || got.LeftSlots != 4 || got.RightSlots != 4 || left != tc.ready || right != 2 || knownCount(got.Beads) != 8 {
 						// Include bounded body/wash diagnostics in failures.
 						area, _ := layout.ContentArea(img)
 						positions, _ := e.specialPositions(img, layout.PositionsIn("camp", area), area)

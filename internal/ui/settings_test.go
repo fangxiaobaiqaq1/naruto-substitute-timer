@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"image"
 	"image/draw"
 	"image/png"
@@ -19,6 +20,7 @@ import (
 	"narutotimer/internal/engine/factory"
 	"narutotimer/internal/frame"
 	"narutotimer/internal/identity"
+	"narutotimer/internal/updates"
 )
 
 func settingsRadio(root fyne.CanvasObject) *widget.RadioGroup {
@@ -88,6 +90,25 @@ func TestSettingsSideSelectionAppliesWithoutSave(t *testing.T) {
 	}
 	if !radio.Required {
 		t.Fatal("clicking selected side must not clear the mode")
+	}
+}
+
+func TestUpdateSourceSelectionPersistsAndRebuildsService(t *testing.T) {
+	s := &session{cfg: config.Default(), cfgPath: filepath.Join(t.TempDir(), "config.json"), done: make(chan struct{})}
+	old := updates.NewFeedService(updates.NewClient())
+	s.updateService = old
+	if err := s.setUpdateSource(updates.GitHub); err != nil {
+		t.Fatal(err)
+	}
+	if s.cfg.UI.UpdateSource != "github" || s.updateService != nil {
+		t.Fatalf("source/service = %q/%p", s.cfg.UI.UpdateSource, s.updateService)
+	}
+	persisted, err := config.Load(s.cfgPath)
+	if err != nil || persisted.UI.UpdateSource != "github" {
+		t.Fatalf("persisted = %+v, %v", persisted.UI, err)
+	}
+	if _, err := old.Check(context.Background()); err == nil {
+		t.Fatal("old source service was not invalidated")
 	}
 }
 

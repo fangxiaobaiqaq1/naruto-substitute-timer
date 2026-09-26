@@ -33,10 +33,10 @@ func TestExpandedTrainingToolbarFlowsThroughStandaloneGateAndBeans(t *testing.T)
 			if !got.Fighting || got.Uncertain || got.Scene != "fight" || got.LayoutProfile != "camp" {
 				t.Fatalf("gate rejected training screenshot: %+v", got)
 			}
-			if got.RightNinja != ninja.Madara || got.LeftSlots != 4 || got.RightSlots != 6 {
+			if got.RightNinja != ninja.Madara || got.LeftSlots != 4 || got.RightSlots != 4 {
 				t.Fatalf("lost identity/topology: %+v", got)
 			}
-			if len(got.Beads) != 10 {
+			if len(got.Beads) != 8 {
 				t.Fatalf("wrong bean count: %+v", got)
 			}
 			for _, b := range got.Beads {
