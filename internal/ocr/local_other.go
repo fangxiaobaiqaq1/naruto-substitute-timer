@@ -2,6 +2,6 @@
 
 package ocr
 
-func NewLocal() Recognizer { return NewSystem() }
+func NewLocal(...bool) Recognizer { return NewSystem() }
 
 func BackendName() string { return "系统 OCR" }

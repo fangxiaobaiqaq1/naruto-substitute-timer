@@ -9,14 +9,12 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -28,7 +26,6 @@ import (
 	"narutotimer/internal/identity"
 	"narutotimer/internal/ninja"
 	"narutotimer/internal/updates"
-	"narutotimer/internal/win32"
 )
 
 var overlayTitle = "替身 · " + buildinfo.Version
@@ -110,6 +107,10 @@ type session struct {
 	lastAlt         string
 	lastAltColor    color.Color
 	lastDual        bool
+	lastLeftBoth    string
+	lastRightBoth   string
+	lastLeftColor   color.Color
+	lastRightColor  color.Color
 	clockRevision   uint64
 	overlayRevision uint64
 
@@ -118,6 +119,10 @@ type session struct {
 	settings           fyne.Window
 	settingsSide       *widget.RadioGroup
 	cd                 *canvas.Text
+	leftBothCD         *canvas.Text
+	rightBothCD        *canvas.Text
+	bothSideBox        *fyne.Container
+	singleClockRow     *fyne.Container
 	altCD              *canvas.Text
 	primaryLabel       *canvas.Text
 	alternateBox       *fyne.Container
@@ -127,6 +132,8 @@ type session struct {
 	tag                *canvas.Text
 	info               *canvas.Text
 	updateButton       *widget.Button
+	footer             *fyne.Container
+	miniMode           bool
 	topmost            bool
 	overlayOpacity     func(fyne.Window, float64) error // test seam for native HWND application
 	appearanceError    string
@@ -157,7 +164,10 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 		return err
 	}
 	identity.SetMineNames(cfg.UI.PlayerNames)
-	a := app.NewWithID("narutotimer.app")
+	a := newFyneApp()
+	if a == nil {
+		return fmt.Errorf("当前平台没有桌面窗口后端")
+	}
 	a.Settings().SetTheme(newChromaTheme())
 	w := a.NewWindow(overlayTitle)
 	w.SetMaster() // Closing the timer also quits hidden settings windows.
@@ -182,6 +192,7 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	}
 	s.restoreSide()
 	w.SetContent(s.overlayContent())
+	w.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyM, Modifier: fyne.KeyModifierControl}, func(fyne.Shortcut) { s.toggleMini() })
 	s.installDrawTrace()
 	if cfg.DebugOn() {
 		if err := s.startDiagnostics(false); err != nil {
@@ -237,6 +248,14 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	s.alternateSeparator.TextSize = overlayTextSize(24, scale)
 	s.alternateBox = container.NewHBox(container.NewCenter(s.alternateSeparator), container.NewVBox(s.alternateLabel, s.altCD))
 	s.alternateBox.Hide()
+	s.leftBothCD = canvas.NewText("—", clockIdle)
+	s.leftBothCD.TextSize, s.leftBothCD.TextStyle = overlayTextSize(36, scale), fyne.TextStyle{Bold: true}
+	s.rightBothCD = canvas.NewText("—", clockIdle)
+	s.rightBothCD.TextSize, s.rightBothCD.TextStyle = overlayTextSize(36, scale), fyne.TextStyle{Bold: true}
+	leftBoth := container.NewVBox(container.NewCenter(canvas.NewText("左", tagIdle)), container.NewCenter(s.leftBothCD))
+	rightBoth := container.NewVBox(container.NewCenter(canvas.NewText("右", tagIdle)), container.NewCenter(s.rightBothCD))
+	s.bothSideBox = container.NewHBox(leftBoth, canvas.NewText("  ", tagIdle), rightBoth)
+	s.bothSideBox.Hide()
 	primaryBox := container.NewVBox(s.primaryLabel, s.cd)
 	s.eventTag = canvas.NewText("第 0 次", tagIdle)
 	s.eventTag.TextSize = overlayTextSize(13, scale)
@@ -260,16 +279,95 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	swap.Importance = widget.LowImportance
 	diag.Importance = widget.LowImportance
 	glass := canvas.NewRectangle(glassBG)
-	footer := container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about))
-	body := container.NewBorder(nil, footer, nil, nil,
+	s.footer = container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about))
+	s.singleClockRow = container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(s.eventTag))
+	body := container.NewBorder(nil, s.footer, nil, nil,
 		container.NewVBox(
 			container.NewCenter(s.tag),
-			container.NewCenter(container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(s.eventTag))),
+			container.NewCenter(s.singleClockRow),
+			container.NewCenter(s.bothSideBox),
 			container.NewCenter(s.info),
 		),
 	)
 	s.overlay = container.NewStack(glass, body)
+	s.applyMiniVisibility()
+	s.applyBothSideVisibility()
 	return s.overlay
+}
+
+func (s *session) applyBothSideVisibility() {
+	if s.bothSideBox == nil {
+		return
+	}
+	s.mu.Lock()
+	both := s.cfg.UI.ShowBothSides
+	s.mu.Unlock()
+	if both && !s.miniMode {
+		s.bothSideBox.Show()
+		if s.singleClockRow != nil {
+			s.singleClockRow.Hide()
+		}
+	} else {
+		s.bothSideBox.Hide()
+		if s.singleClockRow != nil {
+			s.singleClockRow.Show()
+		}
+	}
+	s.bothSideBox.Refresh()
+	if s.singleClockRow != nil {
+		s.singleClockRow.Refresh()
+	}
+}
+
+func (s *session) applyMiniVisibility() {
+	if s.miniMode {
+		if s.tag != nil {
+			s.tag.Hide()
+		}
+		if s.info != nil {
+			s.info.Hide()
+		}
+		if s.eventTag != nil {
+			s.eventTag.Hide()
+		}
+		if s.footer != nil {
+			s.footer.Hide()
+		}
+	} else {
+		if s.tag != nil {
+			s.tag.Show()
+		}
+		if s.info != nil {
+			s.info.Show()
+		}
+		if s.eventTag != nil {
+			s.eventTag.Show()
+		}
+		if s.footer != nil {
+			s.footer.Show()
+		}
+	}
+	if s.overlay != nil {
+		s.overlay.Refresh()
+	}
+	if s.win != nil {
+		s.fitOverlayWindow()
+	}
+}
+
+func (s *session) toggleMini() {
+	s.mu.Lock()
+	s.miniMode = !s.miniMode
+	if s.miniMode {
+		s.cfg.UI.OverlayMode = "mini"
+	} else {
+		s.cfg.UI.OverlayMode = "full"
+	}
+	err := s.saveSettingsLocked()
+	s.mu.Unlock()
+	s.applyMiniVisibility()
+	s.applyBothSideVisibility()
+	showSettingsError(err, s.win)
 }
 
 // The current policy is user-confirmed: all primary clocks are 15 seconds.
@@ -401,11 +499,21 @@ func (s *session) nextTenthWait() time.Duration {
 	s.mu.Lock()
 	now := time.Now()
 	secs := s.oppRemaining(now)
+	if s.cfg.UI.ShowBothSides {
+		secs = append(secs, s.left.LatestRemaining(now)...)
+		secs = append(secs, s.right.LatestRemaining(now)...)
+	}
 	s.mu.Unlock()
 	if len(secs) == 0 {
 		return 200 * time.Millisecond
 	}
-	return timerapp.NextTenthDelay(secs[0])
+	minimum := secs[0]
+	for _, value := range secs[1:] {
+		if value < minimum {
+			minimum = value
+		}
+	}
+	return timerapp.NextTenthDelay(minimum)
 }
 
 func (s *session) oppRemaining(now time.Time) []float64 {
@@ -937,7 +1045,11 @@ func (s *session) refreshClockAt(now time.Time) {
 	txt := timerapp.FormatCD(secs)
 	col := clockColor(secs)
 	dual, altText, altColor := s.dualClockText(now)
-	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor
+	leftText := timerapp.FormatCD(s.left.LatestRemaining(now))
+	rightText := timerapp.FormatCD(s.right.LatestRemaining(now))
+	leftColor := clockColor(s.left.LatestRemaining(now))
+	rightColor := clockColor(s.right.LatestRemaining(now))
+	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor && s.lastLeftBoth == leftText && s.lastRightBoth == rightText && s.lastLeftColor == leftColor && s.lastRightColor == rightColor
 	trace := s.traceFrame
 	leftEvent, rightEvent := s.visibleEventSerials()
 	if trace.recorder != nil && trace.id != 0 {
@@ -960,6 +1072,8 @@ func (s *session) refreshClockAt(now time.Time) {
 	}
 	s.lastCD, s.lastEventText, s.lastClockColor = txt, eventText, col
 	s.lastDual, s.lastAlt, s.lastAltColor = dual, altText, altColor
+	s.lastLeftBoth, s.lastRightBoth = leftText, rightText
+	s.lastLeftColor, s.lastRightColor = leftColor, rightColor
 	s.clockRevision++
 	revision := s.clockRevision
 	s.mu.Unlock()
@@ -973,6 +1087,12 @@ func (s *session) refreshClockAt(now time.Time) {
 		s.mu.Unlock()
 		if !current {
 			return
+		}
+		if s.bothSideBox != nil && s.cfg.UI.ShowBothSides {
+			s.leftBothCD.Text, s.leftBothCD.Color = leftText, leftColor
+			s.rightBothCD.Text, s.rightBothCD.Color = rightText, rightColor
+			s.leftBothCD.Refresh()
+			s.rightBothCD.Refresh()
 		}
 		clockSize := s.cd.MinSize()
 		layoutChanged := false
@@ -1244,25 +1364,6 @@ func splitNames(s string) []string {
 		out = append(out, n)
 	}
 	return out
-}
-
-func applyTopmost(title string, on bool) {
-	ptr, err := syscall.UTF16PtrFromString(title)
-	if err != nil {
-		return
-	}
-	user32 := syscall.NewLazyDLL("user32.dll")
-	find := user32.NewProc("FindWindowW")
-	hwnd, _, _ := find.Call(0, uintptr(unsafe.Pointer(ptr)))
-	if hwnd == 0 {
-		return
-	}
-	h := win32.HWNDNoTopMost
-	if on {
-		h = win32.HWNDTopMost
-	}
-	win32.ProcSetWindowPos.Call(hwnd, h, 0, 0, 0, 0,
-		uintptr(win32.SWPNoMove|win32.SWPNoSize|win32.SWPNoActivate))
 }
 
 func (s *session) updateFeeds() *updates.FeedService {

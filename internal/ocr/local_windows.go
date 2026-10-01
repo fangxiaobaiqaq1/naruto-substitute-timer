@@ -47,11 +47,17 @@ type localRecognizer struct{ *processRecognizer }
 
 func (*localRecognizer) PrefersColorRows() bool { return true }
 
-func NewLocal() Recognizer {
+func NewLocal(gpu ...bool) Recognizer {
+	useGPU := len(gpu) > 0 && gpu[0]
 	return &localRecognizer{newProcessRecognizer(func(ctx context.Context) *exec.Cmd {
 		executable, err := os.Executable()
 		cmd := exec.CommandContext(ctx, executable, helperArgument)
 		cmd.Err = err
+		provider := "cpu"
+		if useGPU {
+			provider = "directml"
+		}
+		cmd.Env = append(os.Environ(), "NARUTO_OCR_EXECUTION_PROVIDER="+provider)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 		return cmd
 	})}
@@ -85,6 +91,12 @@ func runLocalWorker() (err error) {
 	}
 	if err := options.SetInterOpNumThreads(1); err != nil {
 		return err
+	}
+	if os.Getenv("NARUTO_OCR_EXECUTION_PROVIDER") == "directml" {
+		// DirectML is optional. The shipped CPU runtime or an older Windows
+		// driver may reject the provider, so preserve recognition by falling
+		// back to CPU instead of failing the OCR worker.
+		_ = options.AppendExecutionProviderDirectML(0)
 	}
 	session, err := ort.NewDynamicAdvancedSessionWithONNXData(recognitionModel, []string{"x"}, []string{"softmax_11.tmp_0"}, options)
 	if err != nil {

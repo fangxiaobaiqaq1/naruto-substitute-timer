@@ -17,40 +17,6 @@ import (
 	"time"
 )
 
-// ProcessEvidence is operating-system metadata for one MuMu process. Index is
-// nil when the process command line does not expose a verified instance number;
-// nil must never be rendered as instance 0.
-type ProcessEvidence struct {
-	PID         uint32 `json:"pid"`
-	Name        string `json:"name"`
-	Executable  string `json:"executable,omitempty"`
-	CommandLine string `json:"command_line,omitempty"`
-	Root        string `json:"root,omitempty"`
-	Index       *int   `json:"instance_index,omitempty"`
-	IndexSource string `json:"index_source,omitempty"`
-	Error       string `json:"error,omitempty"`
-}
-
-// Installation is a distinct MuMu product tree. Root plus an instance index is
-// the connection identity: two installations may each have an instance 0.
-type Installation struct {
-	Root          string     `json:"root"`
-	Sources       []string   `json:"sources,omitempty"`
-	ManagerPath   string     `json:"manager_path,omitempty"`
-	SDKCandidates []SDKFile  `json:"sdk_candidates,omitempty"`
-	Instances     []Instance `json:"instances,omitempty"`
-	Error         string     `json:"error,omitempty"`
-}
-
-// Inventory keeps every discovered installation, including ones that fail SDK
-// or manager inspection, so support can see the complete machine state.
-type Inventory struct {
-	GeneratedAt   time.Time         `json:"generated_at"`
-	Installations []Installation    `json:"installations"`
-	Processes     []ProcessEvidence `json:"processes,omitempty"`
-	Errors        []string          `json:"errors,omitempty"`
-}
-
 func canonicalRoot(root string) string {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -143,19 +109,6 @@ func DiscoverInventory(ctx context.Context, hints ...string) Inventory {
 		result.Processes = processes
 	}
 	return result
-}
-
-func (i Inventory) Summary() string {
-	instances, running := 0, 0
-	for _, installation := range i.Installations {
-		instances += len(installation.Instances)
-		for _, instance := range installation.Instances {
-			if instance.Running {
-				running++
-			}
-		}
-	}
-	return fmt.Sprintf("发现 %d 个 MuMu 安装、%d 个实例（运行中 %d 个）", len(i.Installations), instances, running)
 }
 
 // instanceArgument parses MuMu's documented/observed device process index

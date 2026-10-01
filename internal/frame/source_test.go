@@ -260,3 +260,63 @@ func TestDeduplicationUsesVisibleGeometryAndCaptureSource(t *testing.T) {
 		}
 	}
 }
+
+type countingEngine struct {
+	calls int
+}
+
+func (e *countingEngine) Analyze(*image.RGBA) engine.Result {
+	e.calls++
+	return engine.Result{Name: "counting", Fighting: true, Beads: []engine.BeadInfo{{Label: "L1", Lit: true}}}
+}
+
+func TestIdenticalCapturesSkipAnalysisAndChangedPixelsRunItAgain(t *testing.T) {
+	eng := &countingEngine{}
+	img := image.NewRGBA(image.Rect(0, 0, 400, 250))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{90, 120, 140, 255}), image.Point{}, draw.Src)
+	var d dedupedAnalysis
+	at := time.Unix(1700000000, 0)
+	first := d.analyze(img, eng, detect.ModeStretch, at, at.Add(time.Millisecond), "sdk")
+	second := d.analyze(img, eng, detect.ModeStretch, at.Add(16*time.Millisecond), at.Add(17*time.Millisecond), "sdk")
+	if eng.calls != 1 {
+		t.Fatalf("identical pixels were analyzed again: %d calls", eng.calls)
+	}
+	if !second.Fighting || len(second.Beads) != 1 || second.Img != img || !second.CapturedAt.Equal(at.Add(17*time.Millisecond)) {
+		t.Fatalf("reused analysis lost its result or this capture's own metadata: %+v", second)
+	}
+	if !second.AnalysisStarted.IsZero() || !second.AnalyzedAt.IsZero() {
+		t.Fatal("a skipped analysis must not report analysis stage timings")
+	}
+	second.Beads[0].Lit = false
+	if !first.Beads[0].Lit {
+		t.Fatal("reused frames must not share bead slices")
+	}
+	img.SetRGBA(10, 10, color.RGBA{255, 0, 0, 255})
+	if d.analyze(img, eng, detect.ModeStretch, at.Add(32*time.Millisecond), at.Add(33*time.Millisecond), "sdk"); eng.calls != 2 {
+		t.Fatalf("changed pixels must be analyzed: %d calls", eng.calls)
+	}
+	if d.analyze(img, eng, detect.ModeStretch, at.Add(48*time.Millisecond), at.Add(49*time.Millisecond), "window"); eng.calls != 3 {
+		t.Fatalf("a different capture source is a new observation: %d calls", eng.calls)
+	}
+}
+
+func TestFrameFingerprintIgnoresPaddingButNotGeometryOrSource(t *testing.T) {
+	base := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	padded := &image.RGBA{Pix: make([]byte, 20), Stride: 12, Rect: base.Rect}
+	padded.Pix[8] = 100
+	if frameFingerprint(base, "sdk") != frameFingerprint(padded, "sdk") {
+		t.Fatal("row padding is not an observation")
+	}
+	reshaped := image.NewRGBA(image.Rect(0, 0, 4, 1))
+	if frameFingerprint(base, "sdk") == frameFingerprint(reshaped, "sdk") {
+		t.Fatal("different geometry must differ")
+	}
+	if frameFingerprint(base, "sdk") == frameFingerprint(base, "window") {
+		t.Fatal("different capture source must differ")
+	}
+	changed := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	changed.Pix[5] = 1
+	if frameFingerprint(base, "sdk") == frameFingerprint(changed, "sdk") {
+		t.Fatal("a changed pixel must differ")
+	}
+}

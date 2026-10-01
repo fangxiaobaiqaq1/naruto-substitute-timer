@@ -16,28 +16,6 @@ import (
 	"time"
 )
 
-// Instance is identified by Root plus Index. Index 0 in two different
-// installations represents two separate MuMu targets.
-type Instance struct {
-	Root           string `json:"root"`
-	Index          int    `json:"index"`
-	Name           string `json:"name"`
-	Running        bool   `json:"running"`
-	ProcessStarted bool   `json:"process_started"`
-	AndroidStarted bool   `json:"android_started"`
-	PID            int    `json:"manager_pid,omitempty"`
-}
-
-func (i Instance) Label() string {
-	state := "未启动"
-	if i.AndroidStarted {
-		state = "Android 已启动"
-	} else if i.ProcessStarted {
-		state = "进程已启动"
-	}
-	return fmt.Sprintf("%s · 实例 %d · %s · %s", i.Name, i.Index, state, i.Root)
-}
-
 type limitedBuffer struct{ bytes.Buffer }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {

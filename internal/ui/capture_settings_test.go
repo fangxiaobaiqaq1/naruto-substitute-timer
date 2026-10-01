@@ -2,6 +2,7 @@ package ui
 
 import (
 	"reflect"
+	"runtime"
 
 	fynetest "fyne.io/fyne/v2/test"
 	"narutotimer/internal/capture"
@@ -16,6 +17,9 @@ import (
 )
 
 func TestCaptureSelectionAppliesAndPersistsWithoutRestart(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path formatting")
+	}
 	a := fynetest.NewApp()
 	defer a.Quit()
 	s := &session{cfg: config.Default(), cfgPath: filepath.Join(t.TempDir(), "config.json"), done: make(chan struct{})}
@@ -66,7 +70,7 @@ func TestCaptureStateTextSeparatesSavedAndAppliedTargets(t *testing.T) {
 		LastError:         "连接 MuMu 实例失败",
 	}
 	text := captureStateText(`C:\cfg\config.json`, saved, state)
-	for _, want := range []string{"已保存：D:\\MuMu · 实例 0", "已请求应用：E:\\MuMu · 实例 2", "采集器已应用：D:\\MuMu · 实例 0", "正在切换", "最近连接/采集异常"} {
+	for _, want := range []string{"已保存：MuMu · D:\\MuMu · 实例 0", "已请求应用：MuMu · E:\\MuMu · 实例 2", "采集器已应用：MuMu · D:\\MuMu · 实例 0", "正在切换", "最近连接/采集异常"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in %q", want, text)
 		}
@@ -116,10 +120,10 @@ func TestCaptureOpenDoesNotCoerceAutoOrPrintWindow(t *testing.T) {
 func TestCaptureDiscoveryRejectsStaleProviderOrGeneration(t *testing.T) {
 	a := fynetest.NewApp()
 	defer a.Quit()
+	// NewTempWindow already closes both windows in t.Cleanup; a second Close
+	// panics inside the test driver and deadlocks the remaining suite.
 	oldView := fynetest.NewTempWindow(t, nil)
-	defer oldView.Close()
 	newView := fynetest.NewTempWindow(t, nil)
-	defer newView.Close()
 	if captureDiscoveryCanApply(oldView, oldView, 2, 2, capture.MethodLeidianADB, capture.MethodLeidianADB) != true {
 		t.Fatal("current discovery should apply")
 	}

@@ -164,6 +164,7 @@ func (s *session) openSettings() {
 	autoUpdates := s.cfg.UI.AutoCheckUpdates
 	updateSource := s.cfg.UI.UpdateSource
 	opacity, fontScale := s.cfg.UI.WindowOpacity, s.cfg.UI.FontScale
+	overlayMode, showBoth, gpuAccel := s.cfg.UI.OverlayMode, s.cfg.UI.ShowBothSides, s.cfg.UI.GPUAcceleration
 	appearanceError := s.appearanceError
 	textStatus := s.textStatusText()
 	s.mu.Unlock()
@@ -187,6 +188,32 @@ func (s *session) openSettings() {
 	rememberChk.OnChanged = func(checked bool) { showSettingsError(s.setRememberSide(checked), w) }
 	topChk := widget.NewCheck("窗口置顶", nil)
 	topChk.SetChecked(top)
+	miniSel := widget.NewRadioGroup([]string{"完整浮窗", "迷你窗口"}, nil)
+	if overlayMode == "mini" {
+		miniSel.SetSelected("迷你窗口")
+	} else {
+		miniSel.SetSelected("完整浮窗")
+	}
+	miniSel.Horizontal = true
+	bothChk := widget.NewCheck("左右两边都显示替身倒计时", nil)
+	bothChk.SetChecked(showBoth)
+	bothChk.OnChanged = func(on bool) {
+		s.mu.Lock()
+		s.cfg.UI.ShowBothSides = on
+		err := s.saveSettingsLocked()
+		s.mu.Unlock()
+		s.applyBothSideVisibility()
+		showSettingsError(err, w)
+	}
+	gpuChk := widget.NewCheck("启用 GPU 加速（DirectML，需重启）", nil)
+	gpuChk.SetChecked(gpuAccel)
+	gpuChk.OnChanged = func(on bool) {
+		s.mu.Lock()
+		s.cfg.UI.GPUAcceleration = on
+		err := s.saveSettingsLocked()
+		s.mu.Unlock()
+		showSettingsError(err, w)
+	}
 	textCheck := widget.NewCheck("后台识别名字（内置本地 OCR）", nil)
 	textCheck.SetChecked(autoText)
 	textCheck.OnChanged = func(on bool) { showSettingsError(s.setTextRecognition(on), w) }
@@ -263,10 +290,20 @@ func (s *session) openSettings() {
 	hint := widget.NewLabel("认边方式点选即生效。选择的是我方，浮窗计时的是另一边；自动尚未认出时显示待认边。")
 	hint.Wrapping = fyne.TextWrapWord
 	save := widget.NewButton("保存", func() {
+		s.mu.Lock()
+		s.cfg.UI.OverlayMode = "full"
+		if miniSel.Selected == "迷你窗口" {
+			s.cfg.UI.OverlayMode = "mini"
+		}
+		s.miniMode = s.cfg.UI.OverlayMode == "mini"
+		s.cfg.UI.ShowBothSides = bothChk.Checked
+		s.mu.Unlock()
 		if err := s.applySettings(nameEntry.Text, ninjaEntry.Text, sideSel.Selected, rememberChk.Checked, topChk.Checked); err != nil {
 			showSettingsError(err, w)
 			return
 		}
+		s.applyMiniVisibility()
+		s.applyBothSideVisibility()
 		w.Hide()
 	})
 	save.Importance = widget.HighImportance
@@ -275,6 +312,9 @@ func (s *session) openSettings() {
 		widget.NewLabel("我的名字"), nameEntry, textCheck, s.textStatusLabel,
 		widget.NewLabel("指定对面忍者（留空自动识别）"), ninjaEntry,
 		widget.NewLabel("仅照美冥［五代目水影］同时显示15秒/10秒"), topChk,
+		miniSel, bothChk, gpuChk,
+		widget.NewLabel("GPU 加速仅作用于本地 OCR；不可用时自动回退 CPU。修改后重启生效。"),
+		widget.NewLabel("Ctrl+M 可随时切换迷你窗口；迷你窗口隐藏状态和操作按钮。"),
 		widget.NewSeparator(), widget.NewLabel("外观与更新"),
 		opacityText, opacitySlider, fontScaleText, fontScaleSlider, resetAppearance,
 		widget.NewLabel("透明度只应用于计时浮窗；设置和更新窗口始终保持不透明。字号会立即预览并自动留出所需空间。"), appearanceNote,

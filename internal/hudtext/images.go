@@ -80,25 +80,33 @@ func nameRegions(img *image.RGBA, cfg config.LayoutConfig, profile string) ([2]i
 // broad strip may also contain outlined scenery, so established fields use
 // their own live glyph evidence rather than letting any strip pixel erase them.
 func lettering(img *image.RGBA, roi image.Rectangle) ([32]byte, int) {
+	roi = roi.Intersect(img.Bounds())
 	bits := make([]byte, (roi.Dx()*roi.Dy()+7)/8)
 	count := 0
+	if roi.Empty() {
+		return sha256.Sum256(bits), 0
+	}
+	bounds := img.Bounds()
+	// This runs on every fighting frame for both name strips. Reading the row
+	// slice directly avoids a bounds-checked RGBAAt call per pixel; only the
+	// rare bright, low-chroma candidates look at their four outline neighbors.
+	dark := func(x, y int) bool {
+		if x < bounds.Min.X || y < bounds.Min.Y || x >= bounds.Max.X || y >= bounds.Max.Y {
+			return false
+		}
+		o := img.PixOffset(x, y)
+		return max(img.Pix[o], img.Pix[o+1], img.Pix[o+2]) < 90
+	}
 	for y := roi.Min.Y; y < roi.Max.Y; y++ {
+		row := img.Pix[img.PixOffset(roi.Min.X, y):img.PixOffset(roi.Max.X, y)]
 		for x := roi.Min.X; x < roi.Max.X; x++ {
-			c := img.RGBAAt(x, y)
-			if min(c.R, c.G, c.B) < 180 || int(max(c.R, c.G, c.B))-int(min(c.R, c.G, c.B)) > 65 {
+			o := (x - roi.Min.X) * 4
+			r, g, b := row[o], row[o+1], row[o+2]
+			lo, hi := min(r, g, b), max(r, g, b)
+			if lo < 180 || int(hi)-int(lo) > 65 {
 				continue
 			}
-			outlined := false
-			for _, p := range []image.Point{{x - 2, y}, {x + 2, y}, {x, y - 2}, {x, y + 2}} {
-				if p.In(img.Bounds()) {
-					n := img.RGBAAt(p.X, p.Y)
-					if max(n.R, n.G, n.B) < 90 {
-						outlined = true
-						break
-					}
-				}
-			}
-			if !outlined {
+			if !dark(x-2, y) && !dark(x+2, y) && !dark(x, y-2) && !dark(x, y+2) {
 				continue
 			}
 			i := (y-roi.Min.Y)*roi.Dx() + x - roi.Min.X

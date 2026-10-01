@@ -1,9 +1,16 @@
 package config
 
-import "testing"
+import (
+	"errors"
+	"os"
+	"testing"
+)
 
 func TestBundledConfigDoesNotOverrideDuelProfile(t *testing.T) {
 	cfg, err := Load("../../config.json")
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skip("local config.json is not distributed")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

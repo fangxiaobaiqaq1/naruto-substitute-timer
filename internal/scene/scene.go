@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
@@ -59,6 +60,8 @@ type preparedTemplate struct {
 	roi        image.Rectangle
 	gray, mask *image.Gray
 	ncc        *match.PreparedNCC
+	index      int  // Position in Catalog.templates; keys the peak hint.
+	windowed   bool // ROI narrowed to the remembered peak; a miss keeps the hint.
 }
 
 // Catalog 是已加载的模板库。
@@ -75,7 +78,32 @@ type Catalog struct {
 	prepareMu      sync.Mutex
 	preparedArea   detect.ContentArea
 	prepared       []preparedTemplate
+	// hints remember where each template was last accepted for the current
+	// geometry. HUD markers do not move, so a small window around that peak
+	// is checked first; only a miss falls back to the full ROI scan.
+	hintMu sync.Mutex
+	hints  []templateHint
+	// Cold templates (no remembered peak) are rescanned on every frame unless
+	// a fight marker is confirmed on this frame and a full scan ran within the
+	// last coldScanEvery frames and coldScanInterval. Their last scores are
+	// reused in between; a template that was present would hold a hint.
+	coldAt     time.Time
+	coldFrames int
+	lastCold   []Hit
 }
+
+const (
+	coldScanEvery    = 3
+	coldScanInterval = 100 * time.Millisecond
+)
+
+type templateHint struct {
+	peak  image.Point
+	valid bool
+}
+
+// hintRadius bounds the window checked around a remembered peak, in pixels.
+const hintRadius = 2
 
 // Load 默认读取随 EXE 更新的内置资源，显式自定义路径才读取外置 manifest。
 // 自定义文件不存在或 templates 为空时返回 (nil, nil)，由上层回退旧门闩。
@@ -232,6 +260,12 @@ func loadGray(path string) (*image.Gray, error) {
 
 // Decide 实现 engine.Gate。
 func (c *Catalog) Decide(img *image.RGBA) engine.GateDecision {
+	return c.DecideAt(img, time.Now())
+}
+
+// DecideAt implements engine.TimedGate. Acquisition time bounds how long
+// templates without a remembered peak may go unscanned during a confirmed fight.
+func (c *Catalog) DecideAt(img *image.RGBA, at time.Time) engine.GateDecision {
 	if c == nil || img == nil {
 		return engine.GateDecision{Kind: engine.GateUncertain}
 	}
@@ -242,7 +276,11 @@ func (c *Catalog) Decide(img *image.RGBA) engine.GateDecision {
 	if !supported {
 		return engine.GateDecision{Kind: engine.GateUncertain, SceneID: "unsupported-resolution"}
 	}
-	score := c.scorer(img)
+	if at.IsZero() {
+		at = time.Now()
+	}
+	prepared := c.prepare(ca)
+	hits := c.scoreAll(img, prepared, at)
 	var bestFight, bestOther float64
 	var bestRaw float64
 	profileScores := map[string]float64{}
@@ -251,11 +289,11 @@ func (c *Catalog) Decide(img *image.RGBA) engine.GateDecision {
 	var fightLayout string
 	var openingScore float64
 	var openingLayout string
-	for _, t := range c.prepare(ca) {
+	for i, t := range prepared {
 		if t.spec.ContinuationOnly {
 			continue
 		}
-		hit := score(t)
+		hit := hits[i]
 		bestRaw = max(bestRaw, hit.Value)
 		if hit.Value < t.spec.Threshold {
 			continue
@@ -361,10 +399,21 @@ func (c *Catalog) ScoreAll(img *image.RGBA) []Hit {
 	if !supported {
 		return nil
 	}
-	score := c.scorer(img)
+	views := make(map[image.Rectangle]*image.Gray)
 	out := make([]Hit, 0, len(c.templates))
 	for _, t := range c.prepare(ca) {
-		out = append(out, score(t))
+		roi := t.roi.Intersect(img.Bounds())
+		if roi.Empty() || t.gray == nil {
+			out = append(out, Hit{ID: t.spec.ID, Scene: t.spec.Scene})
+			continue
+		}
+		view := img.SubImage(roi).(*image.RGBA)
+		gray, ok := views[roi]
+		if !ok {
+			gray = match.ToGray(view)
+			views[roi] = gray
+		}
+		out = append(out, c.scoreOne(view, gray, t))
 	}
 	return out
 }
@@ -406,9 +455,63 @@ func (c *Catalog) prepare(ca detect.ContentArea) []preparedTemplate {
 	out := make([]preparedTemplate, len(c.templates))
 	for i, t := range c.templates {
 		out[i] = prepareOne(ca, t)
+		out[i].index = i
 	}
 	c.preparedArea, c.prepared = ca, out
+	c.hintMu.Lock()
+	c.hints = make([]templateHint, len(out)) // Peaks belong to one geometry only.
+	c.lastCold = make([]Hit, len(out))
+	c.coldAt, c.coldFrames = time.Time{}, 0
+	c.hintMu.Unlock()
 	return out
+}
+
+// coldScanDue reports whether templates without a remembered peak must be
+// searched on this frame. Time moving backwards (replay seek) always rescans.
+func (c *Catalog) coldScanDue(at time.Time, hotFight bool) bool {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	if !hotFight || c.coldAt.IsZero() || at.Before(c.coldAt) || at.Sub(c.coldAt) >= coldScanInterval || c.coldFrames >= coldScanEvery {
+		return true
+	}
+	c.coldFrames++
+	return false
+}
+
+func (c *Catalog) recordColdScan(at time.Time, hits []Hit) {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	c.coldAt, c.coldFrames = at, 0
+	if len(hits) == len(c.lastCold) {
+		copy(c.lastCold, hits)
+	}
+}
+
+func (c *Catalog) lastColdHit(index int) Hit {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	if index < 0 || index >= len(c.lastCold) {
+		return Hit{}
+	}
+	return c.lastCold[index]
+}
+
+func (c *Catalog) hint(index int) (templateHint, bool) {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	if index < 0 || index >= len(c.hints) {
+		return templateHint{}, false
+	}
+	return c.hints[index], c.hints[index].valid
+}
+
+func (c *Catalog) setHint(index int, peak image.Point, valid bool) {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	if index < 0 || index >= len(c.hints) {
+		return
+	}
+	c.hints[index] = templateHint{peak: peak, valid: valid}
 }
 
 func prepareOne(ca detect.ContentArea, t template) preparedTemplate {
@@ -443,6 +546,49 @@ func prepareOne(ca detect.ContentArea, t template) preparedTemplate {
 	return out
 }
 
+// scoreAll scores every primary template for one frame. Templates with a
+// remembered peak are checked first at that peak; when one of them confirms a
+// fight marker, the remaining cold templates are rescanned only on a bounded
+// cadence and otherwise keep their last full-scan score.
+func (c *Catalog) scoreAll(img *image.RGBA, prepared []preparedTemplate, at time.Time) []Hit {
+	score := c.scorer(img)
+	hits := make([]Hit, len(prepared))
+	done := make([]bool, len(prepared))
+	hotFight := false
+	for i, t := range prepared {
+		if t.spec.ContinuationOnly {
+			continue
+		}
+		if hit, ok := c.scoreAtHint(img, score, t); ok {
+			hits[i], done[i] = hit, true
+			if c.fightSet[t.spec.Scene] {
+				hotFight = true
+			}
+		}
+	}
+	if !c.coldScanDue(at, hotFight) {
+		for i, t := range prepared {
+			if !done[i] && !t.spec.ContinuationOnly {
+				hits[i] = c.lastColdHit(i)
+			}
+		}
+		return hits
+	}
+	for i, t := range prepared {
+		if !done[i] && !t.spec.ContinuationOnly {
+			hits[i] = score(t)
+		}
+	}
+	cold := make([]Hit, len(prepared))
+	for i := range prepared {
+		if !done[i] {
+			cold[i] = hits[i]
+		}
+	}
+	c.recordColdScan(at, cold)
+	return hits
+}
+
 // scorer converts only searched rectangles, not the animation/background of
 // an entire frame. Variants with the same ROI share one gray image. Every view
 // belongs to this call; concurrent catalogs cannot race on reused pixel buffers.
@@ -463,26 +609,79 @@ func (c *Catalog) scorer(img *image.RGBA) func(preparedTemplate) Hit {
 			view.gray = match.ToGray(view.img)
 			views[roi] = view
 		}
-		return c.scoreOne(view.img, view.gray, t)
+		return c.scoreHinted(view.img, view.gray, t)
 	}
 }
 
+// scoreAtHint checks only the remembered peak window. A template that still
+// scores at or above its threshold there is present and its peak is refreshed;
+// the boolean is false when there is no hint or the window misses.
+func (c *Catalog) scoreAtHint(img *image.RGBA, score func(preparedTemplate) Hit, t preparedTemplate) (Hit, bool) {
+	hint, ok := c.hint(t.index)
+	if !ok || t.gray == nil {
+		return Hit{}, false
+	}
+	roi := t.roi.Intersect(img.Bounds())
+	if roi.Empty() {
+		return Hit{}, false
+	}
+	size := t.gray.Bounds().Size()
+	window := image.Rectangle{Min: hint.peak.Sub(image.Pt(hintRadius, hintRadius)), Max: hint.peak.Add(image.Pt(hintRadius, hintRadius)).Add(size)}.Intersect(roi)
+	if window.Dx() < size.X || window.Dy() < size.Y {
+		return Hit{}, false
+	}
+	windowed := t
+	windowed.roi, windowed.windowed = window, true
+	hit := score(windowed)
+	if hit.Value < t.spec.Threshold {
+		return Hit{}, false
+	}
+	return hit, true
+}
+
+// scoreHinted searches the whole ROI and remembers the peak when the template
+// is present, or clears a stale hint. Every value is a real NCC score on this
+// frame; the diagnostics path (scoreOne) never touches hints.
+func (c *Catalog) scoreHinted(img *image.RGBA, gray *image.Gray, t preparedTemplate) Hit {
+	if t.gray == nil {
+		return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
+	}
+	s, err := c.matchIn(img, gray, t.roi, t)
+	if err != nil {
+		if !t.windowed {
+			c.setHint(t.index, image.Point{}, false)
+		}
+		return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
+	}
+	if s.Value >= t.spec.Threshold {
+		c.setHint(t.index, s.Peak, true)
+	} else if !t.windowed {
+		c.setHint(t.index, image.Point{}, false) // Only a full-ROI miss forgets the peak.
+	}
+	return Hit{ID: t.spec.ID, Scene: t.spec.Scene, Value: s.Value}
+}
+
+// scoreOne is the exhaustive form used by diagnostics; it never reads hints.
 func (c *Catalog) scoreOne(img *image.RGBA, gray *image.Gray, t preparedTemplate) Hit {
 	if t.gray == nil {
 		return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
 	}
-	s, err := c.matcher.Match(match.Query{
-		Image:    img,
-		Gray:     gray,
-		ROI:      t.roi,
-		Template: t.gray,
-		Mask:     t.mask,
-		Prepared: t.ncc,
-	})
+	s, err := c.matchIn(img, gray, t.roi, t)
 	if err != nil {
 		return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
 	}
 	return Hit{ID: t.spec.ID, Scene: t.spec.Scene, Value: s.Value}
+}
+
+func (c *Catalog) matchIn(img *image.RGBA, gray *image.Gray, roi image.Rectangle, t preparedTemplate) (match.Score, error) {
+	return c.matcher.Match(match.Query{
+		Image:    img,
+		Gray:     gray,
+		ROI:      roi,
+		Template: t.gray,
+		Mask:     t.mask,
+		Prepared: t.ncc,
+	})
 }
 
 func mapRect(ca detect.ContentArea, r config.NormalizedRect) image.Rectangle {

@@ -58,6 +58,9 @@ type Frame struct {
 	Sequence            uint64
 	Duplicate           bool // Identical pixels; never count as an independent confirmation.
 	Err                 error
+
+	fingerprint   uint64 // Pixel/geometry/source hash computed once per capture.
+	fingerprinted bool
 }
 
 // Provider 每次调用返回最新一帧。由 UI 定时/事件触发调用。

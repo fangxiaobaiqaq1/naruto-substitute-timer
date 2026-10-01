@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package gui 提供替身计时器的纯 Win32 可视化窗口（无 cgo、无第三方 GUI 框架）。
 //
 // 解耦约定：本包不 import internal/win 与 internal/detect —— 它只通过
