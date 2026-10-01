@@ -221,8 +221,11 @@ type UIConfig struct {
 	// WindowOpacity applies only to the compact timer overlay, in [0.40, 1.00].
 	WindowOpacity float64 `json:"windowOpacity"`
 	// FontScale scales compact-overlay text, in [0.80, 1.60].
-	FontScale   float64  `json:"fontScale"`
-	PlayerNames []string `json:"playerNames"`
+	FontScale       float64  `json:"fontScale"`
+	OverlayMode     string   `json:"overlayMode"`
+	ShowBothSides   bool     `json:"showBothSides"`
+	GPUAcceleration bool     `json:"gpuAcceleration"`
+	PlayerNames     []string `json:"playerNames"`
 }
 
 func Default() Config {
@@ -313,6 +316,9 @@ func Default() Config {
 			UpdateSource:              "gitee",
 			WindowOpacity:             1,
 			FontScale:                 1,
+			OverlayMode:               "full",
+			ShowBothSides:             false,
+			GPUAcceleration:           false,
 			// Keep the published default neutral. Users can add their own names
 			// in config.json or through the settings window.
 			PlayerNames: []string{},

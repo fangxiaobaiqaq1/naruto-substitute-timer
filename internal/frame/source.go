@@ -2,9 +2,9 @@ package frame
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"hash/maphash"
 	"image"
 	"sync"
 	"sync/atomic"
@@ -127,6 +127,7 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 	}
 
 	mode, _ := detect.ParseMode(cfg.Layout.ContentMode)
+	var analyzed dedupedAnalysis
 	var client capture.Client
 	var retryAfter time.Time
 	var retryError error
@@ -214,7 +215,7 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 					f = Frame{Hold: true, Err: err, CaptureStarted: started, CaptureMethod: method}
 					continue
 				}
-				f = AnalyzeImage(img, eng, mode, started, captured, client.Source())
+				f = analyzed.analyze(img, eng, mode, started, captured, client.Source())
 			} else if method == capture.MethodPrintWindow {
 				f = snapshot(eng, mode)
 			} else {
@@ -300,7 +301,7 @@ func boundedProvider(inner Provider, cleanup func(), timeout time.Duration, atte
 	// has already completed. Rejected/late results never change this state.
 	var delivering atomic.Bool
 	var sequence uint64
-	var previous [32]byte
+	var previous uint64
 	havePrevious := false
 	go func() {
 		defer func() {
@@ -380,7 +381,10 @@ func boundedProvider(inner Provider, cleanup func(), timeout time.Duration, atte
 			if f.Img != nil && f.Err == nil {
 				sequence++
 				f.Sequence = sequence
-				hash := imageFingerprint(f)
+				hash := f.fingerprint
+				if !f.fingerprinted {
+					hash = frameFingerprint(f.Img, f.CaptureMethod)
+				}
 				f.Duplicate = havePrevious && hash == previous
 				previous, havePrevious = hash, true
 			}
@@ -394,27 +398,73 @@ func boundedProvider(inner Provider, cleanup func(), timeout time.Duration, atte
 	return provider, func() { once.Do(func() { close(done) }) }
 }
 
-// Hash visible pixels, geometry and source. Padding bytes are not observations;
-// a different image geometry or capture coordinate system is a new observation.
-func imageFingerprint(f Frame) [32]byte {
-	h := sha256.New()
-	var bounds [32]byte
-	r := f.Img.Rect
+// fingerprintSeed is process-local: fingerprints are only ever compared within
+// one run, never persisted or sent anywhere.
+var fingerprintSeed = maphash.MakeSeed()
+
+// frameFingerprint hashes visible pixels, geometry and capture source with the
+// runtime's AES-based hash. Padding bytes are not observations; a different
+// image geometry or capture coordinate system is a new observation. It replaces
+// a cryptographic digest that cost tens of milliseconds per 1080p frame on CPUs
+// without SHA extensions, while a 64-bit hash is ample for duplicate detection.
+func frameFingerprint(img *image.RGBA, method string) uint64 {
+	if img == nil {
+		return 0
+	}
+	r := img.Rect
+	var header [32]byte
 	for i, value := range []int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} {
-		binary.LittleEndian.PutUint64(bounds[i*8:], uint64(value))
+		binary.LittleEndian.PutUint64(header[i*8:], uint64(value))
 	}
-	h.Write(bounds[:])
-	h.Write([]byte(f.CaptureMethod))
+	sum := maphash.Bytes(fingerprintSeed, header[:])
+	sum = mixHash(sum, maphash.String(fingerprintSeed, method))
 	rowBytes := r.Dx() * 4
-	if f.Img.Stride == rowBytes {
-		h.Write(f.Img.Pix[:rowBytes*r.Dy()])
-	} else {
-		for y := 0; y < r.Dy(); y++ {
-			start := y * f.Img.Stride
-			h.Write(f.Img.Pix[start : start+rowBytes])
-		}
+	if rowBytes <= 0 || r.Dy() <= 0 {
+		return sum
 	}
-	var sum [32]byte
-	copy(sum[:], h.Sum(nil))
+	// Hash row by row so a padded stride and a packed buffer with the same
+	// visible pixels produce the same fingerprint.
+	for y := 0; y < r.Dy(); y++ {
+		start := y * img.Stride
+		sum = mixHash(sum, maphash.Bytes(fingerprintSeed, img.Pix[start:start+rowBytes]))
+	}
 	return sum
+}
+
+func mixHash(acc, value uint64) uint64 {
+	acc ^= value + 0x9e3779b97f4a7c15 + (acc << 6) + (acc >> 2)
+	return acc
+}
+
+// dedupedAnalysis skips the recognition chain for a capture whose pixels are
+// identical to the previously analyzed capture. The emulator does not present a
+// new frame for every poll; re-analyzing the same pixels would only burn CPU and
+// could never produce different beads. The reused result keeps this capture's
+// own image and acquisition times; the delivery layer still decides Duplicate
+// against the frame the UI actually received last.
+type dedupedAnalysis struct {
+	valid       bool
+	fingerprint uint64
+	last        Frame
+}
+
+func (d *dedupedAnalysis) analyze(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
+	fingerprint := frameFingerprint(img, source)
+	if d.valid && img != nil && fingerprint == d.fingerprint && d.last.Err == nil {
+		f := d.last
+		f.Img = img
+		f.CaptureStarted, f.CapturedAt = started, capturedAt
+		f.AnalysisStarted, f.AnalyzedAt = time.Time{}, time.Time{}
+		f.Beads = append([]Bead(nil), d.last.Beads...)
+		f.fingerprint, f.fingerprinted = fingerprint, true
+		return f
+	}
+	f := AnalyzeImage(img, eng, mode, started, capturedAt, source)
+	f.fingerprint, f.fingerprinted = fingerprint, true
+	if img != nil && f.Err == nil {
+		d.valid, d.fingerprint, d.last = true, fingerprint, f
+	} else {
+		d.valid = false
+	}
+	return f
 }

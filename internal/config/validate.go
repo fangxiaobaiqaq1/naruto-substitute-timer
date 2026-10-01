@@ -168,6 +168,9 @@ func Validate(c Config) error {
 	if c.UI.FontScale < 0.80 || c.UI.FontScale > 1.60 {
 		return fmt.Errorf("ui.fontScale: must be in [0.80,1.60]")
 	}
+	if c.UI.OverlayMode != "full" && c.UI.OverlayMode != "mini" {
+		return fmt.Errorf("ui.overlayMode: must be full or mini")
+	}
 	switch c.UI.PlayerSide {
 	case "ask", "left", "right", "auto":
 	default:

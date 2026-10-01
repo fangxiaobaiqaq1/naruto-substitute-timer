@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package win32 提供本工具所需的最小 Win32 API 绑定（纯 Go，无 cgo）。
 // 供多个 UI 包（校准工具、计时器前端）共用，避免各自重复绑定。
 package win32

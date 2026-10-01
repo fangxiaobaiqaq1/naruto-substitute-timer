@@ -64,17 +64,7 @@ func (NCC) Match(q Query) (Score, error) {
 	}
 
 	// 小模板 1px 错位就会打穿；大厅底栏那种大图才粗扫。
-	minSide := tw
-	if th < minSide {
-		minSide = th
-	}
-	step := 1
-	if minSide >= 48 {
-		step = minSide / 8
-		if step < 2 {
-			step = 2
-		}
-	}
+	step := coarseStep(tw, th)
 
 	gray := q.Gray
 	if gray == nil {
@@ -112,9 +102,34 @@ func (NCC) Match(q Query) (Score, error) {
 	}
 	scan(roi.Min.X, roi.Min.Y, roi.Max.X-tw, roi.Max.Y-th, step)
 	if step > 1 {
-		scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, 1)
+		// Refine the coarse peak. For large templates the old exhaustive
+		// (2*step+1)^2 window was the dominant cost of the whole scene gate; a
+		// medium grid narrows the window first, then 1-px search finishes.
+		if mid := refineStep(step); mid > 1 {
+			scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, mid)
+			scan(best.Peak.X-mid, best.Peak.Y-mid, best.Peak.X+mid, best.Peak.Y+mid, 1)
+		} else {
+			scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, 1)
+		}
 	}
 	return best, nil
+}
+
+// coarseStep is the sparse grid for large templates; small templates cannot
+// tolerate a single pixel of misalignment and are scanned exhaustively.
+func coarseStep(tw, th int) int {
+	minSide := min(tw, th)
+	if minSide < 48 {
+		return 1
+	}
+	return max(2, minSide/8)
+}
+
+// refineStep is the medium grid used between the coarse scan and the final
+// 1-px window. It stays within a quarter of the coarse step so the true peak,
+// whose correlation lobe is a few pixels wide for HUD text, is not skipped.
+func refineStep(step int) int {
+	return step / 4
 }
 
 // ToGray 把任意图转成灰度。

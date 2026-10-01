@@ -1,3 +1,5 @@
+//go:build windows
+
 // narutotimer — 火影忍者手游替身计时器（纯视觉，不读内存）。
 // 本期功能：
 //   - win:   查找 MuMu 模拟器窗口

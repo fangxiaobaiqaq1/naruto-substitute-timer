@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package win 封装 Win32 窗口相关 API。
 package win
 

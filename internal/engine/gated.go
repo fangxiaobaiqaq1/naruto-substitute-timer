@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"crypto/sha256"
+	"hash/maphash"
 	"image"
 	"sync"
 	"time"
@@ -35,6 +35,12 @@ type FightSupportGate interface {
 	SupportsFight(img *image.RGBA, profile string) bool
 }
 
+// TimedGate receives the acquisition time so bounded rescans follow frame time
+// in recorded replay exactly as in live capture.
+type TimedGate interface {
+	DecideAt(img *image.RGBA, at time.Time) GateDecision
+}
+
 // Identity 是 VS / 换人画面上认出的双方账号。
 type Identity struct {
 	Side string
@@ -57,7 +63,15 @@ type Gated struct {
 	lastBounds     image.Rectangle
 	pendingProfile string
 	pendingAt      time.Time
-	pendingImage   [32]byte
+	pendingImage   uint64
+}
+
+var pixelHashSeed = maphash.MakeSeed()
+
+// pixelHash distinguishes two captures during profile-switch confirmation; a
+// process-local 64-bit hash is sufficient and far cheaper than a digest.
+func pixelHash(img *image.RGBA) uint64 {
+	return maphash.Bytes(pixelHashSeed, img.Pix)
 }
 
 // NewGated 包装任意 Engine。gate 或 inner 为 nil 时退回 inner / 空结果。
@@ -110,7 +124,12 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 		g.pendingProfile = ""
 	}
 	g.lastAt = at
-	d := g.Gate.Decide(img)
+	var d GateDecision
+	if timed, ok := g.Gate.(TimedGate); ok {
+		d = timed.DecideAt(img, at)
+	} else {
+		d = g.Gate.Decide(img)
+	}
 	var sampled *Result
 	// Compare a competing label against fresh evidence in the established
 	// coordinate system BEFORE changing it. Animated backgrounds may match a
@@ -126,7 +145,7 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 	// A single competing marker cannot switch coordinate profiles and erase
 	// active clocks. Require a second independent image of the new profile.
 	if d.Kind == GateFight && g.lastFight.SceneID != "" && d.LayoutProfile != g.lastFight.LayoutProfile {
-		sum := sha256.Sum256(img.Pix)
+		sum := pixelHash(img)
 		if g.pendingProfile != d.LayoutProfile {
 			g.pendingProfile, g.pendingAt, g.pendingImage = d.LayoutProfile, at, sum
 			d = GateDecision{Kind: GateUncertain}

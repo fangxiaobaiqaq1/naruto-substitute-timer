@@ -12,16 +12,9 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
-
-type Options struct {
-	InstallDir string `json:"install_dir"`
-	DLLPath    string `json:"dll_path,omitempty"`
-	Instance   int    `json:"instance"`
-	DisplayID  int    `json:"display_id"`
-	Package    string `json:"package,omitempty"`
-}
 
 type Client struct {
 	mu                           sync.Mutex
@@ -31,7 +24,17 @@ type Client struct {
 	opts                         Options
 	dllPath                      string
 	pixels                       []byte
+	frames frameRingBuffer
+	// The game display id rarely changes; resolving it on every capture is an
+	// avoidable SDK round trip. It is refreshed at a bounded interval and on
+	// every capture failure.
+	displayID      int
+	displayValid   bool
+	displayReadAt  time.Time
+	displayRefresh time.Duration
 }
+
+const displayIDRefresh = 500 * time.Millisecond
 
 func nativeCallError(err error) string {
 	if err == nil {
@@ -132,16 +135,25 @@ func (c *Client) Capture() (*image.RGBA, error) {
 	}
 	id := c.opts.DisplayID
 	if c.opts.Package != "" && c.display != nil {
-		pkg, err := syscall.BytePtrFromString(c.opts.Package)
-		if err != nil {
-			return nil, stageError(ProbeStageDisplay, err)
+		refresh := c.displayRefresh
+		if refresh <= 0 {
+			refresh = displayIDRefresh
 		}
-		result, _, _ := c.display.Call(c.handle, uintptr(unsafe.Pointer(pkg)), 0)
-		runtime.KeepAlive(pkg)
-		if int32(result) < 0 {
-			return nil, stageError(ProbeStageDisplay, fmt.Errorf("MuMu display for %q is unavailable", c.opts.Package))
+		now := time.Now()
+		if !c.displayValid || now.Sub(c.displayReadAt) >= refresh {
+			pkg, err := syscall.BytePtrFromString(c.opts.Package)
+			if err != nil {
+				return nil, stageError(ProbeStageDisplay, err)
+			}
+			result, _, _ := c.display.Call(c.handle, uintptr(unsafe.Pointer(pkg)), 0)
+			runtime.KeepAlive(pkg)
+			if int32(result) < 0 {
+				c.displayValid = false
+				return nil, stageError(ProbeStageDisplay, fmt.Errorf("MuMu display for %q is unavailable", c.opts.Package))
+			}
+			c.displayID, c.displayValid, c.displayReadAt = int(int32(result)), true, now
 		}
-		id = int(int32(result))
+		id = c.displayID
 	}
 	var width, height int32
 	result, _, callErr := c.capture.Call(c.handle, uintptr(id), 0, uintptr(unsafe.Pointer(&width)), uintptr(unsafe.Pointer(&height)), 0)
@@ -165,6 +177,7 @@ func (c *Client) Capture() (*image.RGBA, error) {
 	result, _, callErr = c.capture.Call(c.handle, uintptr(id), uintptr(size), uintptr(unsafe.Pointer(&width)), uintptr(unsafe.Pointer(&height)), uintptr(unsafe.Pointer(&c.pixels[0])))
 	runtime.KeepAlive(c.pixels)
 	if int32(result) != 0 {
+		c.displayValid = false
 		detail := fmt.Sprintf("MuMu capture pixels: api_return=%d", int32(result))
 		if nativeErr := nativeCallError(callErr); nativeErr != "" {
 			detail += "; win32_last_error=" + nativeErr
@@ -172,21 +185,10 @@ func (c *Client) Capture() (*image.RGBA, error) {
 		return nil, stageError(ProbeStagePixels, errors.New(detail))
 	}
 	if width != wantedWidth || height != wantedHeight {
+		c.displayValid = false
 		return nil, stageError(ProbeStagePixels, fmt.Errorf("MuMu display resized during capture"))
 	}
-	return fromBottomUpRGBA(c.pixels, int(width), int(height)), nil
-}
-
-func fromBottomUpRGBA(src []byte, width, height int) *image.RGBA {
-	image := image.NewRGBA(image.Rect(0, 0, width, height))
-	stride := width * 4
-	for y := 0; y < height; y++ {
-		copy(image.Pix[y*stride:(y+1)*stride], src[(height-1-y)*stride:(height-y)*stride])
-	}
-	for index := 3; index < len(image.Pix); index += 4 {
-		image.Pix[index] = 255
-	}
-	return image
+	return fromBottomUpRGBAInto(c.frames.next(int(width), int(height)), c.pixels), nil
 }
 
 func (c *Client) Close() error {
@@ -198,6 +200,7 @@ func (c *Client) Close() error {
 	c.disconnect.Call(c.handle)
 	c.handle = 0
 	c.pixels = nil
+	c.frames = frameRingBuffer{}
 	return c.dll.Release()
 }
 
