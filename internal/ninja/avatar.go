@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -91,6 +92,10 @@ type AvatarMatch struct {
 }
 
 type avatarCatalog struct {
+	// mu guards only the mutable template state: entry.gray/mask lazy decode,
+	// entry.scaled, cacheScale, cachedEntries and cacheWipes. entries, byID and
+	// every other entry field are written once by loadAvatarCatalog and are
+	// read lock-free afterwards; prepared templates are immutable.
 	mu            sync.Mutex
 	entries       []*avatarEntry
 	byID          map[string]*avatarEntry
@@ -99,14 +104,6 @@ type avatarCatalog struct {
 	// cacheWipes counts overflow wipes of the scaled template cache; a single
 	// scan must never trigger one (tests assert it).
 	cacheWipes int
-	// Per-call scratch reused under mu; never returned to callers.
-	scratchBest     []avatarFinalist
-	scratchEntries  []*avatarEntry
-	scratchPrimary  []stageEntry
-	scratchBestByID map[string]float64
-	scratchNameByID map[string]string
-	scratchBaseByID map[string]string
-	scratchFine     map[string]bool
 }
 
 type avatarFinalist struct {
@@ -185,43 +182,97 @@ func loadAvatarCatalog(data []byte, readFile func(string) ([]byte, error)) (*ava
 	if len(index.Entries) == 0 {
 		return nil, fmt.Errorf("avatar index has no entries")
 	}
-	catalog := &avatarCatalog{entries: make([]*avatarEntry, 0, len(index.Entries)), byID: make(map[string]*avatarEntry, len(index.Entries))}
-	for _, item := range index.Entries {
+	// Cheap index validation stays sequential (duplicates depend on order);
+	// the per-asset read/verify/decode work runs on a bounded pool into an
+	// index-ordered slice. The error reported is the one the sequential loop
+	// would have stopped at: the first failing index, validation first.
+	errs := make([]error, len(index.Entries))
+	sums := make([]string, len(index.Entries))
+	seen := make(map[string]bool, len(index.Entries))
+	for i, item := range index.Entries {
 		sum := item.SHA256
 		if sum == "" {
 			sum = item.Avatar.SHA256
 		}
-		if !validAvatarID(item.ID) || catalog.byID[item.ID] != nil || len(sum) != 64 {
-			return nil, fmt.Errorf("invalid or duplicate avatar id %q", item.ID)
+		if !validAvatarID(item.ID) || seen[item.ID] || len(sum) != 64 {
+			errs[i] = fmt.Errorf("invalid or duplicate avatar id %q", item.ID)
+		} else if _, err := hex.DecodeString(sum); err != nil {
+			errs[i] = fmt.Errorf("invalid avatar sha256 for %s", item.ID)
 		}
-		if _, err := hex.DecodeString(sum); err != nil {
-			return nil, fmt.Errorf("invalid avatar sha256 for %s", item.ID)
+		seen[item.ID], sums[i] = true, sum
+	}
+	entries := make([]*avatarEntry, len(index.Entries))
+	parallelFor(len(index.Entries), func(i int) {
+		if errs[i] == nil {
+			entries[i], errs[i] = loadAvatarEntry(index.Entries[i], sums[i], readFile)
 		}
-		png, err := readFile(item.ID)
+	})
+	for _, err := range errs {
 		if err != nil {
-			return nil, fmt.Errorf("read avatar %s: %w", item.ID, err)
+			return nil, err
 		}
-		got := sha256.Sum256(png)
-		if !strings.EqualFold(hex.EncodeToString(got[:]), sum) {
-			return nil, fmt.Errorf("avatar %s sha256 does not match index", item.ID)
-		}
-		img, _, err := image.Decode(bytes.NewReader(png))
-		if err != nil {
-			return nil, fmt.Errorf("decode avatar %s: %w", item.ID, err)
-		}
-		gray, alphaMask := avatarGrayMask(img)
-		if gray.Bounds().Dx() < 16 || gray.Bounds().Dy() < 16 {
-			return nil, fmt.Errorf("avatar %s too small", item.ID)
-		}
-		// The catalog PNG carries a baked rank badge/frame/background. Those
-		// pixels vary in the live HUD, while the face inside the diamond is
-		// stable. Recognition uses alpha ∩ inner-diamond only.
-		mask := avatarFaceMask(gray.Bounds(), alphaMask)
-		thumbGray, thumbMask := match.ScaleGray(gray, 16, 16), match.ScaleGray(mask, 16, 16)
-		entry := &avatarEntry{id: item.ID, name: avatarName(item), baseName: avatarBaseName(item), data: png, thumb: match.PrepareNCC(thumbGray, thumbMask), thumbGray: thumbGray, thumbMask: thumbMask, coarseGray: match.ScaleGray(gray, 36, 36), coarseMask: match.ScaleGray(mask, 36, 36)}
-		catalog.entries, catalog.byID[item.ID] = append(catalog.entries, entry), entry
+	}
+	catalog := &avatarCatalog{entries: entries, byID: make(map[string]*avatarEntry, len(entries))}
+	for _, entry := range entries {
+		catalog.byID[entry.id] = entry
 	}
 	return catalog, nil
+}
+
+// loadAvatarEntry reads, verifies and decodes one indexed asset. It touches
+// only its own entry, so the catalog loader may run it concurrently.
+func loadAvatarEntry(item avatarIndexEntry, sum string, readFile func(string) ([]byte, error)) (*avatarEntry, error) {
+	png, err := readFile(item.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read avatar %s: %w", item.ID, err)
+	}
+	got := sha256.Sum256(png)
+	if !strings.EqualFold(hex.EncodeToString(got[:]), sum) {
+		return nil, fmt.Errorf("avatar %s sha256 does not match index", item.ID)
+	}
+	img, _, err := image.Decode(bytes.NewReader(png))
+	if err != nil {
+		return nil, fmt.Errorf("decode avatar %s: %w", item.ID, err)
+	}
+	gray, alphaMask := avatarGrayMask(img)
+	if gray.Bounds().Dx() < 16 || gray.Bounds().Dy() < 16 {
+		return nil, fmt.Errorf("avatar %s too small", item.ID)
+	}
+	// The catalog PNG carries a baked rank badge/frame/background. Those
+	// pixels vary in the live HUD, while the face inside the diamond is
+	// stable. Recognition uses alpha ∩ inner-diamond only.
+	mask := avatarFaceMask(gray.Bounds(), alphaMask)
+	thumbGray, thumbMask := match.ScaleGray(gray, 16, 16), match.ScaleGray(mask, 16, 16)
+	// The full-resolution gray/mask are exactly what matchEntries would
+	// otherwise re-decode lazily from data; keep them so a PNG is decoded once.
+	return &avatarEntry{id: item.ID, name: avatarName(item), baseName: avatarBaseName(item), data: png, thumb: match.PrepareNCC(thumbGray, thumbMask), thumbGray: thumbGray, thumbMask: thumbMask, coarseGray: match.ScaleGray(gray, 36, 36), coarseMask: match.ScaleGray(mask, 36, 36), gray: gray, mask: mask}, nil
+}
+
+// parallelFor runs fn(0..n-1) on match.Workers(n) workers pulling indexes
+// from a shared counter. fn must write only state owned by its index. Small n
+// runs inline.
+func parallelFor(n int, fn func(int)) {
+	workers := match.Workers(n)
+	if workers <= 1 || n <= 2 {
+		for i := range n {
+			fn(i)
+		}
+		return
+	}
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for {
+				i := int(next.Add(1) - 1)
+				if i >= n {
+					return
+				}
+				fn(i)
+			}
+		})
+	}
+	wg.Wait()
 }
 
 func validAvatarID(id string) bool {
@@ -286,6 +337,38 @@ func avatarFaceMask(bounds image.Rectangle, alpha *image.Gray) *image.Gray {
 func avatarGrayMask(src image.Image) (*image.Gray, *image.Gray) {
 	b := src.Bounds()
 	gray, mask := image.NewGray(image.Rect(0, 0, b.Dx(), b.Dy())), image.NewGray(image.Rect(0, 0, b.Dx(), b.Dy()))
+	// The direct paths reproduce color.NRGBA.RGBA / color.RGBA.RGBA (16-bit
+	// expansion, NRGBA alpha premultiply) and the same >>8 luma byte for byte;
+	// they only avoid boxing a color per pixel. Other models use At().
+	switch img := src.(type) {
+	case *image.NRGBA:
+		for y := 0; y < b.Dy(); y++ {
+			row := img.Pix[img.PixOffset(b.Min.X, b.Min.Y+y):]
+			for x := 0; x < b.Dx(); x++ {
+				p := row[4*x : 4*x+4 : 4*x+4]
+				a := uint32(p[3])
+				r, g, bl := (uint32(p[0])|uint32(p[0])<<8)*a/0xff, (uint32(p[1])|uint32(p[1])<<8)*a/0xff, (uint32(p[2])|uint32(p[2])<<8)*a/0xff
+				gray.Pix[y*gray.Stride+x] = uint8((299*(r>>8) + 587*(g>>8) + 114*(bl>>8) + 500) / 1000)
+				if a|a<<8 >= 0x8000 {
+					mask.Pix[y*mask.Stride+x] = 255
+				}
+			}
+		}
+		return gray, mask
+	case *image.RGBA:
+		for y := 0; y < b.Dy(); y++ {
+			row := img.Pix[img.PixOffset(b.Min.X, b.Min.Y+y):]
+			for x := 0; x < b.Dx(); x++ {
+				p := row[4*x : 4*x+4 : 4*x+4]
+				r, g, bl, a := uint32(p[0])|uint32(p[0])<<8, uint32(p[1])|uint32(p[1])<<8, uint32(p[2])|uint32(p[2])<<8, uint32(p[3])|uint32(p[3])<<8
+				gray.Pix[y*gray.Stride+x] = uint8((299*(r>>8) + 587*(g>>8) + 114*(bl>>8) + 500) / 1000)
+				if a >= 0x8000 {
+					mask.Pix[y*mask.Stride+x] = 255
+				}
+			}
+		}
+		return gray, mask
+	}
 	for y := 0; y < b.Dy(); y++ {
 		for x := 0; x < b.Dx(); x++ {
 			r, g, bl, a := src.At(b.Min.X+x, b.Min.Y+y).RGBA()
@@ -306,8 +389,9 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 	if roi.Empty() {
 		return AvatarMatch{}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	// The coarse locator reads only entries and their load-time immutable
+	// fields (id, coarseGray, coarseMask), so it runs without the catalog lock;
+	// matchEntries takes it only for its template cache.
 	view := img.SubImage(roi).(*image.RGBA)
 	gray := match.ToGray(view)
 	coarse := match.ScaleGray(gray, 36, 36)
@@ -321,7 +405,7 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 	// cropped RGBA because luma is per pixel.
 	anchor := avatarAnchorRect(roi, scale).Intersect(roi).Sub(roi.Min)
 	hudCoarse := match.ScaleGray(gray.SubImage(anchor).(*image.Gray), 36, 36)
-	best := c.scratchBest[:0]
+	best := make([]avatarFinalist, 0, len(c.entries))
 	for _, entry := range c.entries {
 		// Two aligned 36² thumbnail queries (HUD anchor + whole ROI) keep
 		// recall for both real HUD frames and centered synthetic portraits.
@@ -338,7 +422,6 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 		}
 		return best[i].entry.id < best[j].entry.id
 	})
-	c.scratchBest = best
 	// Coarse matching is only a locator. A real HUD portrait can be partially
 	// clipped by the capture boundary and its render scale is not guaranteed to
 	// equal the bead-derived scale, so the true entry may rank below the first
@@ -348,11 +431,10 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 	if len(best) > 24 {
 		best = best[:24]
 	}
-	entries := c.scratchEntries[:0]
+	entries := make([]*avatarEntry, 0, len(best))
 	for i := range best {
 		entries = append(entries, best[i].entry)
 	}
-	c.scratchEntries = entries
 	return c.matchEntries(view, gray, scale, entries)
 }
 
@@ -399,8 +481,21 @@ func coarseAvatarScore(query, templ, mask *image.Gray) float64 {
 // larger factors only serve exact-scale callers (tests, legacy captures).
 var avatarFactorsFull = []float64{.55, .60, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45}
 
+// avatarFactorPrimary is the full-scan locator factor; avatarFactorsFine is
+// the full sweep without it, in the same order, for the re-scored leaders.
+var (
+	avatarFactorPrimary = []float64{.60}
+	avatarFactorsFine   = []float64{.55, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45}
+)
+
 // gray is ToGray(view), converted once by the caller and shared by every NCC
 // query instead of being rebuilt per entry/factor; nil converts it here.
+//
+// The caller must not hold c.mu. The lock covers only the lazy decode and the
+// template cache while the jobs are built; NCC scoring runs unlocked (and in
+// parallel) on immutable prepared templates and the caller's pixels. Scores
+// are reduced in the original entry/factor order with the same strict '>', so
+// the result equals the serial scan exactly.
 func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale float64, entries []*avatarEntry) AvatarMatch {
 	var out AvatarMatch
 	if gray == nil {
@@ -410,38 +505,24 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 	// single identity is evaluated at several display scales; treating its
 	// second scale as a different candidate can reject an otherwise unambiguous
 	// portrait (best=.90, same-ID runner-up=.85).
-	bestByID, nameByID, baseByID := c.scratchMaps()
+	bestByID := make(map[string]float64, len(entries))
+	nameByID := make(map[string]string, len(entries))
+	baseByID := make(map[string]string, len(entries))
 	bounds := view.Bounds()
-	c.evictTemplates(scale)
-	decode := func(entry *avatarEntry) bool {
-		if entry == nil {
-			return false
-		}
-		if entry.gray == nil {
-			img, _, err := image.Decode(bytes.NewReader(entry.data))
-			if err != nil {
-				return false
+	scoreAll := func(jobs []avatarJob) {
+		parallelFor(len(jobs), func(i int) {
+			jobs[i].score = avatarJobScore(view, gray, jobs[i].prepared)
+		})
+		for _, job := range jobs {
+			if job.score > bestByID[job.entry.id] {
+				bestByID[job.entry.id] = job.score
 			}
-			entry.gray, entry.mask = avatarGrayMask(img)
-			entry.mask = avatarFaceMask(entry.gray.Bounds(), entry.mask)
 		}
-		return true
 	}
-	scoreAt := func(entry *avatarEntry, factor float64) float64 {
-		w, h := avatarFactorSize(entry, scale, factor)
-		if w > bounds.Dx() || h > bounds.Dy() {
-			// NCC cannot slide a template larger than the ROI; skip the wasted
-			// prepare instead of measuring a meaningless zero score.
-			return 0
-		}
-		score, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: view.Bounds(), Prepared: c.prepared(entry, w, h)})
-		if err != nil {
-			return 0
-		}
-		return score.Value
-	}
+	c.mu.Lock()
+	c.evictTemplates(scale)
 	for _, entry := range entries {
-		if !decode(entry) {
+		if !c.decode(entry) {
 			continue
 		}
 		out.ids = append(out.ids, entry.id)
@@ -455,12 +536,13 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 		// the leading candidates plus the coarse locator's first entries. The
 		// shortlist order itself is the recall fallback for render scales that
 		// are not the common HUD factor (exact-scale test callers).
+		jobs := make([]avatarJob, 0, len(entries))
 		for _, entry := range entries {
-			if value := scoreAt(entry, .60); value > bestByID[entry.id] {
-				bestByID[entry.id] = value
-			}
+			jobs = c.appendJobs(jobs, entry, scale, bounds, avatarFactorPrimary)
 		}
-		primary := c.scratchPrimary[:0]
+		c.mu.Unlock()
+		scoreAll(jobs)
+		primary := make([]stageEntry, 0, len(entries))
 		for _, entry := range entries {
 			if entry != nil {
 				primary = append(primary, stageEntry{entry, bestByID[entry.id]})
@@ -472,12 +554,7 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 			}
 			return primary[i].entry.id < primary[j].entry.id
 		})
-		c.scratchPrimary = primary
-		if c.scratchFine == nil {
-			c.scratchFine = make(map[string]bool, 12)
-		}
-		fine := c.scratchFine
-		clear(fine)
+		fine := make(map[string]bool, 12)
 		for i, v := range primary {
 			if i < 6 {
 				fine[v.entry.id] = true
@@ -488,23 +565,26 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 				fine[entry.id] = true
 			}
 		}
+		// The primary factor's score is already in bestByID, exactly as a
+		// repeat would compute it (same template, same pixels), and an equal
+		// score never wins the strict '>', so the fine sweep skips it.
+		jobs = jobs[:0]
+		c.mu.Lock()
+		c.evictTemplates(scale)
 		for _, entry := range entries {
 			if entry != nil && fine[entry.id] {
-				for _, factor := range avatarFactorsFull {
-					if value := scoreAt(entry, factor); value > bestByID[entry.id] {
-						bestByID[entry.id] = value
-					}
-				}
+				jobs = c.appendJobs(jobs, entry, scale, bounds, avatarFactorsFine)
 			}
 		}
+		c.mu.Unlock()
+		scoreAll(jobs)
 	} else {
+		jobs := make([]avatarJob, 0, len(entries)*len(avatarFactorsFull))
 		for _, entry := range entries {
-			for _, factor := range avatarFactorsFull {
-				if value := scoreAt(entry, factor); value > bestByID[entry.id] {
-					bestByID[entry.id] = value
-				}
-			}
+			jobs = c.appendJobs(jobs, entry, scale, bounds, avatarFactorsFull)
 		}
+		c.mu.Unlock()
+		scoreAll(jobs)
 	}
 	var runnerName string
 	for id, score := range bestByID {
@@ -529,17 +609,56 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 	return out
 }
 
-// scratchMaps returns the cleared per-call identity maps (caller holds mu).
-func (c *avatarCatalog) scratchMaps() (map[string]float64, map[string]string, map[string]string) {
-	if c.scratchBestByID == nil {
-		c.scratchBestByID = make(map[string]float64, 32)
-		c.scratchNameByID = make(map[string]string, 32)
-		c.scratchBaseByID = make(map[string]string, 32)
+// avatarJob is one entry at one display factor. prepared is nil when the
+// template is larger than the ROI: NCC cannot slide it, so the job keeps the
+// zero score instead of preparing and measuring a meaningless one.
+type avatarJob struct {
+	entry    *avatarEntry
+	prepared *match.PreparedNCC
+	score    float64
+}
+
+// appendJobs fetches or prepares the entry's template at each factor, in
+// factor order (caller holds mu).
+func (c *avatarCatalog) appendJobs(jobs []avatarJob, entry *avatarEntry, scale float64, bounds image.Rectangle, factors []float64) []avatarJob {
+	for _, factor := range factors {
+		job := avatarJob{entry: entry}
+		if w, h := avatarFactorSize(entry, scale, factor); w <= bounds.Dx() && h <= bounds.Dy() {
+			job.prepared = c.prepared(entry, w, h)
+		}
+		jobs = append(jobs, job)
 	}
-	clear(c.scratchBestByID)
-	clear(c.scratchNameByID)
-	clear(c.scratchBaseByID)
-	return c.scratchBestByID, c.scratchNameByID, c.scratchBaseByID
+	return jobs
+}
+
+// avatarJobScore only reads the immutable template and the caller's pixels,
+// so jobs may be scored concurrently.
+func avatarJobScore(view *image.RGBA, gray *image.Gray, prepared *match.PreparedNCC) float64 {
+	if prepared == nil {
+		return 0
+	}
+	score, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: view.Bounds(), Prepared: prepared})
+	if err != nil {
+		return 0
+	}
+	return score.Value
+}
+
+// decode fills the full-resolution gray/mask lazily for entries that were not
+// built by loadAvatarCatalog (caller holds mu).
+func (c *avatarCatalog) decode(entry *avatarEntry) bool {
+	if entry == nil {
+		return false
+	}
+	if entry.gray == nil {
+		img, _, err := image.Decode(bytes.NewReader(entry.data))
+		if err != nil {
+			return false
+		}
+		entry.gray, entry.mask = avatarGrayMask(img)
+		entry.mask = avatarFaceMask(entry.gray.Bounds(), entry.mask)
+	}
+	return true
 }
 
 type stageEntry struct {
@@ -627,15 +746,15 @@ func (t *AvatarTracker) Read(c *avatarCatalog, img *image.RGBA, roi image.Rectan
 		if same && !t.memoFull && slices.Equal(t.memoIDs, t.ids) {
 			return t.memoOut.clone()
 		}
+		// byID is written only by loadAvatarCatalog, so it is read lock-free;
+		// matchEntries takes c.mu for its template cache itself.
 		entries := make([]*avatarEntry, 0, len(t.ids))
-		c.mu.Lock()
 		for _, id := range t.ids {
 			if entry := c.byID[id]; entry != nil {
 				entries = append(entries, entry)
 			}
 		}
 		out := c.matchEntries(img.SubImage(roi).(*image.RGBA), nil, scale, entries)
-		c.mu.Unlock()
 		t.remember(img, roi, false, out)
 		return out
 	}

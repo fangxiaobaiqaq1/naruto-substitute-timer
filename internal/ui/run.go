@@ -31,6 +31,13 @@ import (
 
 var overlayTitle = "替身 · " + buildinfo.Version
 
+// postUI and refreshUI are the overlay's per-frame Fyne calls. They are package
+// seams so tests can count posted closures and widget refreshes.
+var (
+	postUI    = fyne.Do
+	refreshUI = func(o fyne.CanvasObject) { o.Refresh() }
+)
+
 type session struct {
 	captureCancel        context.CancelFunc
 	captureRefresh       func()
@@ -114,6 +121,11 @@ type session struct {
 	lastRightColor  color.Color
 	clockRevision   uint64 // Accessed only through sync/atomic.
 	overlayRevision uint64 // Accessed only through sync/atomic.
+	overlayPosted   overlayPost
+	overlayPostOK   bool // overlayPosted describes the newest posted overlay closure.
+	altDirty        bool // UI goroutine only: altCD changed while hidden.
+	leftBothDirty   bool // UI goroutine only: leftBothCD changed while hidden.
+	rightBothDirty  bool // UI goroutine only: rightBothCD changed while hidden.
 	clockPending    latestCoalescer[clockUpdate]
 	slowCapture     slowCaptureStreak
 	slowCaptureRuns uint64 // Accessed only through sync/atomic.
@@ -248,7 +260,10 @@ func newSession(cfg config.Config, provider frame.Provider, w fyne.Window) *sess
 func (s *session) overlayContent() fyne.CanvasObject {
 	s.mu.Lock()
 	scale := s.cfg.UI.FontScale
+	// New widgets show their defaults, not the last posted overlay values.
+	s.overlayPostOK = false
 	s.mu.Unlock()
+	s.altDirty, s.leftBothDirty, s.rightBothDirty = false, false, false
 	scale = normalizedOverlayScale(scale)
 	s.cd = canvas.NewText("—", clockIdle)
 	s.cd.TextSize = overlayTextSize(44, scale)
@@ -1177,7 +1192,7 @@ func (s *session) refreshClockAt(now time.Time) {
 	}
 	trace.mark("queued", time.Now())
 	if schedule {
-		fyne.Do(s.applyPendingClock)
+		postUI(s.applyPendingClock)
 	}
 }
 
@@ -1193,12 +1208,13 @@ func (s *session) applyPendingClock() {
 	}
 	trace := u.trace
 	// Both-side labels track the clocks even while hidden, so turning the
-	// option on never shows a stale value until the next change.
+	// option on never shows a stale value until the next change. Showing the
+	// box refreshes its children; a change made while hidden is also redrawn
+	// on the first update after it becomes visible.
 	if s.bothSideBox != nil {
-		s.leftBothCD.Text, s.leftBothCD.Color = u.leftText, u.leftColor
-		s.rightBothCD.Text, s.rightBothCD.Color = u.rightText, u.rightColor
-		s.leftBothCD.Refresh()
-		s.rightBothCD.Refresh()
+		visible := s.bothSideBox.Visible()
+		s.leftBothDirty = applyClockText(s.leftBothCD, u.leftText, u.leftColor, visible, s.leftBothDirty)
+		s.rightBothDirty = applyClockText(s.rightBothCD, u.rightText, u.rightColor, visible, s.rightBothDirty)
 	}
 	clockSize := s.cd.MinSize()
 	layoutChanged := false
@@ -1213,8 +1229,7 @@ func (s *session) applyPendingClock() {
 			s.alternateBox.Hide()
 			s.cd.TextSize = overlayTextSize(44, u.scale)
 		}
-		s.altCD.Text, s.altCD.Color = u.altText, u.altColor
-		s.altCD.Refresh()
+		s.altDirty = applyClockText(s.altCD, u.altText, u.altColor, u.dual, s.altDirty)
 	}
 	var badgeSize fyne.Size
 	if s.eventTag != nil {
@@ -1223,16 +1238,16 @@ func (s *session) applyPendingClock() {
 	if s.cd.Text != u.txt || s.cd.Color != u.col {
 		s.cd.Text = u.txt
 		s.cd.Color = u.col
-		s.cd.Refresh()
+		refreshUI(s.cd)
 	}
 	if s.eventTag != nil && s.eventTag.Text != u.eventText {
 		s.eventTag.Text = u.eventText
-		s.eventTag.Refresh()
+		refreshUI(s.eventTag)
 	}
 	// canvas.Text.Refresh repaints but does not reflow the neighboring badge.
 	// Going from "—" to a multi-digit clock must also recompute its row layout.
 	if s.overlay != nil && (layoutChanged || s.cd.MinSize() != clockSize || (s.eventTag != nil && s.eventTag.MinSize() != badgeSize)) {
-		s.overlay.Refresh()
+		refreshUI(s.overlay)
 		s.fitOverlayWindow()
 	}
 	if trace.recorder != nil && trace.id != 0 {
@@ -1241,10 +1256,43 @@ func (s *session) applyPendingClock() {
 	s.traceApplied(trace, false)
 }
 
+// applyClockText stores a clock label's text and colour and refreshes it only
+// when it is visible and differs from what it last drew. It returns whether a
+// change is still waiting to be drawn because the label is hidden.
+func applyClockText(t *canvas.Text, text string, col color.NRGBA, visible, dirty bool) bool {
+	if t.Text != text || t.Color != col {
+		t.Text, t.Color = text, col
+		dirty = true
+	}
+	if dirty && visible {
+		refreshUI(t)
+		return false
+	}
+	return dirty
+}
+
+// overlayPost is everything a posted overlay closure applies or that the open
+// diagnostics label reads. An identical post would only repeat the same work.
+type overlayPost struct {
+	label, info, textStatus string
+	col                     color.NRGBA
+	trace                   traceRef
+	status, textError       string
+	rawTextStatus           string
+	diagnosticError         string
+	captureLost             bool
+}
+
 func (s *session) refreshOverlay() {
 	if s.stopped() || s.tag == nil {
 		return
 	}
+	// A recorder's live counters and finalization only reach the diagnostics
+	// label through this closure, so keep posting every frame while one exists.
+	s.diagnosticMu.Lock()
+	diagnosing := s.diagnosticLast != nil
+	diagnosticError := s.diagnosticError
+	s.diagnosticMu.Unlock()
 	s.mu.Lock()
 	side := s.side
 	trainingNeedsSide := s.scene == "fight" && s.layoutProfile == "camp" && !manualSide(side)
@@ -1261,10 +1309,7 @@ func (s *session) refreshOverlay() {
 	}
 	info := s.statusLine()
 	textStatus := s.textStatusText()
-	revision := atomic.AddUint64(&s.overlayRevision, 1)
 	trace := s.traceFrame
-	s.mu.Unlock()
-	trace.mark("queued", time.Now())
 	label := "对面·待认边"
 	if trainingNeedsSide {
 		label = "训练场·请选我方边"
@@ -1290,7 +1335,22 @@ func (s *session) refreshOverlay() {
 			label += " · 忍者未确认"
 		}
 	}
-	fyne.Do(func() {
+	post := overlayPost{label: label, info: info, textStatus: textStatus, col: col, trace: trace,
+		status: s.status, textError: s.textError, rawTextStatus: s.textStatus,
+		diagnosticError: diagnosticError, captureLost: s.captureLost}
+	// The newest posted closure always applies (its revision is the latest),
+	// so a frame equal to it, including its trace, would repeat that work.
+	if !diagnosing && s.overlayPostOK && post == s.overlayPosted {
+		s.mu.Unlock()
+		trace.mark("queued", time.Now())
+		s.refreshClock()
+		return
+	}
+	s.overlayPosted, s.overlayPostOK = post, true
+	revision := atomic.AddUint64(&s.overlayRevision, 1)
+	s.mu.Unlock()
+	trace.mark("queued", time.Now())
+	postUI(func() {
 		if s.stopped() {
 			return
 		}
@@ -1304,14 +1364,14 @@ func (s *session) refreshOverlay() {
 		if s.tag.Text != label || s.tag.Color != col {
 			s.tag.Text = label
 			s.tag.Color = col
-			s.tag.Refresh()
+			refreshUI(s.tag)
 		}
 		if s.info != nil && s.info.Text != info {
 			s.info.Text = info
-			s.info.Refresh()
+			refreshUI(s.info)
 		}
 		if layoutChanged && s.overlay != nil {
-			s.overlay.Refresh()
+			refreshUI(s.overlay)
 			s.fitOverlayWindow()
 		}
 		s.traceApplied(trace, true)

@@ -187,21 +187,39 @@ func (r *Reader) read(img *image.RGBA, roi image.Rectangle, scale float64) evide
 	// locations using ALL original-resolution pixels and the original threshold.
 	factor := min(scale, .5) / scale
 	smallGray := match.ScaleGray(gray, max(1, int(math.Round(float64(gray.Bounds().Dx())*factor))), max(1, int(math.Round(float64(gray.Bounds().Dy())*factor))))
-	smallImage := image.NewRGBA(smallGray.Bounds())
-	var best evidence
-	scores := map[string]float64{}
-	for _, t := range prepared {
+	// NCC reads only the Image bounds when Gray is supplied.
+	smallImage := &image.RGBA{Rect: smallGray.Bounds()}
+	// Each template's locate+refine pair is independent and only reads the
+	// shared pixels and its immutable prepared templates, so they run
+	// concurrently. The reduction below stays sequential in prepared order with
+	// the same strict '>', so ties still go to the first template.
+	type titleResult struct {
+		score match.Score
+		ok    bool
+	}
+	results := make([]titleResult, len(prepared))
+	parallelFor(len(prepared), func(i int) {
+		t := prepared[i]
 		coarse, err := (match.NCC{}).Match(match.Query{Image: smallImage, Gray: smallGray, ROI: smallImage.Bounds(), Prepared: t.coarse})
 		if err != nil || coarse.Value < .55 {
-			continue
+			return
 		}
 		point := image.Pt(roi.Min.X+int(math.Round(float64(coarse.Peak.X)/factor)), roi.Min.Y+int(math.Round(float64(coarse.Peak.Y)/factor)))
 		radius := int(math.Ceil(2 / factor))
 		candidate := image.Rectangle{Min: point, Max: point.Add(t.size)}.Inset(-radius).Intersect(roi)
 		score, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: candidate, Prepared: t.ncc})
 		if err != nil {
+			return
+		}
+		results[i] = titleResult{score, true}
+	})
+	var best evidence
+	scores := map[string]float64{}
+	for i, t := range prepared {
+		if !results[i].ok {
 			continue
 		}
+		score := results[i].score
 		scores[t.readout.Name] = max(scores[t.readout.Name], score.Value)
 		if score.Value > best.Score {
 			best = evidence{Readout: t.readout, template: t.ncc, rect: image.Rectangle{Min: score.Peak, Max: score.Peak.Add(t.size)}}
@@ -320,9 +338,17 @@ func itachiPortraitEvidence(img *image.RGBA, scale float64, portrait *match.Prep
 	if rect.Size() != size {
 		return false
 	}
-	gray := match.ToGray(img)
-	score, err := (match.NCC{}).Match(match.Query{Image: img, Gray: gray, ROI: rect, Prepared: portrait})
-	return err == nil && score.Value >= .78
+	score, ok := itachiPortraitScore(img, rect, portrait)
+	return ok && score >= .78
+}
+
+// itachiPortraitScore converts only the portrait rect to gray. NCC offsets
+// are relative to the view's bounds and its peak stays in frame coordinates,
+// so the score equals matching the full-frame gray over the same rect.
+func itachiPortraitScore(img *image.RGBA, rect image.Rectangle, portrait *match.PreparedNCC) (float64, bool) {
+	view := img.SubImage(rect).(*image.RGBA)
+	score, err := (match.NCC{}).Match(match.Query{Image: view, Gray: match.ToGray(view), ROI: rect, Prepared: portrait})
+	return score.Value, err == nil
 }
 
 // NameRegion is deliberately above the calibrated bean row. A small extra

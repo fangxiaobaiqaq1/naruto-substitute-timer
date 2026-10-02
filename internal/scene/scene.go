@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"narutotimer/internal/config"
@@ -550,20 +551,30 @@ func prepareOne(ca detect.ContentArea, t template) preparedTemplate {
 // remembered peak are checked first at that peak; when one of them confirms a
 // fight marker, the remaining cold templates are rescanned only on a bounded
 // cadence and otherwise keep their last full-scan score.
+//
+// Each stage may score its templates concurrently: a template writes only its
+// own slot and its own hint, and every reduction runs afterwards in template
+// order, so hits, hints and cold-scan bookkeeping match a sequential pass.
 func (c *Catalog) scoreAll(img *image.RGBA, prepared []preparedTemplate, at time.Time) []Hit {
 	score := c.scorer(img)
 	hits := make([]Hit, len(prepared))
 	done := make([]bool, len(prepared))
+	work := make([]int, 0, len(prepared))
+	for i, t := range prepared {
+		if !t.spec.ContinuationOnly {
+			if _, ok := c.hint(t.index); ok {
+				work = append(work, i)
+			}
+		}
+	}
+	c.forEach(len(work), func(k int) {
+		i := work[k]
+		hits[i], done[i] = c.scoreAtHint(img, score, prepared[i])
+	})
 	hotFight := false
 	for i, t := range prepared {
-		if t.spec.ContinuationOnly {
-			continue
-		}
-		if hit, ok := c.scoreAtHint(img, score, t); ok {
-			hits[i], done[i] = hit, true
-			if c.fightSet[t.spec.Scene] {
-				hotFight = true
-			}
+		if done[i] && c.fightSet[t.spec.Scene] {
+			hotFight = true
 		}
 	}
 	if !c.coldScanDue(at, hotFight) {
@@ -574,11 +585,16 @@ func (c *Catalog) scoreAll(img *image.RGBA, prepared []preparedTemplate, at time
 		}
 		return hits
 	}
+	work = work[:0]
 	for i, t := range prepared {
 		if !done[i] && !t.spec.ContinuationOnly {
-			hits[i] = score(t)
+			work = append(work, i)
 		}
 	}
+	c.forEach(len(work), func(k int) {
+		i := work[k]
+		hits[i] = score(prepared[i])
+	})
 	cold := make([]Hit, len(prepared))
 	for i := range prepared {
 		if !done[i] {
@@ -589,25 +605,72 @@ func (c *Catalog) scoreAll(img *image.RGBA, prepared []preparedTemplate, at time
 	return hits
 }
 
+// parallelScoring reports whether templates may be scored concurrently. Only
+// the stateless built-in NCC qualifies; injected matchers (tests, recorders)
+// may depend on call order and always run sequentially.
+func (c *Catalog) parallelScoring() bool {
+	_, ok := c.matcher.(match.NCC)
+	return ok
+}
+
+// forEach calls fn for 0..n-1 on a bounded worker pool, or inline when the
+// matcher must stay sequential or there is too little work to share.
+func (c *Catalog) forEach(n int, fn func(int)) {
+	workers := match.Workers(n)
+	if workers < 2 || !c.parallelScoring() {
+		for i := 0; i < n; i++ {
+			fn(i)
+		}
+		return
+	}
+	var next atomic.Int64
+	run := func() {
+		for {
+			i := int(next.Add(1) - 1)
+			if i >= n {
+				return
+			}
+			fn(i)
+		}
+	}
+	var wg sync.WaitGroup
+	for range workers - 1 {
+		wg.Go(run)
+	}
+	run() // The caller is one of the workers.
+	wg.Wait()
+}
+
 // scorer converts only searched rectangles, not the animation/background of
 // an entire frame. Variants with the same ROI share one gray image. Every view
 // belongs to this call; concurrent catalogs cannot race on reused pixel buffers.
+// The view map is shared by parallel template scoring; a view converted twice
+// for the same ROI holds identical pixels, so either copy yields the same score.
 func (c *Catalog) scorer(img *image.RGBA) func(preparedTemplate) Hit {
 	type grayView struct {
 		img  *image.RGBA
 		gray *image.Gray
 	}
+	var mu sync.Mutex
 	views := make(map[image.Rectangle]grayView)
 	return func(t preparedTemplate) Hit {
 		roi := t.roi.Intersect(img.Bounds())
 		if roi.Empty() || t.gray == nil {
 			return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
 		}
+		mu.Lock()
 		view, ok := views[roi]
+		mu.Unlock()
 		if !ok {
 			view.img = img.SubImage(roi).(*image.RGBA)
 			view.gray = match.ToGray(view.img)
-			views[roi] = view
+			mu.Lock()
+			if prior, ok := views[roi]; ok {
+				view = prior
+			} else {
+				views[roi] = view
+			}
+			mu.Unlock()
 		}
 		return c.scoreHinted(view.img, view.gray, t)
 	}
