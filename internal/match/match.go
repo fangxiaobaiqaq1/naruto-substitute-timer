@@ -73,6 +73,10 @@ func (NCC) Match(q Query) (Score, error) {
 	// ToGray(RGBA) 从零开始，而调用方也可传带原点和 stride 的 Gray 子图。
 	// nccAt 使用相对于 Gray.Bounds().Min 的偏移，输出仍是截图坐标。
 	origin := ib.Min
+	// The prefix sums cover exactly the ROI (every template footprint scanned
+	// lies inside it); they are local to this call, hence single-goroutine.
+	pre := newGrayPrefix(gray, roi.Min.X-origin.X, roi.Min.Y-origin.Y, roi.Dx(), roi.Dy())
+	defer pre.release()
 	best := Score{Peak: roi.Min}
 	scan := func(x0, y0, x1, y1, st int) {
 		if st < 1 {
@@ -92,7 +96,7 @@ func (NCC) Match(q Query) (Score, error) {
 		}
 		for y := y0; y <= y1; y += st {
 			for x := x0; x <= x1; x += st {
-				v := prepared.at(gray, x-origin.X, y-origin.Y)
+				v := prepared.at(gray, pre, x-origin.X, y-origin.Y)
 				if v > best.Value {
 					best.Value = v
 					best.Peak = image.Pt(x, y)

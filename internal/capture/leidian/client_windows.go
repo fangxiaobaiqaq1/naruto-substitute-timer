@@ -18,13 +18,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
-
-	"golang.org/x/text/encoding/simplifiedchinese"
-	"golang.org/x/text/transform"
 	"sync"
 	"syscall"
 	"time"
+
+	"narutotimer/internal/win"
 )
 
 type Client struct {
@@ -34,25 +32,32 @@ type Client struct {
 	opts   Options
 	serial string
 	adb    string
+
+	methods []string
+	// needsReconnect is set after a failed frame; the next Capture re-runs
+	// adb connect once instead of on every frame.
+	needsReconnect bool
+
+	raw           *RawScreencap
+	rawCalibrated bool
+
+	hwnd             uintptr
+	windowFailures   int
+	windowRetryAfter time.Time
+	lastList2        time.Time
 }
+
+const (
+	windowMaxFailures = 3
+	windowBackoff     = 10 * time.Second
+	list2Interval     = 10 * time.Second
+)
 
 func defaultTimeout(value time.Duration) time.Duration {
 	if value <= 0 {
 		return 5 * time.Second
 	}
 	return value
-}
-
-func canonicalRoot(root string) string {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return ""
-	}
-	absolute, err := filepath.Abs(root)
-	if err == nil {
-		root = absolute
-	}
-	return filepath.Clean(root)
 }
 
 func findFile(root string, names ...string) string {
@@ -193,6 +198,12 @@ func Open(o Options) (*Client, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &Client{ctx: ctx, cancel: cancel, opts: resolved, serial: resolved.Serial, adb: resolved.ADBPath}
+	client.methods = normalizeMethods(resolved.Methods)
+	for _, method := range client.methods {
+		if method == MethodADBRaw {
+			client.raw = &RawScreencap{Dial: TCPDialer(resolved.ADBServerPort), Serial: resolved.Serial, Timeout: client.captureTimeout()}
+		}
+	}
 	if resolved.Connect {
 		if err := client.connect(); err != nil {
 			cancel()
@@ -200,6 +211,29 @@ func Open(o Options) (*Client, error) {
 		}
 	}
 	return client, nil
+}
+
+func normalizeMethods(methods []string) []string {
+	var result []string
+	seen := map[string]bool{}
+	for _, method := range methods {
+		method = strings.TrimSpace(method)
+		if (method == MethodWindow || method == MethodADBRaw || method == MethodADB) && !seen[method] {
+			seen[method] = true
+			result = append(result, method)
+		}
+	}
+	if len(result) == 0 {
+		return DefaultMethods()
+	}
+	return result
+}
+
+func (c *Client) captureTimeout() time.Duration {
+	if c.opts.CaptureTimeout > 0 {
+		return c.opts.CaptureTimeout
+	}
+	return defaultTimeout(c.opts.CommandTimeout)
 }
 
 func (c *Client) connect() error {
@@ -217,16 +251,57 @@ func (c *Client) connect() error {
 	return nil
 }
 
+// Capture walks the configured method chain and returns the first frame that
+// succeeds. Window and raw failures silently fall through to the next method
+// for this frame; only a failure of the whole chain is reported, after which
+// the next call reconnects ADB once.
 func (c *Client) Capture() (*image.RGBA, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.cancel == nil {
 		return nil, errors.New("雷电采集已关闭")
 	}
-	if err := c.connect(); err != nil {
-		return nil, err
+	if c.needsReconnect {
+		if err := c.connect(); err != nil {
+			return nil, err
+		}
+		c.needsReconnect = false
 	}
-	data, err := runCommand(c.ctx, c.opts.CommandTimeout, c.adb, "-s", c.serial, "exec-out", "screencap", "-p")
+	var errs []error
+	for _, method := range c.methods {
+		var (
+			img *image.RGBA
+			err error
+		)
+		switch method {
+		case MethodWindow:
+			img, err = c.captureWindow()
+		case MethodADBRaw:
+			if c.raw == nil || !c.raw.Enabled() {
+				continue
+			}
+			img, err = c.captureRaw()
+		case MethodADB:
+			img, err = c.capturePNG()
+		default:
+			continue
+		}
+		if err == nil {
+			return img, nil
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", method, err))
+	}
+	c.needsReconnect = true
+	if len(errs) == 0 {
+		return nil, errors.New("雷电截图失败：没有可用的采集方式")
+	}
+	return nil, fmt.Errorf("雷电截图失败: %w", errors.Join(errs...))
+}
+
+func (c *Client) capturePNG() (*image.RGBA, error) {
+	// exec-out PNG encode can take >1 s at 1080p on slow PCs; keep the
+	// command timeout rather than the shortened per-frame budget.
+	data, err := runCommand(c.ctx, defaultTimeout(c.opts.CommandTimeout), c.adb, "-s", c.serial, "exec-out", "screencap", "-p")
 	if err != nil {
 		return nil, fmt.Errorf("雷电 ADB 截图失败: %w", err)
 	}
@@ -238,13 +313,91 @@ func (c *Client) Capture() (*image.RGBA, error) {
 	if bounds.Dx() < 1 || bounds.Dy() < 1 || bounds.Dx() > 8192 || bounds.Dy() > 8192 || int64(bounds.Dx())*int64(bounds.Dy()) > 16777216 {
 		return nil, fmt.Errorf("雷电截图尺寸无效 %dx%d", bounds.Dx(), bounds.Dy())
 	}
-	result := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
-	for y := 0; y < bounds.Dy(); y++ {
-		for x := 0; x < bounds.Dx(); x++ {
-			result.Set(x, y, decoded.At(bounds.Min.X+x, bounds.Min.Y+y))
+	return toRGBA(decoded), nil
+}
+
+// captureRaw uses the adb host protocol. The first call captures through the
+// PNG path instead and only enables raw (with alpha forced to 255) if that
+// PNG frame is fully opaque, so raw frames match PNG frames pixel for pixel.
+func (c *Client) captureRaw() (*image.RGBA, error) {
+	if !c.rawCalibrated {
+		img, err := c.capturePNG()
+		if err != nil {
+			return nil, err
+		}
+		c.rawCalibrated = true
+		if img.Opaque() {
+			c.raw.ForceOpaque = true
+		} else {
+			c.raw.Disable()
+		}
+		return img, nil
+	}
+	// Frames are handed to the scheduler as owned images, so never reuse dst.
+	return c.raw.Capture(c.ctx, nil)
+}
+
+// captureWindow PrintWindows the LDPlayer render window. Blank, busy or
+// failed frames return an error so the chain falls back to ADB; after
+// repeated failures the mode backs off and the HWND is re-resolved.
+func (c *Client) captureWindow() (*image.RGBA, error) {
+	if time.Now().Before(c.windowRetryAfter) {
+		return nil, errors.New("窗口采集退避中")
+	}
+	if c.hwnd == 0 || !win.IsWindow(c.hwnd) {
+		c.hwnd = 0
+		hwnd, err := c.resolveRenderWindow()
+		if err != nil {
+			c.windowFailed()
+			return nil, err
+		}
+		c.hwnd = hwnd
+	}
+	img, err := win.CaptureClient(c.hwnd)
+	if err != nil {
+		if !win.IsWindow(c.hwnd) {
+			c.hwnd = 0
+		}
+		c.windowFailed()
+		return nil, err
+	}
+	c.windowFailures = 0
+	return img, nil
+}
+
+func (c *Client) windowFailed() {
+	c.windowFailures++
+	if c.windowFailures >= windowMaxFailures {
+		c.windowFailures = 0
+		c.windowRetryAfter = time.Now().Add(windowBackoff)
+		c.hwnd = 0
+	}
+}
+
+func (c *Client) resolveRenderWindow() (uintptr, error) {
+	hwnd, err := win.FindLeidianRender(c.opts.TopHWND, c.opts.BindHWND)
+	if err == nil {
+		return hwnd, nil
+	}
+	if c.opts.ConsolePath == "" || time.Since(c.lastList2) < list2Interval {
+		return 0, err
+	}
+	c.lastList2 = time.Now()
+	data, listErr := runCommand(c.ctx, c.opts.CommandTimeout, c.opts.ConsolePath, "list2")
+	if listErr != nil {
+		return 0, err
+	}
+	items, listErr := parseList2(data, c.opts.InstallDir)
+	if listErr != nil {
+		return 0, err
+	}
+	for _, item := range items {
+		if item.Index == c.opts.Index {
+			c.opts.TopHWND, c.opts.BindHWND = item.TopHWND, item.BindHWND
+			return win.FindLeidianRender(item.TopHWND, item.BindHWND)
 		}
 	}
-	return result, nil
+	return 0, err
 }
 
 func (c *Client) Close() error {
@@ -262,87 +415,6 @@ func (c *Client) Source() string {
 }
 
 func (c *Client) Serial() string { return c.serial }
-
-type list2Row struct {
-	Index   int
-	Name    string
-	Running bool
-	PID     int
-	VBoxPID int
-	Width   int
-	Height  int
-	DPI     int
-	Raw     string
-}
-
-func decodeConsoleText(data []byte) string {
-	if utf8.Valid(data) {
-		return string(data)
-	}
-	decoded, _, err := transform.Bytes(simplifiedchinese.GBK.NewDecoder(), data)
-	if err == nil {
-		return string(decoded)
-	}
-	return string(data)
-}
-
-func parseList2(data []byte, root string) ([]Instance, error) {
-	var result []Instance
-	for _, line := range strings.Split(strings.ReplaceAll(decodeConsoleText(data), "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		fields := strings.Split(line, ",")
-		if len(fields) < 2 {
-			continue
-		}
-		index, err := strconv.Atoi(strings.TrimSpace(fields[0]))
-		if err != nil || index < 0 {
-			continue
-		}
-		row := list2Row{Index: index, Name: strings.TrimSpace(fields[1]), Raw: line}
-		if len(fields) > 2 {
-			row.Running = strings.TrimSpace(fields[2]) == "1"
-		}
-		if len(fields) > 5 {
-			row.PID, _ = strconv.Atoi(strings.TrimSpace(fields[5]))
-		}
-		if len(fields) > 6 {
-			row.VBoxPID, _ = strconv.Atoi(strings.TrimSpace(fields[6]))
-		}
-		if len(fields) > 7 {
-			row.Width, _ = strconv.Atoi(strings.TrimSpace(fields[7]))
-		}
-		if len(fields) > 8 {
-			row.Height, _ = strconv.Atoi(strings.TrimSpace(fields[8]))
-		}
-		if len(fields) > 9 {
-			row.DPI, _ = strconv.Atoi(strings.TrimSpace(fields[9]))
-		}
-		if row.Name == "" {
-			row.Name = "雷电"
-		}
-		result = append(result, Instance{
-			Root: canonicalRoot(root), Index: row.Index, Name: row.Name,
-			Running:        row.Running || row.PID > 0 || row.VBoxPID > 0,
-			ProcessStarted: row.Running || row.PID > 0,
-			AndroidStarted: row.Running,
-			PID:            row.PID, Serial: fmt.Sprintf("%s:%d", DefaultADBSerialHost, DefaultADBSerialBasePort+row.Index),
-			Resolution: func() string {
-				if row.Width > 0 && row.Height > 0 {
-					return fmt.Sprintf("%dx%d", row.Width, row.Height)
-				}
-				return ""
-			}(),
-		})
-	}
-	if len(result) == 0 {
-		return nil, errors.New("雷电 list2 未返回实例")
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Index < result[j].Index })
-	return result, nil
-}
 
 func ListInstances(ctx context.Context, root string) ([]Instance, error) {
 	o, err := resolvePaths(Options{InstallDir: root})
@@ -383,6 +455,8 @@ func OpenAuto(o Options) (*Client, error) {
 		candidate.Index = item.Index
 		candidate.Serial = item.Serial
 		candidate.Connect = true
+		candidate.TopHWND = item.TopHWND
+		candidate.BindHWND = item.BindHWND
 		client, openErr := Open(candidate)
 		if openErr != nil {
 			failures = append(failures, fmt.Errorf("实例 %d: %w", item.Index, openErr))
@@ -444,7 +518,7 @@ func ProbeContext(ctx context.Context, options Options) (result ProbeResult) {
 	}
 	result.Instance = selected
 	probeStep(&result, "instances", started, selected.Label(), nil)
-	client, err := Open(Options{InstallDir: resolved.InstallDir, ConsolePath: resolved.ConsolePath, ADBPath: resolved.ADBPath, Index: resolved.Index, Serial: resolved.Serial, Package: resolved.Package, Connect: true, CommandTimeout: resolved.CommandTimeout})
+	client, err := Open(Options{InstallDir: resolved.InstallDir, ConsolePath: resolved.ConsolePath, ADBPath: resolved.ADBPath, Index: resolved.Index, Serial: resolved.Serial, Package: resolved.Package, Connect: true, CommandTimeout: resolved.CommandTimeout, CaptureTimeout: resolved.CaptureTimeout, Methods: resolved.Methods, ADBServerPort: resolved.ADBServerPort, TopHWND: selected.TopHWND, BindHWND: selected.BindHWND})
 	if err != nil {
 		probeStep(&result, "connect", time.Now(), "", err)
 		return result

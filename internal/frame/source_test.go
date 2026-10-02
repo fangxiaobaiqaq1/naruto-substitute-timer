@@ -320,3 +320,59 @@ func TestFrameFingerprintIgnoresPaddingButNotGeometryOrSource(t *testing.T) {
 		t.Fatal("a changed pixel must differ")
 	}
 }
+
+func TestFingerprintRunsOncePerDeliveredFrame(t *testing.T) {
+	var calls atomic.Int64
+	fingerprintHook = func() { calls.Add(1) }
+	defer func() { fingerprintHook = nil }()
+	eng := &countingEngine{}
+	img := image.NewRGBA(image.Rect(0, 0, 400, 250))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{90, 120, 140, 255}), image.Point{}, draw.Src)
+	var d dedupedAnalysis
+	var n int
+	inner := func() Frame {
+		n++
+		at := time.Now()
+		if n == 3 {
+			img.SetRGBA(10, 10, color.RGBA{255, 0, 0, 255})
+		}
+		return d.analyze(img, eng, detect.ModeStretch, at, at, "sdk")
+	}
+	// A PrintWindow-style frame produced outside dedupedAnalysis.
+	printWindow := func() Frame {
+		return withFingerprint(Frame{Img: img, CaptureMethod: "printwindow-fullcontent", CapturedAt: time.Now()})
+	}
+	for _, tc := range []struct {
+		name  string
+		inner Provider
+		dups  []bool
+	}{
+		{"sdk", inner, []bool{false, true, false}},
+		{"printwindow", printWindow, []bool{false, true, true}},
+	} {
+		calls.Store(0)
+		p, closeProvider := boundedProvider(tc.inner, nil, time.Second)
+		for i, want := range tc.dups {
+			f := p()
+			if f.Err != nil || f.Duplicate != want {
+				t.Fatalf("%s frame %d: err=%v duplicate=%v want %v", tc.name, i, f.Err, f.Duplicate, want)
+			}
+		}
+		closeProvider()
+		if got := calls.Load(); got != int64(len(tc.dups)) {
+			t.Fatalf("%s: fingerprint ran %d times for %d frames", tc.name, got, len(tc.dups))
+		}
+	}
+}
+
+func BenchmarkFrameFingerprint(b *testing.B) {
+	img := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
+	for i := range img.Pix {
+		img.Pix[i] = byte(i * 31)
+	}
+	b.SetBytes(int64(len(img.Pix)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		frameFingerprint(img, "sdk")
+	}
+}

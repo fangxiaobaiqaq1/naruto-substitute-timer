@@ -10,7 +10,7 @@ func Validate(c Config) error {
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("schemaVersion: got %d, want %d", c.SchemaVersion, SchemaVersion)
 	}
-	if c.Capture.Provider != "" && c.Capture.Provider != "auto" && c.Capture.Provider != "mumu-sdk" && c.Capture.Provider != "leidian-adb" && c.Capture.Provider != "printwindow-fullcontent" {
+	if c.Capture.Provider != "" && c.Capture.Provider != "auto" && !captureMethod(c.Capture.Provider) {
 		return fmt.Errorf("capture.provider: unsupported value %q", c.Capture.Provider)
 	}
 	if c.Capture.Leidian.Selection != "" && c.Capture.Leidian.Selection != "auto" && c.Capture.Leidian.Selection != "manual" {
@@ -18,6 +18,9 @@ func Validate(c Config) error {
 	}
 	if c.Capture.Leidian.Index < 0 {
 		return fmt.Errorf("capture.leidian.index: must be nonnegative")
+	}
+	if c.Capture.Leidian.ADBServerPort < 0 || c.Capture.Leidian.ADBServerPort > 65535 {
+		return fmt.Errorf("capture.leidian.adbServerPort: must be in [0,65535]")
 	}
 	if c.Capture.Leidian.Serial != "" && !strings.Contains(c.Capture.Leidian.Serial, ":") {
 		return fmt.Errorf("capture.leidian.serial: expected host:port")
@@ -35,7 +38,7 @@ func Validate(c Config) error {
 		return fmt.Errorf("capture.mumu: instance and displayId must be nonnegative")
 	}
 	for _, method := range c.Capture.PreferredMethods {
-		if method != "mumu-sdk" && method != "leidian-adb" && method != "printwindow-fullcontent" {
+		if !captureMethod(method) {
 			return fmt.Errorf("capture.preferredMethods: unsupported method %q", method)
 		}
 	}
@@ -180,6 +183,15 @@ func Validate(c Config) error {
 		return fmt.Errorf("ui.playerSide: must be ask, left, right or auto")
 	}
 	return nil
+}
+
+// captureMethod reports whether method is an accepted capture method name.
+func captureMethod(method string) bool {
+	switch method {
+	case "mumu-sdk", "leidian-adb", "leidian-adb-raw", "leidian-window", "printwindow-fullcontent":
+		return true
+	}
+	return false
 }
 
 func validateScene(s SceneConfig) error {

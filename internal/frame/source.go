@@ -144,8 +144,8 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 		return attempt
 	}
 	preferredMethods := func(c config.CaptureConfig) []string {
-		if c.Provider == capture.MethodLeidianADB {
-			return []string{capture.MethodLeidianADB}
+		if isLeidianMethod(c.Provider) {
+			return []string{c.Provider}
 		}
 		if c.Provider == capture.MethodMuMuSDK {
 			return []string{capture.MethodMuMuSDK}
@@ -177,7 +177,7 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 		for _, method := range preferredMethods(cfg.Capture) {
 			started := time.Now()
 			setAttempt(started, method)
-			if method == capture.MethodMuMuSDK || method == capture.MethodLeidianADB {
+			if method == capture.MethodMuMuSDK || isLeidianMethod(method) {
 				if client == nil {
 					if time.Now().Before(retryAfter) {
 						f = Frame{Hold: true, Err: fmt.Errorf("%s 重连等待中：%w", method, retryError), CaptureStarted: started, CaptureMethod: method}
@@ -217,7 +217,7 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 				}
 				f = analyzed.analyze(img, eng, mode, started, captured, client.Source())
 			} else if method == capture.MethodPrintWindow {
-				f = snapshot(eng, mode)
+				f = withFingerprint(snapshot(eng, mode))
 			} else {
 				f = Frame{Hold: true, Err: fmt.Errorf("unsupported capture method %q", method), CaptureStarted: started, CaptureMethod: method}
 			}
@@ -402,14 +402,22 @@ func boundedProvider(inner Provider, cleanup func(), timeout time.Duration, atte
 // one run, never persisted or sent anywhere.
 var fingerprintSeed = maphash.MakeSeed()
 
+// fingerprintHook is a test-only counter hook; nil in production.
+var fingerprintHook func()
+
 // frameFingerprint hashes visible pixels, geometry and capture source with the
 // runtime's AES-based hash. Padding bytes are not observations; a different
-// image geometry or capture coordinate system is a new observation. It replaces
-// a cryptographic digest that cost tens of milliseconds per 1080p frame on CPUs
-// without SHA extensions, while a 64-bit hash is ample for duplicate detection.
+// image geometry or capture coordinate system is a new observation. A 64-bit
+// process-local hash is ample for equality and duplicate detection.
+//
+// Rows go through maphash.Bytes rather than a streaming maphash.Hash: Write
+// re-chunks input into 128-byte blocks and measured ~10% slower at 1080p.
 func frameFingerprint(img *image.RGBA, method string) uint64 {
 	if img == nil {
 		return 0
+	}
+	if fingerprintHook != nil {
+		fingerprintHook()
 	}
 	r := img.Rect
 	var header [32]byte
@@ -434,6 +442,15 @@ func frameFingerprint(img *image.RGBA, method string) uint64 {
 func mixHash(acc, value uint64) uint64 {
 	acc ^= value + 0x9e3779b97f4a7c15 + (acc << 6) + (acc >> 2)
 	return acc
+}
+
+// withFingerprint records the capture fingerprint once at the source so the
+// delivery layer never hashes the same pixels again.
+func withFingerprint(f Frame) Frame {
+	if f.Img != nil && !f.fingerprinted {
+		f.fingerprint, f.fingerprinted = frameFingerprint(f.Img, f.CaptureMethod), true
+	}
+	return f
 }
 
 // dedupedAnalysis skips the recognition chain for a capture whose pixels are
@@ -467,4 +484,13 @@ func (d *dedupedAnalysis) analyze(img *image.RGBA, eng engine.Engine, mode detec
 		d.valid = false
 	}
 	return f
+}
+
+// isLeidianMethod reports whether method is served by the 雷电 client.
+func isLeidianMethod(method string) bool {
+	switch method {
+	case capture.MethodLeidianADB, capture.MethodLeidianADBRaw, capture.MethodLeidianWindow:
+		return true
+	}
+	return false
 }

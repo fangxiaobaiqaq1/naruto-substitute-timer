@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -72,8 +73,8 @@ func isMuMuProcess(name string) bool {
 // 缓存后每轮采集只需 IsWindow 校验（快速、无跨进程消息）。
 var findMuMuCache = struct {
 	sync.Mutex
-	wins    []Window
-	until   time.Time
+	wins  []Window
+	until time.Time
 }{}
 
 // InvalidateMuMu 丢掉窗口缓存。模拟器重启、截屏失败后必须重找，
@@ -259,4 +260,114 @@ func sortByClientArea(wins []Window) {
 		}
 		return ri.Width()*ri.Height() > rj.Width()*rj.Height()
 	})
+}
+
+// leidianRenderClasses 是雷电渲染子窗口的类名（不同版本命名不同）。
+var leidianRenderClasses = []string{"RenderWindow", "TheRender", "subWin"}
+
+const (
+	leidianMainFrameClass = "LDPlayerMainFrame"
+	leidianProcessName    = "dnplayer.exe"
+)
+
+// staticEnum 复用同一个 syscall 回调。syscall.NewCallback 创建的回调永不释放、
+// 总数有上限，每次查找都新建会在长时间运行后耗尽。
+var staticEnum struct {
+	sync.Mutex
+	once sync.Once
+	cb   uintptr
+	fn   func(hwnd uintptr) bool
+}
+
+func enumWith(child uintptr, children bool, fn func(hwnd uintptr) bool) {
+	e := &staticEnum
+	e.once.Do(func() {
+		e.cb = syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+			if e.fn != nil && e.fn(hwnd) {
+				return 1
+			}
+			return 0
+		})
+	})
+	e.Lock()
+	defer e.Unlock()
+	e.fn = fn
+	if children {
+		procEnumChildWindows.Call(child, e.cb, 0)
+	} else {
+		procEnumWindows.Call(e.cb, 0)
+	}
+	e.fn = nil
+}
+
+func clientArea(hwnd uintptr) int64 {
+	r, err := getClientRect(hwnd)
+	if err != nil {
+		return 0
+	}
+	if r.Width() <= 0 || r.Height() <= 0 {
+		return 0
+	}
+	return int64(r.Width()) * int64(r.Height())
+}
+
+func usableWindow(hwnd uintptr) bool {
+	return hwnd != 0 && IsWindow(hwnd) && isWindowVisible(hwnd) && clientArea(hwnd) > 0
+}
+
+// leidianRenderChild 返回 top 下面积最大的可见渲染子窗口。
+func leidianRenderChild(top uintptr) uintptr {
+	var best uintptr
+	var bestArea int64
+	enumWith(top, true, func(hwnd uintptr) bool {
+		if !isWindowVisible(hwnd) {
+			return true
+		}
+		class := getClassName(hwnd)
+		for _, name := range leidianRenderClasses {
+			if strings.EqualFold(class, name) {
+				if area := clientArea(hwnd); area > bestArea {
+					best, bestArea = hwnd, area
+				}
+				break
+			}
+		}
+		return true
+	})
+	return best
+}
+
+// FindLeidianRender 定位雷电实例的渲染窗口，供 PrintWindow 采集。
+// 顺序：ldconsole list2 第 4 列 bind HWND（有效且可见）→ 第 3 列顶层 HWND 下的
+// 渲染子窗口 → 枚举 dnplayer.exe 的 LDPlayerMainFrame 再找最大的可见渲染子窗口。
+// 最后一步仅在恰好一个主窗口时采用，避免多开时抓到别的实例。
+func FindLeidianRender(topHWND, bindHWND uintptr) (uintptr, error) {
+	if usableWindow(bindHWND) {
+		return bindHWND, nil
+	}
+	if topHWND != 0 && IsWindow(topHWND) {
+		if child := leidianRenderChild(topHWND); usableWindow(child) {
+			return child, nil
+		}
+	}
+	var frames []uintptr
+	enumWith(0, false, func(hwnd uintptr) bool {
+		if isWindowVisible(hwnd) && getClassName(hwnd) == leidianMainFrameClass {
+			frames = append(frames, hwnd)
+		}
+		return true
+	})
+	var owned []uintptr
+	for _, hwnd := range frames {
+		if strings.EqualFold(processName(getWindowThreadProcessID(hwnd)), leidianProcessName) {
+			owned = append(owned, hwnd)
+		}
+	}
+	if len(owned) != 1 {
+		return 0, errors.New("未找到唯一的雷电渲染窗口")
+	}
+	if child := leidianRenderChild(owned[0]); usableWindow(child) {
+		return child, nil
+	}
+	return 0, errors.New("雷电主窗口下没有可见的渲染子窗口")
 }

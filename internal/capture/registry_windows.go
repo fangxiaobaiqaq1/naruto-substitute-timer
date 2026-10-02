@@ -36,12 +36,26 @@ func (mumuProvider) Open(_ context.Context, cfg config.CaptureConfig) (Client, e
 	return client, nil
 }
 
-type leidianProvider struct{}
+// leidianProvider opens one 雷电 client whose per-frame chain comes from
+// capture.preferredMethods. Opening through a specific method moves that
+// method to the front of the chain.
+type leidianProvider struct{ method string }
 
-func (leidianProvider) Name() string { return MethodLeidianADB }
-func (leidianProvider) Open(_ context.Context, cfg config.CaptureConfig) (Client, error) {
+func (p leidianProvider) Name() string { return p.method }
+func (p leidianProvider) Open(_ context.Context, cfg config.CaptureConfig) (Client, error) {
 	o := cfg.Leidian
-	options := leidian.Options{InstallDir: o.InstallDir, ConsolePath: o.ConsolePath, ADBPath: o.ADBPath, Index: o.Index, Serial: o.Serial, Package: o.Package, Connect: o.ConnectOnStart}
+	methods := LeidianMethodChain(cfg)
+	if p.method != MethodLeidianADB {
+		ordered := []string{p.method}
+		for _, method := range methods {
+			if method != p.method {
+				ordered = append(ordered, method)
+			}
+		}
+		methods = ordered
+	}
+	options := leidian.Options{InstallDir: o.InstallDir, ConsolePath: o.ConsolePath, ADBPath: o.ADBPath, Index: o.Index, Serial: o.Serial, Package: o.Package, Connect: o.ConnectOnStart,
+		CaptureTimeout: LeidianCaptureTimeout(cfg.TimeoutMS), Methods: methods, ADBServerPort: o.ADBServerPort}
 	manual := o.Selection == "manual" || (o.Selection != "auto" && (o.InstallDir != "" || o.ConsolePath != "" || o.ADBPath != "" || o.Index != 0 || o.Serial != ""))
 	var (
 		client *leidian.Client
@@ -62,7 +76,7 @@ func (leidianProvider) Open(_ context.Context, cfg config.CaptureConfig) (Client
 }
 
 func DefaultRegistry() *Registry {
-	return NewRegistry(mumuProvider{}, leidianProvider{})
+	return NewRegistry(mumuProvider{}, leidianProvider{MethodLeidianADB}, leidianProvider{MethodLeidianADBRaw}, leidianProvider{MethodLeidianWindow})
 }
 
 func OpenConfigured(ctx context.Context, method string, cfg config.CaptureConfig) (Client, error) {

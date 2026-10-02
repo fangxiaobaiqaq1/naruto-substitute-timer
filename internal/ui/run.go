@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -111,8 +112,11 @@ type session struct {
 	lastRightBoth   string
 	lastLeftColor   color.Color
 	lastRightColor  color.Color
-	clockRevision   uint64
-	overlayRevision uint64
+	clockRevision   uint64 // Accessed only through sync/atomic.
+	overlayRevision uint64 // Accessed only through sync/atomic.
+	clockPending    latestCoalescer[clockUpdate]
+	slowCapture     slowCaptureStreak
+	slowCaptureRuns uint64 // Accessed only through sync/atomic.
 
 	overlay            *fyne.Container
 	win                fyne.Window
@@ -437,12 +441,62 @@ func (s *session) loop() {
 		}
 		started := time.Now()
 		s.captureOnce()
+		interval, elapsed := s.poll(), time.Since(started)
+		if s.slowCapture.Observe(elapsed, interval) {
+			runs := atomic.AddUint64(&s.slowCaptureRuns, 1)
+			s.mu.Lock()
+			s.debugf("capture slow: %d consecutive frames over poll interval %s (last %s, streaks=%d)",
+				slowCaptureFrames, interval, elapsed.Round(time.Millisecond), runs)
+			s.mu.Unlock()
+		}
 		// 采集和检测已经占用了本轮预算；处理超时则从下一轮重新计时，
 		// 不积压旧帧，也不在每轮处理结束后再额外等一个完整间隔。
-		if !s.wait(nextCaptureWait(s.poll(), time.Since(started))) {
+		if !s.wait(nextCaptureWait(interval, elapsed)) {
 			return
 		}
 	}
+}
+
+// slowCaptureFrames is how many consecutive over-budget captures are reported
+// as one diagnostic streak.
+const slowCaptureFrames = 10
+
+// slowCaptureStreak counts consecutive captures whose elapsed time exceeds the
+// poll interval. It is used only by the capture loop goroutine.
+type slowCaptureStreak struct {
+	run int
+}
+
+// Observe reports true each time the current streak reaches another multiple of
+// slowCaptureFrames. Any capture within budget ends the streak.
+func (c *slowCaptureStreak) Observe(elapsed, interval time.Duration) bool {
+	if elapsed <= interval {
+		c.run = 0
+		return false
+	}
+	c.run++
+	return c.run%slowCaptureFrames == 0
+}
+
+// latestCoalescer keeps only the newest value and lets at most one consumer be
+// scheduled at a time. Offer returns true when the caller must schedule a
+// consumer; the consumer calls Take, which may return nil if a previous
+// consumer already took the newest value.
+type latestCoalescer[T any] struct {
+	pending atomic.Bool
+	latest  atomic.Pointer[T]
+}
+
+func (c *latestCoalescer[T]) Offer(v *T) bool {
+	c.latest.Store(v)
+	return c.pending.CompareAndSwap(false, true)
+}
+
+func (c *latestCoalescer[T]) Take() *T {
+	// Clear pending before taking, so an Offer racing with this consumer either
+	// is seen here or schedules a new consumer.
+	c.pending.Store(false)
+	return c.latest.Swap(nil)
 }
 
 func (s *session) stop() {
@@ -1050,6 +1104,22 @@ func (s *session) refreshClock() {
 	s.refreshClockAt(time.Now())
 }
 
+// clockUpdate is one prepared clock refresh. Only the newest pending update is
+// applied on the Fyne thread.
+type clockUpdate struct {
+	revision              uint64
+	trace                 traceRef
+	leftEvent, rightEvent uint64
+	txt, eventText        string
+	col                   color.NRGBA
+	dual                  bool
+	altText               string
+	altColor              color.NRGBA
+	leftText, rightText   string
+	leftColor, rightColor color.NRGBA
+	scale                 float64
+}
+
 func (s *session) refreshClockAt(now time.Time) {
 	if s.stopped() || s.cd == nil {
 		return
@@ -1060,13 +1130,19 @@ func (s *session) refreshClockAt(now time.Time) {
 	txt := timerapp.FormatCD(secs)
 	col := clockColor(secs)
 	dual, altText, altColor := s.dualClockText(now)
-	leftText := timerapp.FormatCD(s.left.LatestRemaining(now))
-	rightText := timerapp.FormatCD(s.right.LatestRemaining(now))
-	leftColor := clockColor(s.left.LatestRemaining(now))
-	rightColor := clockColor(s.right.LatestRemaining(now))
+	leftSecs := s.left.LatestRemaining(now)
+	rightSecs := s.right.LatestRemaining(now)
+	leftText, leftColor := timerapp.FormatCD(leftSecs), clockColor(leftSecs)
+	rightText, rightColor := timerapp.FormatCD(rightSecs), clockColor(rightSecs)
 	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor && s.lastLeftBoth == leftText && s.lastRightBoth == rightText && s.lastLeftColor == leftColor && s.lastRightColor == rightColor
 	trace := s.traceFrame
+	if same && (trace.id == 0 || trace == s.traceClock) {
+		// The applied trace already recorded this exact UI state (first write wins).
+		s.mu.Unlock()
+		return
+	}
 	leftEvent, rightEvent := s.visibleEventSerials()
+	var replay diagnostics.ReplayUIState
 	if trace.recorder != nil && trace.id != 0 {
 		opponentSide := ""
 		opponentNinja := ""
@@ -1076,84 +1152,93 @@ func (s *session) refreshClockAt(now time.Time) {
 		case "right":
 			opponentSide, opponentNinja = "left", s.leftNinja
 		}
-		trace.recorder.RecordReplayUIState(diagnostics.ReplayUIState{FrameID: trace.id,
+		replay = diagnostics.ReplayUIState{FrameID: trace.id,
 			PlayerSide: s.side, OpponentSide: opponentSide, OpponentNinja: opponentNinja,
 			PrimaryText: txt, AlternateText: altText, EventText: eventText,
-			LeftEventCount: s.left.EventCount(), RightEventCount: s.right.EventCount(), PreparedAt: time.Now()})
-	}
-	if same && (trace.id == 0 || trace == s.traceClock) {
-		s.mu.Unlock()
-		return
+			LeftEventCount: s.left.EventCount(), RightEventCount: s.right.EventCount()}
 	}
 	s.lastCD, s.lastEventText, s.lastClockColor = txt, eventText, col
 	s.lastDual, s.lastAlt, s.lastAltColor = dual, altText, altColor
 	s.lastLeftBoth, s.lastRightBoth = leftText, rightText
 	s.lastLeftColor, s.lastRightColor = leftColor, rightColor
-	s.clockRevision++
-	revision := s.clockRevision
+	update := &clockUpdate{revision: atomic.AddUint64(&s.clockRevision, 1), trace: trace,
+		leftEvent: leftEvent, rightEvent: rightEvent, txt: txt, eventText: eventText, col: col,
+		dual: dual, altText: altText, altColor: altColor,
+		leftText: leftText, rightText: rightText, leftColor: leftColor, rightColor: rightColor,
+		scale: s.cfg.UI.FontScale}
+	// Offer under s.mu so the coalescer always holds the highest revision;
+	// Offer is only atomic stores.
+	schedule := s.clockPending.Offer(update)
 	s.mu.Unlock()
+	if replay.FrameID != 0 {
+		// The recorder has its own locks; keep it off the session lock.
+		replay.PreparedAt = time.Now()
+		trace.recorder.RecordReplayUIState(replay)
+	}
 	trace.mark("queued", time.Now())
-	fyne.Do(func() {
-		if s.stopped() {
-			return
+	if schedule {
+		fyne.Do(s.applyPendingClock)
+	}
+}
+
+// applyPendingClock runs on the Fyne thread and applies only the newest
+// prepared clock update.
+func (s *session) applyPendingClock() {
+	u := s.clockPending.Take()
+	if u == nil || s.stopped() {
+		return
+	}
+	if atomic.LoadUint64(&s.clockRevision) != u.revision {
+		return
+	}
+	trace := u.trace
+	// Both-side labels track the clocks even while hidden, so turning the
+	// option on never shows a stale value until the next change.
+	if s.bothSideBox != nil {
+		s.leftBothCD.Text, s.leftBothCD.Color = u.leftText, u.leftColor
+		s.rightBothCD.Text, s.rightBothCD.Color = u.rightText, u.rightColor
+		s.leftBothCD.Refresh()
+		s.rightBothCD.Refresh()
+	}
+	clockSize := s.cd.MinSize()
+	layoutChanged := false
+	if s.alternateBox != nil {
+		layoutChanged = s.alternateBox.Visible() != u.dual || s.altCD.Text != u.altText
+		if u.dual {
+			s.primaryLabel.Show()
+			s.alternateBox.Show()
+			s.cd.TextSize = overlayTextSize(32, u.scale)
+		} else {
+			s.primaryLabel.Hide()
+			s.alternateBox.Hide()
+			s.cd.TextSize = overlayTextSize(44, u.scale)
 		}
-		s.mu.Lock()
-		current := s.clockRevision == revision
-		s.mu.Unlock()
-		if !current {
-			return
-		}
-		// Both-side labels track the clocks even while hidden, so turning the
-		// option on never shows a stale value until the next change.
-		if s.bothSideBox != nil {
-			s.leftBothCD.Text, s.leftBothCD.Color = leftText, leftColor
-			s.rightBothCD.Text, s.rightBothCD.Color = rightText, rightColor
-			s.leftBothCD.Refresh()
-			s.rightBothCD.Refresh()
-		}
-		clockSize := s.cd.MinSize()
-		layoutChanged := false
-		if s.alternateBox != nil {
-			layoutChanged = s.alternateBox.Visible() != dual || s.altCD.Text != altText
-			s.mu.Lock()
-			scale := s.cfg.UI.FontScale
-			s.mu.Unlock()
-			if dual {
-				s.primaryLabel.Show()
-				s.alternateBox.Show()
-				s.cd.TextSize = overlayTextSize(32, scale)
-			} else {
-				s.primaryLabel.Hide()
-				s.alternateBox.Hide()
-				s.cd.TextSize = overlayTextSize(44, scale)
-			}
-			s.altCD.Text, s.altCD.Color = altText, altColor
-			s.altCD.Refresh()
-		}
-		var badgeSize fyne.Size
-		if s.eventTag != nil {
-			badgeSize = s.eventTag.MinSize()
-		}
-		if s.cd.Text != txt || s.cd.Color != col {
-			s.cd.Text = txt
-			s.cd.Color = col
-			s.cd.Refresh()
-		}
-		if s.eventTag != nil && s.eventTag.Text != eventText {
-			s.eventTag.Text = eventText
-			s.eventTag.Refresh()
-		}
-		// canvas.Text.Refresh repaints but does not reflow the neighboring badge.
-		// Going from "—" to a multi-digit clock must also recompute its row layout.
-		if s.overlay != nil && (layoutChanged || s.cd.MinSize() != clockSize || (s.eventTag != nil && s.eventTag.MinSize() != badgeSize)) {
-			s.overlay.Refresh()
-			s.fitOverlayWindow()
-		}
-		if trace.recorder != nil && trace.id != 0 {
-			trace.recorder.CarryEvents(trace.id, leftEvent, rightEvent)
-		}
-		s.traceApplied(trace, false)
-	})
+		s.altCD.Text, s.altCD.Color = u.altText, u.altColor
+		s.altCD.Refresh()
+	}
+	var badgeSize fyne.Size
+	if s.eventTag != nil {
+		badgeSize = s.eventTag.MinSize()
+	}
+	if s.cd.Text != u.txt || s.cd.Color != u.col {
+		s.cd.Text = u.txt
+		s.cd.Color = u.col
+		s.cd.Refresh()
+	}
+	if s.eventTag != nil && s.eventTag.Text != u.eventText {
+		s.eventTag.Text = u.eventText
+		s.eventTag.Refresh()
+	}
+	// canvas.Text.Refresh repaints but does not reflow the neighboring badge.
+	// Going from "—" to a multi-digit clock must also recompute its row layout.
+	if s.overlay != nil && (layoutChanged || s.cd.MinSize() != clockSize || (s.eventTag != nil && s.eventTag.MinSize() != badgeSize)) {
+		s.overlay.Refresh()
+		s.fitOverlayWindow()
+	}
+	if trace.recorder != nil && trace.id != 0 {
+		trace.recorder.CarryEvents(trace.id, u.leftEvent, u.rightEvent)
+	}
+	s.traceApplied(trace, false)
 }
 
 func (s *session) refreshOverlay() {
@@ -1176,8 +1261,7 @@ func (s *session) refreshOverlay() {
 	}
 	info := s.statusLine()
 	textStatus := s.textStatusText()
-	s.overlayRevision++
-	revision := s.overlayRevision
+	revision := atomic.AddUint64(&s.overlayRevision, 1)
 	trace := s.traceFrame
 	s.mu.Unlock()
 	trace.mark("queued", time.Now())
@@ -1210,10 +1294,7 @@ func (s *session) refreshOverlay() {
 		if s.stopped() {
 			return
 		}
-		s.mu.Lock()
-		current := s.overlayRevision == revision
-		s.mu.Unlock()
-		if !current {
+		if atomic.LoadUint64(&s.overlayRevision) != revision {
 			return
 		}
 		layoutChanged := s.tag.Text != label || (s.info != nil && s.info.Text != info)

@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,8 +68,11 @@ type avatarEntry struct {
 	coarseMask         *image.Gray
 	gray               *image.Gray
 	mask               *image.Gray
-	scaled             map[string]*match.PreparedNCC
+	scaled             map[avatarSize]*match.PreparedNCC
 }
+
+// avatarSize keys the per-entry scaled template cache.
+type avatarSize struct{ w, h int }
 
 // AvatarMatch is exclusively current-frame portrait evidence. Candidate is
 // diagnostic-only when the strict identity fields are blank.
@@ -94,6 +96,22 @@ type avatarCatalog struct {
 	byID          map[string]*avatarEntry
 	cacheScale    float64
 	cachedEntries int
+	// cacheWipes counts overflow wipes of the scaled template cache; a single
+	// scan must never trigger one (tests assert it).
+	cacheWipes int
+	// Per-call scratch reused under mu; never returned to callers.
+	scratchBest     []avatarFinalist
+	scratchEntries  []*avatarEntry
+	scratchPrimary  []stageEntry
+	scratchBestByID map[string]float64
+	scratchNameByID map[string]string
+	scratchBaseByID map[string]string
+	scratchFine     map[string]bool
+}
+
+type avatarFinalist struct {
+	entry *avatarEntry
+	score float64
 }
 
 // AvatarTracker executes the 242-entry thumbnail filter at most twice per
@@ -299,12 +317,11 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 	// around that anchor removes the ROI's background and vertical squash from
 	// the 36x36 locator. The unanchored crop stays as a fallback for callers
 	// that pass a synthetic centered portrait rather than the HUD ROI.
-	hudCoarse := match.ScaleGray(match.ToGray(match.CropRGBA(view, avatarAnchorRect(roi, scale))), 36, 36)
-	type finalist struct {
-		entry *avatarEntry
-		score float64
-	}
-	best := make([]finalist, 0, len(c.entries))
+	// gray has origin (0,0) at roi.Min; cropping it equals converting the
+	// cropped RGBA because luma is per pixel.
+	anchor := avatarAnchorRect(roi, scale).Intersect(roi).Sub(roi.Min)
+	hudCoarse := match.ScaleGray(gray.SubImage(anchor).(*image.Gray), 36, 36)
+	best := c.scratchBest[:0]
 	for _, entry := range c.entries {
 		// Two aligned 36² thumbnail queries (HUD anchor + whole ROI) keep
 		// recall for both real HUD frames and centered synthetic portraits.
@@ -313,9 +330,15 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 		if hud := coarseAvatarScore(hudCoarse, entry.coarseGray, entry.coarseMask); hud > score {
 			score = hud
 		}
-		best = append(best, finalist{entry, score})
+		best = append(best, avatarFinalist{entry, score})
 	}
-	sort.Slice(best, func(i, j int) bool { return best[i].score > best[j].score })
+	sort.SliceStable(best, func(i, j int) bool {
+		if best[i].score != best[j].score {
+			return best[i].score > best[j].score
+		}
+		return best[i].entry.id < best[j].entry.id
+	})
+	c.scratchBest = best
 	// Coarse matching is only a locator. A real HUD portrait can be partially
 	// clipped by the capture boundary and its render scale is not guaranteed to
 	// equal the bead-derived scale, so the true entry may rank below the first
@@ -325,10 +348,11 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 	if len(best) > 24 {
 		best = best[:24]
 	}
-	entries := make([]*avatarEntry, len(best))
+	entries := c.scratchEntries[:0]
 	for i := range best {
-		entries[i] = best[i].entry
+		entries = append(entries, best[i].entry)
 	}
+	c.scratchEntries = entries
 	return c.matchEntries(view, gray, scale, entries)
 }
 
@@ -386,9 +410,7 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 	// single identity is evaluated at several display scales; treating its
 	// second scale as a different candidate can reject an otherwise unambiguous
 	// portrait (best=.90, same-ID runner-up=.85).
-	bestByID := make(map[string]float64, len(entries))
-	nameByID := make(map[string]string, len(entries))
-	baseByID := make(map[string]string, len(entries))
+	bestByID, nameByID, baseByID := c.scratchMaps()
 	bounds := view.Bounds()
 	c.evictTemplates(scale)
 	decode := func(entry *avatarEntry) bool {
@@ -438,14 +460,24 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 				bestByID[entry.id] = value
 			}
 		}
-		primary := make([]stageEntry, 0, len(entries))
+		primary := c.scratchPrimary[:0]
 		for _, entry := range entries {
 			if entry != nil {
 				primary = append(primary, stageEntry{entry, bestByID[entry.id]})
 			}
 		}
-		sort.Slice(primary, func(i, j int) bool { return primary[i].score > primary[j].score })
-		fine := make(map[string]bool, 12)
+		sort.SliceStable(primary, func(i, j int) bool {
+			if primary[i].score != primary[j].score {
+				return primary[i].score > primary[j].score
+			}
+			return primary[i].entry.id < primary[j].entry.id
+		})
+		c.scratchPrimary = primary
+		if c.scratchFine == nil {
+			c.scratchFine = make(map[string]bool, 12)
+		}
+		fine := c.scratchFine
+		clear(fine)
 		for i, v := range primary {
 			if i < 6 {
 				fine[v.entry.id] = true
@@ -497,6 +529,19 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 	return out
 }
 
+// scratchMaps returns the cleared per-call identity maps (caller holds mu).
+func (c *avatarCatalog) scratchMaps() (map[string]float64, map[string]string, map[string]string) {
+	if c.scratchBestByID == nil {
+		c.scratchBestByID = make(map[string]float64, 32)
+		c.scratchNameByID = make(map[string]string, 32)
+		c.scratchBaseByID = make(map[string]string, 32)
+	}
+	clear(c.scratchBestByID)
+	clear(c.scratchNameByID)
+	clear(c.scratchBaseByID)
+	return c.scratchBestByID, c.scratchNameByID, c.scratchBaseByID
+}
+
 type stageEntry struct {
 	entry *avatarEntry
 	score float64
@@ -533,22 +578,30 @@ func (c *avatarCatalog) evictTemplates(scale float64) {
 // preparing it on first use. All catalog template state lives under the
 // catalog lock; the cache only ever holds templates at the current scale.
 func (c *avatarCatalog) prepared(entry *avatarEntry, w, h int) *match.PreparedNCC {
-	key := strconv.Itoa(w) + "x" + strconv.Itoa(h)
+	key := avatarSize{w, h}
 	if entry.scaled == nil {
-		entry.scaled = make(map[string]*match.PreparedNCC, 8)
+		entry.scaled = make(map[avatarSize]*match.PreparedNCC, 8)
 	} else if p, ok := entry.scaled[key]; ok {
 		return p
 	}
 	p := match.PrepareNCC(match.ScaleGray(entry.gray, w, h), match.ScaleGray(entry.mask, w, h))
 	entry.scaled[key] = p
 	c.cachedEntries++
-	if c.cachedEntries > 64 {
+	if c.cachedEntries > c.templateCacheCap() {
 		for _, e := range c.entries {
 			e.scaled = nil
 		}
 		c.cachedEntries = 0
+		c.cacheWipes++
 	}
 	return p
+}
+
+// templateCacheCap covers every size of one complete scan (each entry at
+// every display factor) plus headroom, so a scan never wipes its own cache.
+// Sizes depend only on the scale, which evictTemplates already keys.
+func (c *avatarCatalog) templateCacheCap() int {
+	return len(c.entries)*len(avatarFactorsFull) + 64
 }
 
 func (t *AvatarTracker) Read(c *avatarCatalog, img *image.RGBA, roi image.Rectangle, scale float64, now time.Time) AvatarMatch {
