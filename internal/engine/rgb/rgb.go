@@ -354,11 +354,12 @@ func sampleCalibratedRow(img *image.RGBA, row []detect.BeadPosition, area detect
 			st, conf = detect.StateDark, 1
 		}
 		guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
-		// Xiayin's alternate red skin still needs its own bounded body.
-		// Red bars/effects alone must not convert a purple row into ready beans.
-		if st == detect.StateLight && xiayin && palette == ninja.Red && !isolatedRedHalo(img, p, guard) {
-			st = detect.StateUnknown
-		}
+		// A confirmed Xiayin red core is already bounded by the calibrated
+		// sample, confidence/margin, and the wash guard below. Do not require
+		// the optional halo-shape proof for every ordinary red bean: scaling and
+		// HUD blending can make a real core fail that narrow geometry check.
+		// The proof remains an exception for unverified red rows and is still
+		// used by specialWash to reject broad red effects.
 		if st == detect.StateLight && specialWash(img, p, palette, guard) {
 			if !warmHighlight && (palette != ninja.Purple || identified.Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard, gap))) {
 				st = detect.StateUnknown
