@@ -3,12 +3,17 @@ package rgb
 import (
 	"image"
 	"math"
+	"sync"
 	"time"
 
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
 	"narutotimer/internal/ninja"
 )
+
+// parallelSides lets tests compare concurrent side/profile sampling against
+// the original sequential order.
+var parallelSides = true
 
 func (e *Engine) specialPositions(img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea) ([]detect.BeadPosition, [2]ninja.Readout) {
 	return e.specialPositionsFor("camp", img, positions, area)
@@ -24,11 +29,13 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 		profileIndex = 1
 	}
 	var identified [2]ninja.Readout
-	var out []detect.BeadPosition
-	for index, side := range []string{"left", "right"} {
+	var rows [2][]detect.BeadPosition
+	// Each side touches only its own trackers and its own result slots; the
+	// shared Reader and catalog are safe for concurrent tracker calls.
+	side := func(index int, name string) {
 		var row []detect.BeadPosition
 		for _, p := range positions {
-			if p.Side == side {
+			if p.Side == name {
 				row = append(row, p)
 			}
 		}
@@ -48,7 +55,7 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 				}
 				for i := 4; i < 6; i++ {
 					lx, ly := row[0].LX+float64(i)*dx, row[0].LY+float64(i)*dy
-					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: side, Idx: i, LX: lx, LY: ly}, X: area.X + int(math.Round(lx*float64(area.W)/detect.LogicWidth)), Y: area.Y + int(math.Round(ly*float64(area.H)/detect.LogicHeight))})
+					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: name, Idx: i, LX: lx, LY: ly}, X: area.X + int(math.Round(lx*float64(area.W)/detect.LogicWidth)), Y: area.Y + int(math.Round(ly*float64(area.H)/detect.LogicHeight))})
 				}
 			}
 			// Some exact variants have an extra energy bar above their ordinary
@@ -62,9 +69,18 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 				}
 			}
 		}
-		out = append(out, row...)
+		rows[index] = row
 	}
-	return out, identified
+	if parallelSides {
+		var wg sync.WaitGroup
+		wg.Go(func() { side(1, "right") })
+		side(0, "left")
+		wg.Wait()
+	} else {
+		side(0, "left")
+		side(1, "right")
+	}
+	return append(rows[0], rows[1]...), identified
 }
 
 func applyNames(res *engine.Result, readouts [2]ninja.Readout) {

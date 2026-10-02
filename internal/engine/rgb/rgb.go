@@ -89,14 +89,15 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		}
 		return e.layout.Positions(w, h)
 	}
-	readouts := map[string][2]ninja.Readout{}
-	sample := func(name string) []engine.BeadInfo {
+	// sample writes only its own readout and its profile's trackers, so camp
+	// and duel can run concurrently. Non-profiled layouts leave it zero.
+	sample := func(name string, pos []detect.BeadPosition, readout *[2]ninja.Readout) []engine.BeadInfo {
 		if _, calibrated := e.layout.(engine.ProfiledLayout); calibrated {
-			pos, identified := e.specialPositionsForAt(name, img, positions(name), area, at)
-			readouts[name] = identified
+			pos, identified := e.specialPositionsForAt(name, img, pos, area, at)
+			*readout = identified
 			return sampleCalibratedSpecial(img, pos, area, vision, identified)
 		}
-		return sampleLayout(img, positions(name))
+		return sampleLayout(img, pos)
 	}
 	if p, ok := e.layout.(engine.ProfiledLayout); ok {
 		if manual := p.PreferredProfile(); manual == "camp" || manual == "duel" {
@@ -106,19 +107,35 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	if prefer == "camp" || prefer == "duel" {
 		res.Name = "rgb-" + prefer
 		res.LayoutProfile = prefer
-		res.Beads = sample(prefer)
-		applyNames(&res, readouts[prefer])
+		var readout [2]ninja.Readout
+		res.Beads = sample(prefer, positions(prefer), &readout)
+		applyNames(&res, readout)
 		e.locked = prefer
 		return res
 	}
-	camp := sample("camp")
-	duel := sample("duel")
+	// Layout positions are resolved here so only sampling leaves this goroutine.
+	campPositions, duelPositions := positions("camp"), positions("duel")
+	var camp, duel []engine.BeadInfo
+	var campReadout, duelReadout [2]ninja.Readout
+	if parallelSides {
+		var wg sync.WaitGroup
+		wg.Go(func() { duel = sample("duel", duelPositions, &duelReadout) })
+		camp = sample("camp", campPositions, &campReadout)
+		wg.Wait()
+	} else {
+		camp = sample("camp", campPositions, &campReadout)
+		duel = sample("duel", duelPositions, &duelReadout)
+	}
 	chosen, name := pickLayout(camp, duel)
 	chosen, name = e.stickLayout(camp, duel, chosen, name)
 	res.Name = "rgb-" + name
 	res.LayoutProfile = name
 	res.Beads = chosen
-	applyNames(&res, readouts[name])
+	readout := campReadout
+	if name == "duel" {
+		readout = duelReadout
+	}
+	applyNames(&res, readout)
 	return res
 }
 
