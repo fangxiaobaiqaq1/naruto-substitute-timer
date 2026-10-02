@@ -165,6 +165,7 @@ func (s *session) openSettings() {
 	updateSource := s.cfg.UI.UpdateSource
 	opacity, fontScale := s.cfg.UI.WindowOpacity, s.cfg.UI.FontScale
 	overlayMode, showBoth, gpuAccel := s.cfg.UI.OverlayMode, s.cfg.UI.ShowBothSides, s.cfg.UI.GPUAcceleration
+	miniOpacity, miniFloating := s.cfg.UI.MiniOpacity, s.cfg.UI.MiniFloating
 	appearanceError := s.appearanceError
 	textStatus := s.textStatusText()
 	s.mu.Unlock()
@@ -195,16 +196,31 @@ func (s *session) openSettings() {
 		miniSel.SetSelected("完整浮窗")
 	}
 	miniSel.Horizontal = true
+	miniSel.Required = true
+	miniSel.OnChanged = func(label string) {
+		if on := label == "迷你窗口"; on != s.isMini() {
+			showSettingsError(s.setMiniMode(on), w)
+		}
+	}
 	bothChk := widget.NewCheck("左右两边都显示替身倒计时", nil)
 	bothChk.SetChecked(showBoth)
-	bothChk.OnChanged = func(on bool) {
-		s.mu.Lock()
-		s.cfg.UI.ShowBothSides = on
-		err := s.saveSettingsLocked()
-		s.mu.Unlock()
-		s.applyBothSideVisibility()
-		showSettingsError(err, w)
+	bothChk.OnChanged = func(on bool) { showSettingsError(s.setShowBothSides(on), w) }
+	floatingChk := widget.NewCheck("迷你窗口使用真悬浮窗（无标题栏，可拖动计时区域移动）", nil)
+	floatingChk.SetChecked(miniFloating)
+	floatingChk.OnChanged = func(on bool) { showSettingsError(s.setMiniFloating(on), w) }
+	miniOpacityText := widget.NewLabel("")
+	miniOpacitySlider := widget.NewSlider(minimumMiniOpacity, maximumMiniOpacity)
+	miniOpacitySlider.Step = 0.05
+	miniOpacitySlider.SetValue(miniOpacity)
+	updateMiniOpacityLabel := func() {
+		miniOpacityText.SetText(fmt.Sprintf("迷你窗口不透明度：%.0f%%", miniOpacitySlider.Value*100))
 	}
+	updateMiniOpacityLabel()
+	miniOpacitySlider.OnChanged = func(v float64) {
+		updateMiniOpacityLabel()
+		_ = s.setMiniOpacity(v, false)
+	}
+	miniOpacitySlider.OnChangeEnded = func(v float64) { showSettingsError(s.setMiniOpacity(v, true), w) }
 	gpuChk := widget.NewCheck("启用 GPU 加速（DirectML，需重启）", nil)
 	gpuChk.SetChecked(gpuAccel)
 	gpuChk.OnChanged = func(on bool) {
@@ -290,20 +306,10 @@ func (s *session) openSettings() {
 	hint := widget.NewLabel("认边方式点选即生效。选择的是我方，浮窗计时的是另一边；自动尚未认出时显示待认边。")
 	hint.Wrapping = fyne.TextWrapWord
 	save := widget.NewButton("保存", func() {
-		s.mu.Lock()
-		s.cfg.UI.OverlayMode = "full"
-		if miniSel.Selected == "迷你窗口" {
-			s.cfg.UI.OverlayMode = "mini"
-		}
-		s.miniMode = s.cfg.UI.OverlayMode == "mini"
-		s.cfg.UI.ShowBothSides = bothChk.Checked
-		s.mu.Unlock()
 		if err := s.applySettings(nameEntry.Text, ninjaEntry.Text, sideSel.Selected, rememberChk.Checked, topChk.Checked); err != nil {
 			showSettingsError(err, w)
 			return
 		}
-		s.applyMiniVisibility()
-		s.applyBothSideVisibility()
 		w.Hide()
 	})
 	save.Importance = widget.HighImportance
@@ -312,9 +318,9 @@ func (s *session) openSettings() {
 		widget.NewLabel("我的名字"), nameEntry, textCheck, s.textStatusLabel,
 		widget.NewLabel("指定对面忍者（留空自动识别）"), ninjaEntry,
 		widget.NewLabel("仅照美冥［五代目水影］同时显示15秒/10秒"), topChk,
-		miniSel, bothChk, gpuChk,
+		miniSel, bothChk, floatingChk, miniOpacityText, miniOpacitySlider, gpuChk,
 		widget.NewLabel("GPU 加速仅作用于本地 OCR；不可用时自动回退 CPU。修改后重启生效。"),
-		widget.NewLabel("Ctrl+M 可随时切换迷你窗口；迷你窗口隐藏状态和操作按钮。"),
+		widget.NewLabel("Ctrl+M 可随时切换迷你窗口；迷你窗口只显示计时，鼠标移上去显示设置/换边/两边计时/退出迷你。"),
 		widget.NewSeparator(), widget.NewLabel("外观与更新"),
 		opacityText, opacitySlider, fontScaleText, fontScaleSlider, resetAppearance,
 		widget.NewLabel("透明度只应用于计时浮窗；设置和更新窗口始终保持不透明。字号会立即预览并自动留出所需空间。"), appearanceNote,

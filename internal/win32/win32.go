@@ -45,6 +45,7 @@ var (
 	ProcAdjustWindowRectEx         = User32.NewProc("AdjustWindowRectEx")
 	ProcGetWindowRect              = User32.NewProc("GetWindowRect")
 	ProcGetClientRect              = User32.NewProc("GetClientRect")
+	ProcGetCursorPos               = User32.NewProc("GetCursorPos")
 	ProcGetWindowLongPtrW          = User32.NewProc("GetWindowLongPtrW")
 	ProcSetWindowLongPtrW          = User32.NewProc("SetWindowLongPtrW")
 	ProcSetLayeredWindowAttributes = User32.NewProc("SetLayeredWindowAttributes")
@@ -104,15 +105,17 @@ const (
 	HTClient      = 0x0001
 
 	// SetWindowPos 标志
-	HWNDTopMost   = uintptr(^uintptr(0))     // -1：置顶
-	HWNDNoTopMost = uintptr(^uintptr(0) - 1) // -2：取消置顶
-	SWPNoMove     = 0x0002
-	SWPNoSize     = 0x0001
-	SWPNoZOrder   = 0x0004
-	SWPNoActivate = 0x0010
-	SWPShowWindow = 0x0040
+	HWNDTopMost     = uintptr(^uintptr(0))     // -1：置顶
+	HWNDNoTopMost   = uintptr(^uintptr(0) - 1) // -2：取消置顶
+	SWPNoMove       = 0x0002
+	SWPNoSize       = 0x0001
+	SWPNoZOrder     = 0x0004
+	SWPNoActivate   = 0x0010
+	SWPShowWindow   = 0x0040
+	SWPFrameChanged = 0x0020
 
 	GWLExStyle  = ^uintptr(19) // -20，Get/SetWindowLongPtr 的 GWLP_EXSTYLE
+	GWLStyle    = ^uintptr(15) // -16，GWL_STYLE
 	WSExLayered = 0x00080000
 	LWAColorKey = 0x00000001
 	LWAAlpha    = 0x00000002
@@ -121,6 +124,7 @@ const (
 	WSSysMenu     = 0x00080000
 	WSMinimizeBox = 0x00020000
 	WSFixedFrame  = 0x00CA0000 // caption+sysmenu+minimize，无厚边框
+	WSThickFrame  = 0x00040000
 
 	// 光标
 	IDCArrow = 32512
@@ -400,6 +404,114 @@ func SetWindowOpacity(hwnd uintptr, opacity float64) error {
 			return fmt.Errorf("set window opacity failed")
 		}
 		return fmt.Errorf("set window opacity: %w", callErr)
+	}
+	return nil
+}
+
+// SetWindowFrameless removes (or restores) the title bar and sizing border of
+// one known HWND. It returns the style that was replaced so the caller can put
+// back exactly what the window backend created.
+func SetWindowFrameless(hwnd uintptr, frameless bool, restore uintptr) (uintptr, error) {
+	if hwnd == 0 {
+		return 0, fmt.Errorf("window handle is unavailable")
+	}
+	ProcSetLastError.Call(0)
+	style, _, callErr := ProcGetWindowLongPtrW.Call(hwnd, GWLStyle)
+	if style == 0 && callErr != nil && callErr != syscall.Errno(0) {
+		return 0, fmt.Errorf("read window style: %w", callErr)
+	}
+	next := restore
+	if frameless {
+		next = style &^ (WSCaption | WSThickFrame)
+	} else if next == 0 {
+		next = style | WSCaption
+	}
+	if next != style {
+		ProcSetLastError.Call(0)
+		previous, _, callErr := ProcSetWindowLongPtrW.Call(hwnd, GWLStyle, next)
+		if previous == 0 && callErr != nil && callErr != syscall.Errno(0) {
+			return style, fmt.Errorf("update window style: %w", callErr)
+		}
+	}
+	ProcSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
+		uintptr(SWPNoMove|SWPNoSize|SWPNoZOrder|SWPNoActivate|SWPFrameChanged))
+	return style, nil
+}
+
+// SetWindowTopmost changes the z-order band of one known HWND.
+func SetWindowTopmost(hwnd uintptr, on bool) error {
+	if hwnd == 0 {
+		return fmt.Errorf("window handle is unavailable")
+	}
+	after := HWNDNoTopMost
+	if on {
+		after = HWNDTopMost
+	}
+	ok, _, callErr := ProcSetWindowPos.Call(hwnd, after, 0, 0, 0, 0, uintptr(SWPNoMove|SWPNoSize|SWPNoActivate))
+	if ok == 0 {
+		return fmt.Errorf("set window z-order: %v", callErr)
+	}
+	return nil
+}
+
+// RefitFrameless corrects the outer size of a window whose frame was removed
+// behind the backend's back. The backend still sizes the window as if it had
+// the decorated style, so the frame those metrics add is taken off again.
+func RefitFrameless(hwnd, decorated uintptr) error {
+	if hwnd == 0 {
+		return fmt.Errorf("window handle is unavailable")
+	}
+	var outer Rect
+	if ok, _, callErr := ProcGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&outer))); ok == 0 {
+		return fmt.Errorf("read window position: %v", callErr)
+	}
+	style, _, _ := ProcGetWindowLongPtrW.Call(hwnd, GWLStyle)
+	var stale, actual Rect
+	ProcAdjustWindowRectEx.Call(uintptr(unsafe.Pointer(&stale)), uintptr(uint32(decorated)), 0, 0)
+	ProcAdjustWindowRectEx.Call(uintptr(unsafe.Pointer(&actual)), uintptr(uint32(style)), 0, 0)
+	w := outer.Width() - stale.Width() + actual.Width()
+	h := outer.Height() - stale.Height() + actual.Height()
+	if w == outer.Width() && h == outer.Height() {
+		return nil
+	}
+	ok, _, callErr := ProcSetWindowPos.Call(hwnd, 0, 0, 0, uintptr(w), uintptr(h),
+		uintptr(SWPNoMove|SWPNoZOrder|SWPNoActivate))
+	if ok == 0 {
+		return fmt.Errorf("resize window: %v", callErr)
+	}
+	return nil
+}
+
+// CursorPos returns the cursor position in screen pixels.
+func CursorPos() (int32, int32, error) {
+	var pt struct{ X, Y int32 }
+	if ok, _, callErr := ProcGetCursorPos.Call(uintptr(unsafe.Pointer(&pt))); ok == 0 {
+		return 0, 0, fmt.Errorf("read cursor position: %v", callErr)
+	}
+	return pt.X, pt.Y, nil
+}
+
+// WindowPos returns the top-left corner of one known HWND in screen pixels.
+func WindowPos(hwnd uintptr) (int32, int32, error) {
+	if hwnd == 0 {
+		return 0, 0, fmt.Errorf("window handle is unavailable")
+	}
+	var r Rect
+	if ok, _, callErr := ProcGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+		return 0, 0, fmt.Errorf("read window position: %v", callErr)
+	}
+	return r.Left, r.Top, nil
+}
+
+// MoveWindowTo places the top-left corner of one known HWND in screen pixels.
+func MoveWindowTo(hwnd uintptr, x, y int32) error {
+	if hwnd == 0 {
+		return fmt.Errorf("window handle is unavailable")
+	}
+	ok, _, callErr := ProcSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0,
+		uintptr(SWPNoSize|SWPNoZOrder|SWPNoActivate))
+	if ok == 0 {
+		return fmt.Errorf("move window: %v", callErr)
 	}
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -105,6 +106,15 @@ type AvatarTracker struct {
 	bounds, roi image.Rectangle
 	scale       float64
 	lastAt      time.Time
+	// Pixel memo: the last ROI pixels (packed RGBA rows) and the result they
+	// produced on the given path. Matching is deterministic, so byte-identical
+	// pixels with the same geometry/catalog/path/shortlist give the same
+	// result; this never carries identity across differing pixels.
+	memoPix  []byte
+	memoFull bool
+	memoIDs  []string
+	memoOut  AvatarMatch
+	memoOK   bool
 }
 
 var embeddedAvatarCatalog = sync.OnceValues(func() (*avatarCatalog, error) {
@@ -281,7 +291,8 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	view := img.SubImage(roi).(*image.RGBA)
-	coarse := match.ScaleGray(match.ToGray(view), 36, 36)
+	gray := match.ToGray(view)
+	coarse := match.ScaleGray(gray, 36, 36)
 	// The portrait is a fixed HUD element: relative to the canonical
 	// AvatarRegion window its diamond center sits near (35.5, 48) reference
 	// pixels and renders at roughly 0.6x the 85px catalog asset. A square crop
@@ -318,7 +329,7 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 	for i := range best {
 		entries[i] = best[i].entry
 	}
-	return c.matchEntries(view, scale, entries)
+	return c.matchEntries(view, gray, scale, entries)
 }
 
 // avatarAnchorRect maps the measured HUD diamond neighborhood into img pixels.
@@ -364,8 +375,13 @@ func coarseAvatarScore(query, templ, mask *image.Gray) float64 {
 // larger factors only serve exact-scale callers (tests, legacy captures).
 var avatarFactorsFull = []float64{.55, .60, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45}
 
-func (c *avatarCatalog) matchEntries(view *image.RGBA, scale float64, entries []*avatarEntry) AvatarMatch {
+// gray is ToGray(view), converted once by the caller and shared by every NCC
+// query instead of being rebuilt per entry/factor; nil converts it here.
+func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale float64, entries []*avatarEntry) AvatarMatch {
 	var out AvatarMatch
+	if gray == nil {
+		gray = match.ToGray(view)
+	}
 	// Keep the best score per identity before calculating the runner-up. A
 	// single identity is evaluated at several display scales; treating its
 	// second scale as a different candidate can reject an otherwise unambiguous
@@ -396,7 +412,7 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, scale float64, entries []
 			// prepare instead of measuring a meaningless zero score.
 			return 0
 		}
-		score, err := (match.NCC{}).Match(match.Query{Image: view, ROI: view.Bounds(), Prepared: c.prepared(entry, w, h)})
+		score, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: view.Bounds(), Prepared: c.prepared(entry, w, h)})
 		if err != nil {
 			return 0
 		}
@@ -550,9 +566,14 @@ func (t *AvatarTracker) Read(c *avatarCatalog, img *image.RGBA, roi image.Rectan
 	t.lastAt = now
 	if changed {
 		t.ids, t.next = nil, time.Time{}
+		t.memoOK = false
 	}
 	t.catalog, t.bounds, t.roi, t.scale = c, img.Bounds(), roi, scale
+	same := t.memoOK && samePackedPix(t.memoPix, img, roi)
 	if now.Before(t.next) && len(t.ids) > 0 {
+		if same && !t.memoFull && slices.Equal(t.memoIDs, t.ids) {
+			return t.memoOut.clone()
+		}
 		entries := make([]*avatarEntry, 0, len(t.ids))
 		c.mu.Lock()
 		for _, id := range t.ids {
@@ -560,11 +581,17 @@ func (t *AvatarTracker) Read(c *avatarCatalog, img *image.RGBA, roi image.Rectan
 				entries = append(entries, entry)
 			}
 		}
-		out := c.matchEntries(img.SubImage(roi).(*image.RGBA), scale, entries)
+		out := c.matchEntries(img.SubImage(roi).(*image.RGBA), nil, scale, entries)
 		c.mu.Unlock()
+		t.remember(img, roi, false, out)
 		return out
 	}
-	out := c.Match(img, roi, scale)
+	var out AvatarMatch
+	if same && t.memoFull {
+		out = t.memoOut.clone()
+	} else {
+		out = c.Match(img, roi, scale)
+	}
 	// The documented between-scan cost is the previous SIX candidates, never a
 	// whole shortlist: an ambiguous full scan must not turn every intermediate
 	// frame into a 24-entry NCC sweep.
@@ -576,7 +603,40 @@ func (t *AvatarTracker) Read(c *avatarCatalog, img *image.RGBA, roi image.Rectan
 		t.ids = append(t.ids[:0], out.ID)
 	}
 	t.next = now.Add(500 * time.Millisecond)
+	t.remember(img, roi, true, out)
 	return out
+}
+
+// remember stores the result for the ROI pixels; ids is the shortlist the
+// non-full path matched against (t.ids at call time).
+func (t *AvatarTracker) remember(img *image.RGBA, roi image.Rectangle, full bool, out AvatarMatch) {
+	t.memoPix = t.memoPix[:0]
+	for y := roi.Min.Y; y < roi.Max.Y; y++ {
+		i := img.PixOffset(roi.Min.X, y)
+		t.memoPix = append(t.memoPix, img.Pix[i:i+4*roi.Dx()]...)
+	}
+	t.memoFull, t.memoOut, t.memoOK = full, out.clone(), true
+	t.memoIDs = append(t.memoIDs[:0], t.ids...)
+}
+
+func samePackedPix(packed []byte, img *image.RGBA, roi image.Rectangle) bool {
+	row := 4 * roi.Dx()
+	if len(packed) != row*roi.Dy() {
+		return false
+	}
+	for y := roi.Min.Y; y < roi.Max.Y; y++ {
+		i := img.PixOffset(roi.Min.X, y)
+		o := (y - roi.Min.Y) * row
+		if !bytes.Equal(packed[o:o+row], img.Pix[i:i+row]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m AvatarMatch) clone() AvatarMatch {
+	m.ids = slices.Clone(m.ids)
+	return m
 }
 
 // AvatarRegion maps one normalized 960-wide reference ROI from an existing

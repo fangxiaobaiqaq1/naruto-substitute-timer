@@ -221,9 +221,13 @@ type UIConfig struct {
 	// WindowOpacity applies only to the compact timer overlay, in [0.40, 1.00].
 	WindowOpacity float64 `json:"windowOpacity"`
 	// FontScale scales compact-overlay text, in [0.80, 1.60].
-	FontScale       float64  `json:"fontScale"`
-	OverlayMode     string   `json:"overlayMode"`
-	ShowBothSides   bool     `json:"showBothSides"`
+	FontScale     float64 `json:"fontScale"`
+	OverlayMode   string  `json:"overlayMode"`
+	ShowBothSides bool    `json:"showBothSides"`
+	// MiniOpacity replaces WindowOpacity while the mini overlay is shown, in [0.20, 1.00].
+	MiniOpacity float64 `json:"miniOpacity"`
+	// MiniFloating removes the native title bar/border in mini mode (Windows only).
+	MiniFloating    bool     `json:"miniFloating"`
 	GPUAcceleration bool     `json:"gpuAcceleration"`
 	PlayerNames     []string `json:"playerNames"`
 }
@@ -318,6 +322,8 @@ func Default() Config {
 			FontScale:                 1,
 			OverlayMode:               "full",
 			ShowBothSides:             false,
+			MiniOpacity:               0.85,
+			MiniFloating:              false,
 			GPUAcceleration:           false,
 			// Keep the published default neutral. Users can add their own names
 			// in config.json or through the settings window.

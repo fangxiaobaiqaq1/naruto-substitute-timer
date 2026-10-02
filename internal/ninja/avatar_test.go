@@ -7,6 +7,8 @@ import (
 	"image/color"
 	"image/draw"
 	_ "image/png"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -118,6 +120,49 @@ func TestAvatarCurrentPixelsDoNotInherit(t *testing.T) {
 	draw.Draw(img, img.Bounds(), image.Black, image.Point{}, draw.Src)
 	if got := tracker.Read(c, img, roi, 1, at.Add(time.Millisecond)); got.Name != "" {
 		t.Fatalf("stale avatar survived: %+v", got)
+	}
+}
+
+func TestAvatarTrackerPixelMemoMatchesFreshResult(t *testing.T) {
+	c, err := loadEmbeddedAvatarCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := c.byID["90511"]
+	portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := portrait.Bounds().Size()
+	img := image.NewRGBA(image.Rect(0, 0, b.X+20, b.Y+20))
+	roi := image.Rect(10, 10, 10+b.X, 10+b.Y)
+	draw.Draw(img, roi, portrait, portrait.Bounds().Min, draw.Src)
+	at := time.Unix(1700000000, 0)
+	var cached AvatarTracker
+	// Full scan, shortlist frame, and the next full scan all repeat pixels.
+	for _, dt := range []time.Duration{0, 16 * time.Millisecond, 32 * time.Millisecond, 600 * time.Millisecond} {
+		fresh := cached
+		fresh.ids, fresh.memoPix, fresh.memoOK = slices.Clone(cached.ids), nil, false
+		want := fresh.Read(c, img, roi, 1, at.Add(dt))
+		got := cached.Read(c, img, roi, 1, at.Add(dt))
+		if !reflect.DeepEqual(got, want) || got.ID != entry.id || cached.next != fresh.next || !slices.Equal(cached.ids, fresh.ids) {
+			t.Fatalf("dt=%v memo=%+v fresh=%+v", dt, got, want)
+		}
+	}
+	// One changed pixel must invalidate the memo and rerun NCC.
+	if !samePackedPix(cached.memoPix, img, roi) {
+		t.Fatal("memo pixels do not match the unchanged ROI")
+	}
+	img.SetRGBA(roi.Min.X+b.X/2, roi.Min.Y+b.Y/2, color.RGBA{1, 2, 3, 255})
+	if samePackedPix(cached.memoPix, img, roi) {
+		t.Fatal("1-pixel change kept the memo")
+	}
+	fresh := cached
+	fresh.ids, fresh.memoPix, fresh.memoOK = slices.Clone(cached.ids), nil, false
+	want := fresh.Read(c, img, roi, 1, at.Add(640*time.Millisecond))
+	cached.memoOut = AvatarMatch{ID: "poisoned"}
+	if got := cached.Read(c, img, roi, 1, at.Add(640*time.Millisecond)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("changed pixel memo=%+v fresh=%+v", got, want)
 	}
 }
 

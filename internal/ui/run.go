@@ -134,6 +134,18 @@ type session struct {
 	updateButton       *widget.Button
 	footer             *fyne.Container
 	miniMode           bool
+	miniLayer          *fyne.Container
+	miniControls       *fyne.Container
+	miniSurface        *miniSurface
+	miniBothButton     *miniButton
+	miniSurfaceHover   bool // UI goroutine only
+	miniButtonHover    bool // UI goroutine only
+	floatingApplied    bool
+	savedStyle         uintptr
+	floatingHook       func(bool) error   // test seam for the native frame/topmost change
+	moveHook           func(dx, dy int32) // test seam for native window drags
+	dragAnchor         *miniDragAnchor    // UI goroutine only
+	hoverSettleHook    func(func())       // test seam for the delayed hover hide check
 	topmost            bool
 	overlayOpacity     func(fyne.Window, float64) error // test seam for native HWND application
 	appearanceError    string
@@ -171,17 +183,7 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	a.Settings().SetTheme(newChromaTheme())
 	w := a.NewWindow(overlayTitle)
 	w.SetMaster() // Closing the timer also quits hidden settings windows.
-	s := &session{
-		done:        make(chan struct{}),
-		cfg:         cfg,
-		cfgPath:     config.DefaultPath,
-		provider:    provider,
-		supportRoot: cfg.Debug.Directory,
-		remember:    cfg.UI.RememberSide,
-		side:        "",
-		win:         w,
-		topmost:     cfg.UI.AlwaysOnTop,
-	}
+	s := newSession(cfg, provider, w)
 	for _, option := range options {
 		option(s)
 	}
@@ -222,6 +224,21 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	}
 	w.ShowAndRun()
 	return nil
+}
+
+func newSession(cfg config.Config, provider frame.Provider, w fyne.Window) *session {
+	return &session{
+		done:        make(chan struct{}),
+		cfg:         cfg,
+		cfgPath:     config.DefaultPath,
+		provider:    provider,
+		supportRoot: cfg.Debug.Directory,
+		remember:    cfg.UI.RememberSide,
+		side:        "",
+		win:         w,
+		topmost:     cfg.UI.AlwaysOnTop,
+		miniMode:    cfg.UI.OverlayMode == "mini",
+	}
 }
 
 func (s *session) overlayContent() fyne.CanvasObject {
@@ -289,7 +306,7 @@ func (s *session) overlayContent() fyne.CanvasObject {
 			container.NewCenter(s.info),
 		),
 	)
-	s.overlay = container.NewStack(glass, body)
+	s.overlay = container.NewStack(glass, body, s.buildMiniControls())
 	s.applyMiniVisibility()
 	s.applyBothSideVisibility()
 	return s.overlay
@@ -302,7 +319,7 @@ func (s *session) applyBothSideVisibility() {
 	s.mu.Lock()
 	both := s.cfg.UI.ShowBothSides
 	s.mu.Unlock()
-	if both && !s.miniMode {
+	if both {
 		s.bothSideBox.Show()
 		if s.singleClockRow != nil {
 			s.singleClockRow.Hide()
@@ -320,7 +337,16 @@ func (s *session) applyBothSideVisibility() {
 }
 
 func (s *session) applyMiniVisibility() {
-	if s.miniMode {
+	mini := s.isMini()
+	if s.miniLayer != nil {
+		if mini {
+			s.miniLayer.Show()
+		} else {
+			s.miniLayer.Hide()
+		}
+	}
+	s.syncMiniControls()
+	if mini {
 		if s.tag != nil {
 			s.tag.Hide()
 		}
@@ -356,18 +382,7 @@ func (s *session) applyMiniVisibility() {
 }
 
 func (s *session) toggleMini() {
-	s.mu.Lock()
-	s.miniMode = !s.miniMode
-	if s.miniMode {
-		s.cfg.UI.OverlayMode = "mini"
-	} else {
-		s.cfg.UI.OverlayMode = "full"
-	}
-	err := s.saveSettingsLocked()
-	s.mu.Unlock()
-	s.applyMiniVisibility()
-	s.applyBothSideVisibility()
-	showSettingsError(err, s.win)
+	showSettingsError(s.setMiniMode(!s.isMini()), s.win)
 }
 
 // The current policy is user-confirmed: all primary clocks are 15 seconds.
@@ -1088,7 +1103,9 @@ func (s *session) refreshClockAt(now time.Time) {
 		if !current {
 			return
 		}
-		if s.bothSideBox != nil && s.cfg.UI.ShowBothSides {
+		// Both-side labels track the clocks even while hidden, so turning the
+		// option on never shows a stale value until the next change.
+		if s.bothSideBox != nil {
 			s.leftBothCD.Text, s.leftBothCD.Color = leftText, leftColor
 			s.rightBothCD.Text, s.rightBothCD.Color = rightText, rightColor
 			s.leftBothCD.Refresh()
@@ -1478,9 +1495,11 @@ func (s *session) handleAutomaticUpdateResult(result updates.MonitorResult) {
 
 func (s *session) applyInitialWindowAppearance() {
 	s.mu.Lock()
-	opacity, top := s.cfg.UI.WindowOpacity, s.topmost
+	opacity, top, mini := s.effectiveOpacityLocked(), s.topmost, s.miniMode
 	s.mu.Unlock()
-	if opacity < 1 {
+	if mini {
+		s.applyMiniWindowState()
+	} else if opacity < 1 {
 		if err := s.nativeOverlayOpacity(opacity); err != nil {
 			s.mu.Lock()
 			s.appearanceError = "窗口透明度未应用：" + err.Error()

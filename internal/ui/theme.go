@@ -21,6 +21,9 @@ var (
 	panelHover  = color.NRGBA{R: 28, G: 72, B: 98, A: 255}
 	panelInput  = color.NRGBA{R: 14, G: 36, B: 52, A: 255}
 	panelBorder = color.NRGBA{R: 56, G: 140, B: 168, A: 255}
+
+	transparentColor = color.NRGBA{}
+	miniControlsBG   = color.NRGBA{R: 6, G: 24, B: 32, A: 230}
 )
 
 type chromaTheme struct{ base fyne.Theme }
