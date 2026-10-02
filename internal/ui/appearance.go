@@ -79,9 +79,10 @@ func (s *session) previewAppearance(opacity, scale float64) error {
 		return err
 	}
 	s.mu.Lock()
-	oldOpacity := s.cfg.UI.WindowOpacity
+	oldOpacity, mini := s.cfg.UI.WindowOpacity, s.miniMode
 	s.mu.Unlock()
-	if opacity != oldOpacity {
+	// The mini overlay has its own opacity; WindowOpacity returns on exit.
+	if opacity != oldOpacity && !mini {
 		if err := s.nativeOverlayOpacity(opacity); err != nil {
 			s.mu.Lock()
 			s.appearanceError = "窗口透明度未应用：" + err.Error()
@@ -152,6 +153,10 @@ func (s *session) fitOverlayWindow() {
 	s.mu.Unlock()
 	minimum := fyne.NewSize(float32(max(220, width)), float32(max(118, height+24)))
 	s.win.Resize(minimum.Max(s.overlay.MinSize()))
+	if s.floatingApplied && s.savedStyle != 0 && s.floatingHook == nil {
+		// The backend still sizes with the decorated style it remembers.
+		_ = s.runNativeHWND(func(hwnd uintptr) error { return win32.RefitFrameless(hwnd, s.savedStyle) })
+	}
 }
 
 func (s *session) saveAppearance() error {

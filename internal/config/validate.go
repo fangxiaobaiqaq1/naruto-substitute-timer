@@ -165,6 +165,9 @@ func Validate(c Config) error {
 	if c.UI.WindowOpacity < 0.40 || c.UI.WindowOpacity > 1.00 {
 		return fmt.Errorf("ui.windowOpacity: must be in [0.40,1.00]")
 	}
+	if c.UI.MiniOpacity < 0.20 || c.UI.MiniOpacity > 1.00 {
+		return fmt.Errorf("ui.miniOpacity: must be in [0.20,1.00]")
+	}
 	if c.UI.FontScale < 0.80 || c.UI.FontScale > 1.60 {
 		return fmt.Errorf("ui.fontScale: must be in [0.80,1.60]")
 	}

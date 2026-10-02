@@ -142,18 +142,18 @@ func TestLegacyConfigInheritsNewAppearanceAndUpdateDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.UI.AutoCheckUpdates || cfg.UI.WindowOpacity != 1 || cfg.UI.FontScale != 1 {
+	if !cfg.UI.AutoCheckUpdates || cfg.UI.WindowOpacity != 1 || cfg.UI.FontScale != 1 || cfg.UI.MiniOpacity != 0.85 || cfg.UI.MiniFloating {
 		t.Fatalf("legacy UI defaults were not preserved: %+v", cfg.UI)
 	}
 }
 
 func TestValidateAppearanceBoundsAreInclusiveAndRejectInvalidValues(t *testing.T) {
 	cfg := Default()
-	cfg.UI.WindowOpacity, cfg.UI.FontScale = 0.40, 0.80
+	cfg.UI.WindowOpacity, cfg.UI.FontScale, cfg.UI.MiniOpacity = 0.40, 0.80, 0.20
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("lower bounds should be valid: %v", err)
 	}
-	cfg.UI.WindowOpacity, cfg.UI.FontScale = 1.00, 1.60
+	cfg.UI.WindowOpacity, cfg.UI.FontScale, cfg.UI.MiniOpacity = 1.00, 1.60, 1.00
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("upper bounds should be valid: %v", err)
 	}
@@ -164,6 +164,8 @@ func TestValidateAppearanceBoundsAreInclusiveAndRejectInvalidValues(t *testing.T
 	}{
 		{"opacity too low", func(c *Config) { c.UI.WindowOpacity = 0.39 }, "windowOpacity"},
 		{"opacity too high", func(c *Config) { c.UI.WindowOpacity = 1.01 }, "windowOpacity"},
+		{"mini opacity too low", func(c *Config) { c.UI.MiniOpacity = 0.19 }, "miniOpacity"},
+		{"mini opacity too high", func(c *Config) { c.UI.MiniOpacity = 1.01 }, "miniOpacity"},
 		{"font too low", func(c *Config) { c.UI.FontScale = 0.79 }, "fontScale"},
 		{"font too high", func(c *Config) { c.UI.FontScale = 1.61 }, "fontScale"},
 	} {
