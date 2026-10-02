@@ -70,7 +70,7 @@ type Provider func() Frame
 // 返回的函数可直接作为 frame.Provider 使用。
 func NewSnapshotter(eng engine.Engine, mode detect.ContentMode) Provider {
 	return func() Frame {
-		return snapshot(eng, mode)
+		return withFingerprint(snapshot(eng, mode))
 	}
 }
 

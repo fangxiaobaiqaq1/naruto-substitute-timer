@@ -143,6 +143,37 @@ type work struct {
 	bytes    int64
 	hud      *image.RGBA
 	hudBytes int64
+	// ready is closed once Observe has copied the caller's pixels into img
+	// outside Recorder.mu. The image worker waits on it before encoding.
+	ready chan struct{}
+}
+
+// framePool recycles raw-frame copy buffers. The queued byte limit already
+// bounds how many are live at once; the pool only removes the per-frame
+// full-size allocation and its zeroing.
+var framePool sync.Pool
+
+func getFrameBuffer(bounds image.Rectangle) *image.RGBA {
+	n := bounds.Dx() * bounds.Dy() * 4
+	if pooled, ok := framePool.Get().(*image.RGBA); ok && cap(pooled.Pix) >= n {
+		return &image.RGBA{Pix: pooled.Pix[:n], Stride: bounds.Dx() * 4, Rect: bounds}
+	}
+	return &image.RGBA{Pix: make([]byte, n), Stride: bounds.Dx() * 4, Rect: bounds}
+}
+
+func putFrameBuffer(img *image.RGBA) {
+	if img != nil {
+		framePool.Put(img)
+	}
+}
+
+func copyVisible(dst, src *image.RGBA) {
+	bounds := dst.Rect
+	rowBytes := bounds.Dx() * 4
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		s, d := src.PixOffset(bounds.Min.X, y), dst.PixOffset(bounds.Min.X, y)
+		copy(dst.Pix[d:d+rowBytes], src.Pix[s:s+rowBytes])
+	}
 }
 
 // Recorder is safe for concurrent capture, UI, export and close calls. PNG
@@ -290,11 +321,22 @@ func New(opts Options) (*Recorder, error) {
 
 // Observe assigns an ID even to failed captures, so failed attempts are visible
 // in the log and cannot accidentally become zero-duration latency samples.
+// Metadata admission, accounting and queue ordering happen under r.mu; the
+// full-frame pixel copy happens after it is released, before Observe returns.
 func (r *Recorder) Observe(f frame.Frame, receivedAt time.Time) uint64 {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	id, pending := r.observeLocked(f, receivedAt)
+	r.mu.Unlock()
+	if pending != nil {
+		copyVisible(pending.img, f.Img)
+		close(pending.ready)
+	}
+	return id
+}
+
+func (r *Recorder) observeLocked(f frame.Frame, receivedAt time.Time) (uint64, *work) {
 	if r.status.Closed {
-		return 0
+		return 0, nil
 	}
 	r.status.Attempts++
 	id := r.status.Attempts
@@ -309,7 +351,7 @@ func (r *Recorder) Observe(f frame.Frame, receivedAt time.Time) uint64 {
 			}
 		}
 		r.status.LastError = "session observation limit reached; start a new diagnostic session"
-		return id
+		return id, nil
 	}
 	t := &trace{id: id, captureStarted: f.CaptureStarted, captured: f.CapturedAt,
 		analysisStarted: f.AnalysisStarted, analyzed: f.AnalyzedAt, received: receivedAt,
@@ -361,11 +403,8 @@ func (r *Recorder) Observe(f frame.Frame, receivedAt time.Time) uint64 {
 				o.RawState = "dropped_recording_limit"
 				r.status.DroppedFrames++
 			default:
-				w.img = image.NewRGBA(bounds)
-				for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-					src, dst := f.Img.PixOffset(bounds.Min.X, y), w.img.PixOffset(bounds.Min.X, y)
-					copy(w.img.Pix[dst:dst+bounds.Dx()*4], f.Img.Pix[src:src+bounds.Dx()*4])
-				}
+				// Reserve now; pixels are copied after r.mu is released.
+				w.img, w.ready = getFrameBuffer(bounds), make(chan struct{})
 				w.bytes = bytes
 				r.status.QueueBytes += bytes
 				o.RawState = "pending"
@@ -396,14 +435,19 @@ func (r *Recorder) Observe(f frame.Frame, receivedAt time.Time) uint64 {
 		if w.hud != nil {
 			r.status.DroppedHUD++
 		}
-		return id
+		putFrameBuffer(w.img)
+		return id, nil
 	}
 	if r.opts.RecordFrames {
 		// The image worker owns replay ordering, including explicit skipped rows.
 		// Its slow encoder cannot stall the separate capture/UI/event log writer.
 		select {
 		case r.frameQueue <- w:
+			if w.img != nil {
+				return id, &w
+			}
 		default:
+			putFrameBuffer(w.img)
 			r.status.QueueBytes -= w.bytes + w.hudBytes
 			if w.img != nil {
 				r.status.DroppedFrames++
@@ -415,7 +459,7 @@ func (r *Recorder) Observe(f frame.Frame, receivedAt time.Time) uint64 {
 			r.status.LastError = "image writer queue full; capture metadata retained, replay has a frame-index gap"
 		}
 	}
-	return id
+	return id, nil
 }
 
 // Use this frame's positive scene evidence, never a remembered fight state.
@@ -519,7 +563,9 @@ func (r *Recorder) runFrames() {
 			r.writeHUD(w)
 		}
 		if w.img != nil {
+			<-w.ready
 			r.writeFrame(w)
+			putFrameBuffer(w.img)
 		} else if o, ok := w.entry.(observation); ok {
 			r.writeReplay(o, "", o.RawState)
 		}

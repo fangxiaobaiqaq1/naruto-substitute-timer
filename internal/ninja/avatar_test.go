@@ -362,3 +362,48 @@ func TestOrochimaruVariantsDoNotCrossMatch(t *testing.T) {
 		}
 	}
 }
+
+func TestAvatarTemplateCacheSurvivesFullScan(t *testing.T) {
+	c, err := loadAvatarCatalog(assets.ASAvatarIndex, func(id string) ([]byte, error) {
+		return assets.ASAvatars.ReadFile("avatars/" + id + ".png")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	portrait, _, err := image.Decode(bytes.NewReader(c.byID["90511"].data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewRGBA(portrait.Bounds())
+	draw.Draw(img, img.Bounds(), portrait, portrait.Bounds().Min, draw.Src)
+	first := c.Match(img, img.Bounds(), 1)
+	cached := c.cachedEntries
+	if c.cacheWipes != 0 || cached == 0 {
+		t.Fatalf("first scan wiped=%d cached=%d", c.cacheWipes, cached)
+	}
+	second := c.Match(img, img.Bounds(), 1)
+	if c.cacheWipes != 0 || c.cachedEntries < cached {
+		t.Fatalf("repeat scan wiped=%d cached=%d (was %d)", c.cacheWipes, c.cachedEntries, cached)
+	}
+	if first.ID != second.ID || first.Score != second.Score || first.RunnerUp != second.RunnerUp {
+		t.Fatalf("cached result changed: %+v vs %+v", first, second)
+	}
+	// Every entry at every factor bounds the largest possible single scan.
+	for _, e := range c.entries {
+		if e.gray == nil {
+			decoded, _, err := image.Decode(bytes.NewReader(e.data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.gray, e.mask = avatarGrayMask(decoded)
+			e.mask = avatarFaceMask(e.gray.Bounds(), e.mask)
+		}
+		for _, f := range avatarFactorsFull {
+			w, h := avatarFactorSize(e, 1, f)
+			c.prepared(e, w, h)
+		}
+	}
+	if c.cacheWipes != 0 {
+		t.Fatalf("every entry at every factor wiped the cache: %d (cached %d, cap %d)", c.cacheWipes, c.cachedEntries, c.templateCacheCap())
+	}
+}

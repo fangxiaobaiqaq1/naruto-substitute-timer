@@ -178,3 +178,36 @@ func TestValidateAppearanceBoundsAreInclusiveAndRejectInvalidValues(t *testing.T
 		})
 	}
 }
+
+func TestLeidianCaptureMethodsValidate(t *testing.T) {
+	for _, provider := range []string{"leidian-adb", "leidian-adb-raw", "leidian-window"} {
+		cfg := Default()
+		cfg.Capture.Provider = provider
+		cfg.Capture.PreferredMethods = []string{"leidian-window", "leidian-adb-raw", "leidian-adb"}
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("provider %s should validate: %v", provider, err)
+		}
+	}
+	cfg := Default()
+	cfg.Capture.PreferredMethods = []string{"leidian-raw"}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "preferredMethods") {
+		t.Fatalf("expected preferredMethods error, got %v", err)
+	}
+	cfg = Default()
+	cfg.Capture.Provider = "leidian-png"
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "provider") {
+		t.Fatalf("expected provider error, got %v", err)
+	}
+	cfg = Default()
+	cfg.Capture.Leidian.ADBServerPort = 70000
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "adbServerPort") {
+		t.Fatalf("expected adbServerPort error, got %v", err)
+	}
+}
+
+func TestDefaultCaptureKeepsMuMuMethods(t *testing.T) {
+	cfg := Default()
+	if cfg.Capture.Provider != "mumu-sdk" || len(cfg.Capture.PreferredMethods) != 1 || cfg.Capture.PreferredMethods[0] != "mumu-sdk" || cfg.Capture.Leidian.ADBServerPort != 0 {
+		t.Fatalf("MuMu defaults changed: %+v", cfg.Capture)
+	}
+}

@@ -68,9 +68,15 @@ type Gated struct {
 
 var pixelHashSeed = maphash.MakeSeed()
 
+// pixelHashHook is a test-only counter hook; nil in production.
+var pixelHashHook func()
+
 // pixelHash distinguishes two captures during profile-switch confirmation; a
 // process-local 64-bit hash is sufficient and far cheaper than a digest.
 func pixelHash(img *image.RGBA) uint64 {
+	if pixelHashHook != nil {
+		pixelHashHook()
+	}
 	return maphash.Bytes(pixelHashSeed, img.Pix)
 }
 
@@ -145,11 +151,13 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 	// A single competing marker cannot switch coordinate profiles and erase
 	// active clocks. Require a second independent image of the new profile.
 	if d.Kind == GateFight && g.lastFight.SceneID != "" && d.LayoutProfile != g.lastFight.LayoutProfile {
-		sum := pixelHash(img)
+		// The pending image is hashed once when the candidate starts; later
+		// frames are hashed only once the confirmation window has elapsed, as
+		// earlier frames stay uncertain regardless of their pixels.
 		if g.pendingProfile != d.LayoutProfile {
-			g.pendingProfile, g.pendingAt, g.pendingImage = d.LayoutProfile, at, sum
+			g.pendingProfile, g.pendingAt, g.pendingImage = d.LayoutProfile, at, pixelHash(img)
 			d = GateDecision{Kind: GateUncertain}
-		} else if sum == g.pendingImage || at.Sub(g.pendingAt) < profileSwitchConfirmation {
+		} else if at.Sub(g.pendingAt) < profileSwitchConfirmation || pixelHash(img) == g.pendingImage {
 			d = GateDecision{Kind: GateUncertain}
 		} else {
 			g.pendingProfile = ""

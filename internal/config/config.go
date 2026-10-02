@@ -43,12 +43,24 @@ type DeviceConfig struct {
 
 type CaptureConfig struct {
 	// Provider selects the primary emulator adapter. Empty keeps legacy MuMu behavior.
-	Provider         string               `json:"provider,omitempty"`
-	MuMu             MuMuCaptureConfig    `json:"mumu"`
-	Leidian          LeidianCaptureConfig `json:"leidian"`
-	PreferredMethods []string             `json:"preferredMethods"`
-	TimeoutMS        int                  `json:"timeoutMs"`
-	HUDRegion        NormalizedRect       `json:"hudRegion"`
+	Provider string               `json:"provider,omitempty"`
+	MuMu     MuMuCaptureConfig    `json:"mumu"`
+	Leidian  LeidianCaptureConfig `json:"leidian"`
+	// PreferredMethods is the ordered method chain. Accepted values:
+	// mumu-sdk, printwindow-fullcontent, and the 雷电 per-frame methods
+	// leidian-window (PrintWindow of the LDPlayer render HWND),
+	// leidian-adb-raw (uncompressed screencap over the adb host protocol)
+	// and leidian-adb (adb exec-out screencap -p, the always-available
+	// fallback). For 雷电, the leidian-* entries are taken in order; when
+	// none are listed the chain defaults to
+	// [leidian-window, leidian-adb-raw, leidian-adb]. MuMu defaults are
+	// unchanged.
+	PreferredMethods []string `json:"preferredMethods"`
+	// TimeoutMS is the per-frame capture budget. 雷电 frame commands use a
+	// timeout slightly below it (minimum 300 ms); setup commands such as
+	// adb connect and ldconsole list2 keep a separate 5 s timeout.
+	TimeoutMS int            `json:"timeoutMs"`
+	HUDRegion NormalizedRect `json:"hudRegion"`
 }
 
 type MuMuCaptureConfig struct {
@@ -69,6 +81,9 @@ type LeidianCaptureConfig struct {
 	Serial         string `json:"serial"`
 	Package        string `json:"package"`
 	ConnectOnStart bool   `json:"connectOnStart"`
+	// ADBServerPort is the local adb host server port used by
+	// leidian-adb-raw. Zero means 5037.
+	ADBServerPort int `json:"adbServerPort,omitempty"`
 }
 
 type NormalizedRect struct {

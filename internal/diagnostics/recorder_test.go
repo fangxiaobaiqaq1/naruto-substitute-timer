@@ -455,3 +455,84 @@ func TestNearestRankPercentiles(t *testing.T) {
 		t.Fatalf("wrong percentiles: %+v", d)
 	}
 }
+
+func largeFightFrame(at time.Time, w, h int) frame.Frame {
+	f := validFrame(at)
+	f.Img = image.NewRGBA(image.Rect(0, 0, w, h))
+	for i := range f.Img.Pix {
+		f.Img.Pix[i] = byte(i)
+	}
+	return f
+}
+
+func TestObserveDoesNotBlockOnSlowWriterAndCountsDrops(t *testing.T) {
+	const frames = 20
+	r, err := New(Options{Root: t.TempDir(), RecordFrames: true, MaxQueuedBytes: 3 * 640 * 360 * 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseEncoder := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseEncoder)
+	var mu sync.Mutex
+	var encoded []*image.RGBA
+	r.encodePNG = func(w io.Writer, img *image.RGBA) error {
+		<-release
+		mu.Lock()
+		encoded = append(encoded, img)
+		mu.Unlock()
+		_, err := w.Write(img.Pix[:16])
+		return err
+	}
+	base := time.Now()
+	start := time.Now()
+	for i := 0; i < frames; i++ {
+		at := base.Add(time.Duration(i) * 20 * time.Millisecond)
+		f := largeFightFrame(at, 640, 360)
+		f.Img.Pix[0] = byte(i)
+		r.Observe(f, at.Add(4*time.Millisecond))
+		// The caller may reuse its buffer as soon as Observe returns.
+		f.Img.Pix[0] = 0xff
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Observe blocked behind slow writer: %v", elapsed)
+	}
+	s := r.Snapshot()
+	if s.DroppedFrames == 0 || s.RecordedFrames != 0 {
+		t.Fatalf("expected drops while writer is blocked: %+v", s)
+	}
+	releaseEncoder()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = r.Snapshot()
+	if s.RecordedFrames+s.DroppedFrames != frames || s.QueueBytes != 0 {
+		t.Fatalf("bad accounting: %+v", s)
+	}
+	if len(encoded) != int(s.RecordedFrames) || len(encoded) == 0 || encoded[0].Pix[0] != 0 {
+		t.Fatalf("writer did not receive an isolated copy of the first frame")
+	}
+}
+
+func BenchmarkRecorderObserve(b *testing.B) {
+	r, err := New(Options{Root: b.TempDir(), RecordFrames: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	r.encodePNG = func(w io.Writer, img *image.RGBA) error { return nil }
+	b.Cleanup(func() { _ = r.Close() })
+	base := time.Now()
+	f := largeFightFrame(base, 1920, 1080)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		at := base.Add(time.Duration(i) * time.Millisecond)
+		f.CaptureStarted, f.CapturedAt = at, at.Add(time.Millisecond)
+		f.AnalysisStarted, f.AnalyzedAt = at.Add(2*time.Millisecond), at.Add(3*time.Millisecond)
+		r.Observe(f, at.Add(4*time.Millisecond))
+	}
+	b.StopTimer()
+	s := r.Snapshot()
+	b.ReportMetric(float64(s.DroppedFrames)/float64(b.N), "dropped/op")
+}

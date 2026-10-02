@@ -14,15 +14,40 @@ const (
 )
 
 type Options struct {
-	InstallDir     string        `json:"install_dir"`
-	ConsolePath    string        `json:"console_path,omitempty"`
-	ADBPath        string        `json:"adb_path,omitempty"`
-	Index          int           `json:"index"`
-	Serial         string        `json:"serial,omitempty"`
-	Package        string        `json:"package,omitempty"`
-	Connect        bool          `json:"connect_on_start"`
+	InstallDir  string `json:"install_dir"`
+	ConsolePath string `json:"console_path,omitempty"`
+	ADBPath     string `json:"adb_path,omitempty"`
+	Index       int    `json:"index"`
+	Serial      string `json:"serial,omitempty"`
+	Package     string `json:"package,omitempty"`
+	Connect     bool   `json:"connect_on_start"`
+	// CommandTimeout bounds setup commands (adb connect/get-state, ldconsole
+	// list2). Zero means 5 s.
 	CommandTimeout time.Duration `json:"command_timeout"`
+	// CaptureTimeout bounds per-frame commands (screencap). Zero falls back
+	// to CommandTimeout.
+	CaptureTimeout time.Duration `json:"capture_timeout,omitempty"`
+	// Methods is the ordered per-frame capture chain (MethodWindow,
+	// MethodADBRaw, MethodADB). Empty means DefaultMethods.
+	Methods []string `json:"methods,omitempty"`
+	// ADBServerPort is the adb host server port used by MethodADBRaw.
+	// Zero means DefaultADBServerPort.
+	ADBServerPort int `json:"adb_server_port,omitempty"`
+	// TopHWND/BindHWND seed MethodWindow; normally filled from list2.
+	TopHWND  uintptr `json:"top_hwnd,omitempty"`
+	BindHWND uintptr `json:"bind_hwnd,omitempty"`
 }
+
+// Per-frame capture methods. Names match capture.preferredMethods values.
+const (
+	MethodWindow = "leidian-window"
+	MethodADBRaw = "leidian-adb-raw"
+	MethodADB    = "leidian-adb"
+)
+
+// DefaultMethods is the capture chain used when Options.Methods is empty:
+// render-window PrintWindow, then raw adb protocol, then adb exec-out PNG.
+func DefaultMethods() []string { return []string{MethodADBRaw, MethodADB} }
 
 // Instance is identified by installation root plus LDPlayer index. The ADB
 // serial is derived evidence and can be overridden for non-default mappings.
@@ -34,8 +59,12 @@ type Instance struct {
 	ProcessStarted bool   `json:"process_started"`
 	AndroidStarted bool   `json:"android_started"`
 	PID            int    `json:"pid,omitempty"`
-	Serial         string `json:"serial"`
-	Resolution     string `json:"resolution,omitempty"`
+	// TopHWND/BindHWND come from ldconsole list2 fields 3/4 and seed the
+	// leidian-window capture mode. They change whenever the instance restarts.
+	TopHWND    uintptr `json:"top_hwnd,omitempty"`
+	BindHWND   uintptr `json:"bind_hwnd,omitempty"`
+	Serial     string  `json:"serial"`
+	Resolution string  `json:"resolution,omitempty"`
 }
 
 func (i Instance) Label() string {
