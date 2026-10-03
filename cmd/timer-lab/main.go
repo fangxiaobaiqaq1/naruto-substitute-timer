@@ -37,7 +37,7 @@ func main() {
 	win.EnablePerMonitorDPIAwareness()
 	var err error
 	if len(os.Args) < 2 {
-		err = fmt.Errorf("usage: timer-lab capture [flags] | replay [flags] | observe [flags] | ocr -image <screenshot> [flags]")
+		err = fmt.Errorf("usage: timer-lab capture [flags] | replay [flags] | observe [flags] | bench [flags] | ocr -image <screenshot> [flags]")
 	} else {
 		switch os.Args[1] {
 		case "capture":
@@ -48,6 +48,8 @@ func main() {
 			err = ocrInspect(os.Args[2:])
 		case "observe":
 			err = observe(os.Args[2:])
+		case "bench":
+			err = bench(os.Args[2:])
 		default:
 			err = fmt.Errorf("unknown command %q", os.Args[1])
 		}

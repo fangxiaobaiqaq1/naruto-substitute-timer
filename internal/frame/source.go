@@ -439,6 +439,11 @@ func frameFingerprint(img *image.RGBA, method string) uint64 {
 	return sum
 }
 
+// Fingerprint is the duplicate-frame fingerprint the live provider uses, for
+// diagnostic tools that must count duplicates with identical semantics. It is
+// process-local and only comparable within one run.
+func Fingerprint(img *image.RGBA, method string) uint64 { return frameFingerprint(img, method) }
+
 func mixHash(acc, value uint64) uint64 {
 	acc ^= value + 0x9e3779b97f4a7c15 + (acc << 6) + (acc >> 2)
 	return acc
