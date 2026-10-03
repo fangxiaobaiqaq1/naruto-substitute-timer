@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 只用于：1) TYPE_ACCESSIBILITY_OVERLAY 悬浮计时窗；2) takeScreenshot 备用采集（约 3fps）。
+     不读取任何界面节点/窗口内容。 -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:canRetrieveWindowContent="false"
+    android:canTakeScreenshot="true"
+    android:description="@string/accessibility_description"
+    android:notificationTimeout="1000"
+    android:settingsActivity="com.narutotimer.ui.MainActivity" />
