@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">替身计时器</string>
+    <string name="accessibility_label">替身计时器悬浮窗</string>
+    <string name="accessibility_description">用于在游戏画面上方显示替身冷却悬浮窗，并在未开启录屏时以低帧率截屏识别豆子。不读取任何界面文字或输入内容。</string>
+    <string name="notification_channel_name">识别服务</string>
+    <string name="notification_channel_description">录屏识别运行时显示的常驻通知</string>
+    <string name="notification_title">替身计时器运行中</string>
+    <string name="notification_text">正在识别对局画面</string>
+    <string name="notification_stop">停止识别</string>
+
+    <string name="main_title">火影忍者手游 · 替身冷却计时器</string>
+    <string name="status_native_loading">正在加载识别资源…</string>
+    <string name="status_native_ready">识别资源已就绪</string>
+    <string name="status_native_failed">识别资源加载失败：%1$s</string>
+    <string name="status_accessibility_on">无障碍服务：已开启</string>
+    <string name="status_accessibility_off">无障碍服务：未开启（悬浮窗需要它）</string>
+    <string name="status_projection_on">录屏采集：运行中</string>
+    <string name="status_projection_off">录屏采集：未运行（将用无障碍截屏，约 3 帧/秒）</string>
+    <string name="action_open_accessibility">开启无障碍服务</string>
+    <string name="action_start_projection">开始录屏识别（推荐）</string>
+    <string name="action_stop_projection">停止录屏识别</string>
+    <string name="action_save">保存设置</string>
+
+    <string name="settings_player_names">我方账号名（多个用逗号分隔）</string>
+    <string name="settings_player_side">我方位置</string>
+    <string name="side_auto">自动</string>
+    <string name="side_left">左边</string>
+    <string name="side_right">右边</string>
+    <string name="settings_remember_side">记住我方位置</string>
+    <string name="settings_ninja_query">对面忍者（留空 = 自动识别）</string>
+    <string name="settings_show_both">两边计时</string>
+    <string name="settings_mini">迷你悬浮窗</string>
+    <string name="settings_mini_opacity">迷你窗不透明度</string>
+    <string name="settings_font_scale">字体缩放</string>
+
+    <string name="overlay_settings">设置</string>
+    <string name="overlay_swap">换边</string>
+    <string name="overlay_both">两边计时</string>
+    <string name="overlay_single">单边计时</string>
+    <string name="overlay_exit_mini">退出迷你</string>
+    <string name="overlay_mini">迷你</string>
+</resources>
