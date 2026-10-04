@@ -6,7 +6,6 @@ package com.narutotimer.overlay
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
-import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PixelFormat
@@ -17,6 +16,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
+import android.view.inputmethod.InputMethodManager
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -24,12 +24,14 @@ import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.FrameLayout
 import com.narutotimer.Settings
+import com.narutotimer.capture.ProjectionCaptureService
 import com.narutotimer.tracker.OverlayState
 import com.narutotimer.tracker.Session
 import com.narutotimer.tracker.TimerColors
-import com.narutotimer.ui.MainActivity
 import com.narutotimer.service.TimerAccessibilityService
+import com.narutotimer.ui.ProjectionPermissionActivity
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -47,10 +49,14 @@ class OverlayController(
 
     private var view: MiniTimerView? = null
     private var handle: HandleView? = null
+    private var settingsView: OverlaySettingsView? = null
+    private var settingsRoot: FrameLayout? = null
     private val params = overlayParams(touchable = false)
     private val handleParams = overlayParams(touchable = true)
+    private val settingsParams = settingsOverlayParams()
 
     private var showing = false
+    private var settingsVisible = false
     private var destroyed = false
     private var controlsVisible = false
     private var positionEditing = false
@@ -111,7 +117,8 @@ class OverlayController(
 
     /** Removes both overlay windows and stops refresh.  Main-thread API. */
     fun hide() {
-        if (!showing) return
+        if (!showing && !settingsVisible) return
+        closeSettings()
         showing = false
         main.removeCallbacks(tick)
         main.removeCallbacks(autoHide)
@@ -196,6 +203,7 @@ class OverlayController(
 
     private fun onSettingChanged(key: String) {
         if (!showing) return
+        settingsView?.refresh(key)
         when (key) {
             Settings.KEY_OVERLAY_X, Settings.KEY_OVERLAY_Y -> onPositionSettingChanged()
             else -> {
@@ -260,14 +268,132 @@ class OverlayController(
     }
 
     private fun openSettings() {
+        if (!showing) return
         setControls(false)
-        val intent = Intent(service, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        if (settingsVisible) {
+            settingsView?.refresh()
+            settingsView?.requestFocus()
+            updateSettingsLayout()
+            return
+        }
+
+        val root = FrameLayout(service).apply {
+            setBackgroundColor(0x66000000)
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setOnKeyListener { _, keyCode, event ->
+                if (keyCode == android.view.KeyEvent.KEYCODE_BACK &&
+                    event.action == android.view.KeyEvent.ACTION_UP
+                ) {
+                    closeSettings()
+                    true
+                } else false
+            }
+        }
+        val panel = OverlaySettingsView(
+            service,
+            session,
+            settings,
+            object : OverlaySettingsView.Callbacks {
+                override fun onClose() = closeSettings()
+                override fun onSaved() {
+                    refreshSoon()
+                    closeSettings()
+                }
+                override fun onEditPosition() {
+                    closeSettings()
+                    startPositionEdit()
+                }
+                override fun onResetPosition() = onPositionSettingChanged()
+                override fun onRequestProjection() {
+                    runCatching { ProjectionPermissionActivity.launch(service) }
+                        .onFailure { Log.e(TAG, "projection permission failed", it) }
+                    main.postDelayed({ updateSettingsStatus() }, 500)
+                }
+                override fun onStopProjection() {
+                    runCatching { ProjectionCaptureService.stop(service) }
+                        .onFailure { Log.e(TAG, "projection stop failed", it) }
+                    updateSettingsStatus()
+                }
+            },
+        )
+        panel.onConfigChanged = { main.post { updateSettingsLayout() } }
+        root.addView(
+            panel,
+            FrameLayout.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER,
+            ),
+        )
+        settingsRoot = root
+        settingsView = panel
+        settingsVisible = true
+        updateSettingsLayout()
         try {
-            service.startActivity(intent)
+            wm.addView(root, settingsParams)
+            root.requestFocus()
+            updateSettingsStatus()
         } catch (e: RuntimeException) {
             Log.e(TAG, "open settings failed", e)
+            settingsRoot = null
+            settingsView = null
+            settingsVisible = false
         }
+    }
+
+    private fun closeSettings() {
+        if (!settingsVisible && settingsRoot == null) return
+        val imm = service.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        settingsRoot?.let { root ->
+            imm?.hideSoftInputFromWindow(root.windowToken, 0)
+            runCatching { wm.removeViewImmediate(root) }
+        }
+        settingsView?.callbacks = object : OverlaySettingsView.Callbacks {}
+        settingsView?.onConfigChanged = null
+        settingsView = null
+        settingsRoot = null
+        settingsVisible = false
+        forceRender = true
+        if (showing) main.post { tickNow() }
+    }
+
+    private fun settingsOverlayParams(): WindowManager.LayoutParams =
+        WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.LEFT
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+            setFitInsetsTypes(0)
+            title = "NarutoTimerSettings"
+        }
+
+    private fun updateSettingsLayout() {
+        if (!settingsVisible || settingsRoot == null) return
+        val b = safeRect()
+        settingsParams.x = b.left
+        settingsParams.y = b.top
+        settingsParams.width = b.width().coerceAtLeast(1)
+        settingsParams.height = b.height().coerceAtLeast(1)
+        settingsRoot?.let { root ->
+            if (root.isAttachedToWindow) runCatching { wm.updateViewLayout(root, settingsParams) }
+        }
+        updateSettingsStatus()
+    }
+
+    private fun updateSettingsStatus() {
+        settingsView?.setStatus(
+            "悬浮窗运行中\n" +
+                "识别状态：${if (session.fighting) "对局中" else "等待画面"}\n" +
+                "录屏采集：${if (ProjectionCaptureService.running) "运行中" else "未运行（可用无障碍截屏）"}",
+        )
     }
 
     private val viewListener = object : MiniTimerView.Listener {
@@ -467,6 +593,7 @@ class OverlayController(
         }
         placeHandle(b, w, h)
         updateLayouts()
+        updateSettingsLayout()
     }
 
     private fun updateLayouts() {

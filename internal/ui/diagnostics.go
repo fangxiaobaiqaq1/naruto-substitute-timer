@@ -90,9 +90,7 @@ func (s *session) startDiagnostics(record bool, replayEnabled ...bool) error {
 	s.diagnosticProbe = nil
 	s.diagnosticRecord = record
 	s.diagnosticReplay = replay
-	if source, ok := s.win.(frameDrawSource); ok {
-		source.SetFrameDrawCallback(s.traceDrawn)
-	}
+	s.setFrameDrawCallback(s.traceDrawn)
 	return nil
 }
 
@@ -102,9 +100,7 @@ func (s *session) stopDiagnostics() {
 	s.diagnosticMu.Lock()
 	r := s.diagnostic
 	s.diagnostic = nil
-	if source, ok := s.win.(frameDrawSource); ok {
-		source.SetFrameDrawCallback(nil)
-	}
+	s.setFrameDrawCallback(nil)
 	if r != nil {
 		s.diagnosticWriters.Add(1)
 	}
@@ -160,10 +156,20 @@ type frameDrawSource interface {
 }
 
 func (s *session) installDrawTrace() {
-	source, ok := s.win.(frameDrawSource)
-	s.drawTraceAvailable = ok
-	if ok && s.currentDiagnostics() != nil {
-		source.SetFrameDrawCallback(s.traceDrawn)
+	_, mainOK := s.win.(frameDrawSource)
+	_, miniOK := s.miniWin.(frameDrawSource)
+	s.drawTraceAvailable = mainOK || miniOK
+	if s.currentDiagnostics() != nil {
+		s.setFrameDrawCallback(s.traceDrawn)
+	}
+}
+
+func (s *session) setFrameDrawCallback(callback func(started, completed time.Time)) {
+	if source, ok := s.win.(frameDrawSource); ok {
+		source.SetFrameDrawCallback(callback)
+	}
+	if source, ok := s.miniWin.(frameDrawSource); ok {
+		source.SetFrameDrawCallback(callback)
 	}
 }
 

@@ -1,13 +1,17 @@
 package ui
 
 import (
+	"image/png"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"fyne.io/fyne/v2"
 	fynetest "fyne.io/fyne/v2/test"
 	"narutotimer/internal/config"
+	"narutotimer/internal/ninja"
 )
 
 func newMiniTestSession(t *testing.T, cfg config.Config) (*session, *[]float64) {
@@ -32,6 +36,26 @@ func observeBothSides(s *session, at time.Time) {
 	s.right.Observe(4, true, at.Add(-16*time.Millisecond), s.cooldown(), 2)
 	s.right.Observe(3, true, at, s.cooldown(), 2)
 	s.right.Observe(3, true, at.Add(16*time.Millisecond), s.cooldown(), 2)
+}
+
+func applyDetachedClockAt(s *session, at time.Time) {
+	s.refreshClockAt(at)
+	s.applyPendingClock()
+}
+
+func newDetachedMiniTestSession(t *testing.T, cfg config.Config) *session {
+	t.Helper()
+	a := fynetest.NewApp()
+	t.Cleanup(a.Quit)
+	a.Settings().SetTheme(newChromaTheme())
+	s := newSession(cfg, nil, nil)
+	s.cfgPath = filepath.Join(t.TempDir(), "config.json")
+	s.overlayOpacity = func(fyne.Window, float64) error { return nil }
+	s.floatingHook = func(bool) error { return nil }
+	s.win = fynetest.NewTempWindow(t, s.overlayContent())
+	s.setupDetachedMiniWindow(a)
+	t.Cleanup(func() { s.miniWin.Close() })
+	return s
 }
 
 func TestBothSideClocksShowAndUpdateInFullAndMini(t *testing.T) {
@@ -162,5 +186,131 @@ func TestMiniOpacitySettingPersistsAndValidates(t *testing.T) {
 	}
 	if stored.UI.MiniOpacity != 0.5 || stored.UI.OverlayMode != "mini" {
 		t.Fatalf("stored = %+v", stored.UI)
+	}
+}
+
+func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
+	a := fynetest.NewApp()
+	t.Cleanup(a.Quit)
+	a.Settings().SetTheme(newChromaTheme())
+	cfg := config.Default()
+	s := newSession(cfg, nil, nil)
+	s.cfgPath = filepath.Join(t.TempDir(), "config.json")
+	s.overlayOpacity = func(fyne.Window, float64) error { return nil }
+	s.floatingHook = func(bool) error { return nil }
+	s.win = fynetest.NewTempWindow(t, s.overlayContent())
+	s.setupDetachedMiniWindow(a)
+	t.Cleanup(func() { s.miniWin.Close() })
+
+	s.side = "left"
+	s.applyDetachedMiniClock("12.4", tagMine)
+	if got := s.miniStatus.Text; got != "替身计时·自动·左：12.4" {
+		t.Fatalf("mini pill text = %q", got)
+	}
+	if s.miniWindowControls.Visible() {
+		t.Fatal("mini controls visible before tapping the pill")
+	}
+	if output := os.Getenv("TIMER_UI_PREVIEW_DIR"); output != "" {
+		if err := os.MkdirAll(output, 0755); err != nil {
+			t.Fatal(err)
+		}
+		file, err := os.Create(filepath.Join(output, "detached-mini-collapsed.png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(file, s.miniWin.Canvas().Capture()); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+		file.Close()
+	}
+	s.miniWindowSurface.Tapped(nil)
+	if !s.miniWindowControls.Visible() {
+		t.Fatal("tapping the pill did not open controls")
+	}
+	if output := os.Getenv("TIMER_UI_PREVIEW_DIR"); output != "" {
+		file, err := os.Create(filepath.Join(output, "detached-mini-expanded.png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(file, s.miniWin.Canvas().Capture()); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+		file.Close()
+	}
+	buttons := s.miniWindowControls.Objects[1].(*fyne.Container)
+	buttons.Objects[0].(*miniButton).OnTapped()
+	if s.settings == nil || s.settings.Title() != "替身设置" {
+		t.Fatal("mini settings action did not open the main settings window")
+	}
+	s.settings.Close()
+}
+
+func TestDetachedMiniShowsBothSideClockValues(t *testing.T) {
+	cfg := config.Default()
+	cfg.UI.ShowBothSides = true
+	s := newDetachedMiniTestSession(t, cfg)
+
+	at := time.Unix(1700000000, 0)
+	observeBothSides(s, at)
+	applyDetachedClockAt(s, at.Add(5*time.Second))
+	text := s.miniStatus.Text
+	if !strings.Contains(text, "左 10.0") || !strings.Contains(text, "右 10.0") || !strings.Contains(text, " / ") {
+		t.Fatalf("detached both-side text = %q", text)
+	}
+}
+
+func TestDetachedMiniShowsFifthMizukageDualEstimates(t *testing.T) {
+	cfg := config.Default()
+	cfg.UI.NinjaQuery = ninja.FifthMizukage
+	s := newDetachedMiniTestSession(t, cfg)
+
+	s.side = "left"
+	at := time.Unix(1700000000, 0)
+	s.right.Observe(4, true, at.Add(-16*time.Millisecond), s.cooldown(), 2)
+	s.right.Observe(3, true, at, s.cooldown(), 2)
+	s.right.Observe(3, true, at.Add(16*time.Millisecond), s.cooldown(), 2)
+	applyDetachedClockAt(s, at.Add(32*time.Millisecond))
+	text := s.miniStatus.Text
+	if !strings.Contains(text, "15秒 14.9") || !strings.Contains(text, "10秒 9.9") {
+		t.Fatalf("detached dual text = %q", text)
+	}
+}
+
+func TestDetachedMiniSideLabelRefreshesWithoutClockChange(t *testing.T) {
+	s := newDetachedMiniTestSession(t, config.Default())
+
+	at := time.Unix(1700000000, 0)
+	observeBothSides(s, at)
+	s.side = "left"
+	applyDetachedClockAt(s, at.Add(5*time.Second))
+	left := s.miniStatus.Text
+	s.side = "right"
+	applyDetachedClockAt(s, at.Add(5*time.Second))
+	right := s.miniStatus.Text
+	if left == right || !strings.Contains(left, "自动·左") || !strings.Contains(right, "自动·右") {
+		t.Fatalf("side label did not refresh: left=%q right=%q", left, right)
+	}
+}
+
+func TestDetachedMiniUsesStoredFontScale(t *testing.T) {
+	cfg := config.Default()
+	cfg.UI.FontScale = 1.6
+	s := newDetachedMiniTestSession(t, cfg)
+	if got, want := s.miniStatus.TextSize, overlayTextSize(13, cfg.UI.FontScale); got != want {
+		t.Fatalf("detached mini font scale = %v, want %v", got, want)
+	}
+}
+
+func TestDetachedMiniCtrlMShortcutTogglesFullWindow(t *testing.T) {
+	s := newDetachedMiniTestSession(t, config.Default())
+	s.toggleMini()
+	if !s.isMini() {
+		t.Fatal("Ctrl+M on detached mini did not enter mini mode")
+	}
+	s.toggleMini()
+	if s.isMini() {
+		t.Fatal("second Ctrl+M on detached mini did not return to full mode")
 	}
 }
