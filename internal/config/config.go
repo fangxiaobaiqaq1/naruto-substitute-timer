@@ -241,7 +241,7 @@ type UIConfig struct {
 	ShowBothSides bool    `json:"showBothSides"`
 	// MiniOpacity replaces WindowOpacity while the mini overlay is shown, in [0.20, 1.00].
 	MiniOpacity float64 `json:"miniOpacity"`
-	// MiniFloating removes the native title bar/border in mini mode (Windows only).
+	// MiniFloating is retained for config compatibility; desktop mini mode is always a separate floating window.
 	MiniFloating    bool     `json:"miniFloating"`
 	GPUAcceleration bool     `json:"gpuAcceleration"`
 	PlayerNames     []string `json:"playerNames"`
@@ -324,7 +324,7 @@ func Default() Config {
 		UI: UIConfig{
 			PollIntervalMS: 16, IdlePollIntervalMS: 400,
 			WindowWidth: 420, WindowHeight: 320,
-			MiniWidth: 280, MiniHeight: 96,
+			MiniWidth: 280, MiniHeight: 48,
 			SubstituteCooldownSeconds: 15,
 			SubstituteTable:           "assets/game/substitutes.json",
 			PlayerSide:                "auto",

@@ -226,6 +226,15 @@ class MiniTimerView(context: Context) : View(context) {
 
     private fun collapsedText(s: OverlayState): String {
         val value = s.primaryText.takeIf { it.isNotEmpty() && it != "—" } ?: "等待决斗"
+        if (s.showBothSides) {
+            val left = s.leftText.takeIf { it.isNotEmpty() && it != "—" } ?: "等待决斗"
+            val right = s.rightText.takeIf { it.isNotEmpty() && it != "—" } ?: "等待决斗"
+            return "替身计时·${s.sideModeText}：左 $left / 右 $right"
+        }
+        if (s.dual) {
+            val alternate = s.altText.takeIf { it.isNotEmpty() } ?: "—"
+            return "替身计时·${s.sideModeText}：15秒 $value / 10秒 $alternate"
+        }
         return "替身计时·${s.sideModeText}：$value"
     }
 
@@ -691,7 +700,7 @@ class MiniTimerView(context: Context) : View(context) {
         } else if (controlsVisible) {
             "计时器，${s.primaryText}。操作：${buttonLabels.take(buttonCount).filterNotNull().joinToString("、")}"
         } else {
-            "计时器，${s.primaryText}。通过旁侧把手打开控制"
+            "计时器，${collapsedText(s)}。点击打开控制"
         }
     }
 
@@ -699,21 +708,36 @@ class MiniTimerView(context: Context) : View(context) {
         super.onInitializeAccessibilityNodeInfo(info)
         info.className = "android.widget.LinearLayout"
         info.contentDescription = contentDescription
-        info.isClickable = controlsVisible
+        info.isClickable = true
+        if (!controlsVisible) {
+            info.addAction(AccessibilityNodeInfo.AccessibilityAction(
+                AccessibilityNodeInfo.ACTION_CLICK,
+                "打开控制",
+            ))
+        }
         if (controlsVisible) {
             info.addAction(AccessibilityNodeInfo.AccessibilityAction(A11Y_SETTINGS, LABEL_SETTINGS))
             info.addAction(AccessibilityNodeInfo.AccessibilityAction(A11Y_SWAP, LABEL_SWAP))
             info.addAction(AccessibilityNodeInfo.AccessibilityAction(A11Y_BOTH, buttonLabels.getOrNull(2) ?: LABEL_BOTH))
-            info.addAction(AccessibilityNodeInfo.AccessibilityAction(A11Y_MINI, buttonLabels.getOrNull(3) ?: LABEL_MINI))
+            info.addAction(AccessibilityNodeInfo.AccessibilityAction(A11Y_EXIT, buttonLabels.getOrNull(3) ?: LABEL_EXIT))
         }
     }
 
     override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean {
         return when (action) {
+            AccessibilityNodeInfo.ACTION_CLICK -> {
+                if (!controlsVisible) {
+                    performClick()
+                    listener?.onDismissControls()
+                    true
+                } else {
+                    super.performAccessibilityAction(action, arguments)
+                }
+            }
             A11Y_SETTINGS -> { dispatchAction(ACTION_SETTINGS); true }
             A11Y_SWAP -> { dispatchAction(ACTION_SWAP); true }
             A11Y_BOTH -> { dispatchAction(ACTION_BOTH); true }
-            A11Y_MINI -> { dispatchAction(ACTION_MINI); true }
+            A11Y_EXIT -> { dispatchAction(ACTION_EXIT); true }
             else -> super.performAccessibilityAction(action, arguments)
         }
     }
@@ -773,6 +797,6 @@ class MiniTimerView(context: Context) : View(context) {
         private const val A11Y_SETTINGS = 0x01020001
         private const val A11Y_SWAP = 0x01020002
         private const val A11Y_BOTH = 0x01020003
-        private const val A11Y_MINI = 0x01020004
+        private const val A11Y_EXIT = 0x01020004
     }
 }

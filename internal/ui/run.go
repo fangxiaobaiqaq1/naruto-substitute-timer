@@ -119,6 +119,7 @@ type session struct {
 	lastRightBoth   string
 	lastLeftColor   color.Color
 	lastRightColor  color.Color
+	lastMiniDisplay string
 	clockRevision   uint64 // Accessed only through sync/atomic.
 	overlayRevision uint64 // Accessed only through sync/atomic.
 	overlayPosted   overlayPost
@@ -132,6 +133,7 @@ type session struct {
 
 	overlay            *fyne.Container
 	win                fyne.Window
+	miniWin            fyne.Window
 	settings           fyne.Window
 	settingsSide       *widget.RadioGroup
 	cd                 *canvas.Text
@@ -161,10 +163,17 @@ type session struct {
 	floatingHook       func(bool) error   // test seam for the native frame/topmost change
 	moveHook           func(dx, dy int32) // test seam for native window drags
 	dragAnchor         *miniDragAnchor    // UI goroutine only
+	detachedDragAnchor *miniDragAnchor    // UI goroutine only
 	hoverSettleHook    func(func())       // test seam for the delayed hover hide check
 	topmost            bool
 	overlayOpacity     func(fyne.Window, float64) error // test seam for native HWND application
 	appearanceError    string
+	miniRoot           *fyne.Container
+	miniStatus         *canvas.Text
+	miniWindowSurface  *miniSurface
+	miniWindowControls *fyne.Container
+	miniWindowBoth     *miniButton
+	miniWindowExpanded bool
 }
 
 type Option func(*session)
@@ -210,7 +219,12 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	}
 	s.restoreSide()
 	w.SetContent(s.overlayContent())
-	w.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyM, Modifier: fyne.KeyModifierControl}, func(fyne.Shortcut) { s.toggleMini() })
+	s.setupDetachedMiniWindow(a)
+	toggleMiniShortcut := func(fyne.Shortcut) { s.toggleMini() }
+	w.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyM, Modifier: fyne.KeyModifierControl}, toggleMiniShortcut)
+	if s.miniWin != nil {
+		s.miniWin.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyM, Modifier: fyne.KeyModifierControl}, toggleMiniShortcut)
+	}
 	s.installDrawTrace()
 	if cfg.DebugOn() {
 		if err := s.startDiagnostics(false); err != nil {
@@ -221,6 +235,13 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	s.fitOverlayWindow()
 	w.SetFixedSize(true)
 	w.CenterOnScreen()
+	if s.miniMode {
+		w.Hide()
+		s.miniWin.CenterOnScreen()
+		s.miniWin.Show()
+	} else {
+		s.miniWin.Hide()
+	}
 	go s.loop()
 	s.startAutomaticUpdateChecks()
 	go func() {
@@ -238,7 +259,13 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 		w.Show()
 		s.openAbout()
 	}
-	w.ShowAndRun()
+	// ShowAndRun always shows its receiver. A saved mini-mode session must
+	// keep the full overlay hidden while the detached window owns the UI loop.
+	if s.miniMode && !s.initialAbout {
+		a.Run()
+	} else {
+		w.ShowAndRun()
+	}
 	return nil
 }
 
@@ -533,6 +560,9 @@ func (s *session) stop() {
 		}
 		if updateService != nil {
 			updateService.Close()
+		}
+		if s.miniWin != nil {
+			s.miniWin.Hide()
 		}
 	})
 }
@@ -1132,6 +1162,7 @@ type clockUpdate struct {
 	altColor              color.NRGBA
 	leftText, rightText   string
 	leftColor, rightColor color.NRGBA
+	miniText              string
 	scale                 float64
 }
 
@@ -1149,7 +1180,8 @@ func (s *session) refreshClockAt(now time.Time) {
 	rightSecs := s.right.LatestRemaining(now)
 	leftText, leftColor := timerapp.FormatCD(leftSecs), clockColor(leftSecs)
 	rightText, rightColor := timerapp.FormatCD(rightSecs), clockColor(rightSecs)
-	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor && s.lastLeftBoth == leftText && s.lastRightBoth == rightText && s.lastLeftColor == leftColor && s.lastRightColor == rightColor
+	miniText := s.miniTextLocked(txt, altText, leftText, rightText, dual)
+	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor && s.lastLeftBoth == leftText && s.lastRightBoth == rightText && s.lastLeftColor == leftColor && s.lastRightColor == rightColor && s.lastMiniDisplay == miniText
 	trace := s.traceFrame
 	if same && (trace.id == 0 || trace == s.traceClock) {
 		// The applied trace already recorded this exact UI state (first write wins).
@@ -1176,11 +1208,13 @@ func (s *session) refreshClockAt(now time.Time) {
 	s.lastDual, s.lastAlt, s.lastAltColor = dual, altText, altColor
 	s.lastLeftBoth, s.lastRightBoth = leftText, rightText
 	s.lastLeftColor, s.lastRightColor = leftColor, rightColor
+	s.lastMiniDisplay = miniText
 	update := &clockUpdate{revision: atomic.AddUint64(&s.clockRevision, 1), trace: trace,
 		leftEvent: leftEvent, rightEvent: rightEvent, txt: txt, eventText: eventText, col: col,
 		dual: dual, altText: altText, altColor: altColor,
 		leftText: leftText, rightText: rightText, leftColor: leftColor, rightColor: rightColor,
-		scale: s.cfg.UI.FontScale}
+		miniText: miniText,
+		scale:    s.cfg.UI.FontScale}
 	// Offer under s.mu so the coalescer always holds the highest revision;
 	// Offer is only atomic stores.
 	schedule := s.clockPending.Offer(update)
@@ -1243,6 +1277,9 @@ func (s *session) applyPendingClock() {
 	if s.eventTag != nil && s.eventTag.Text != u.eventText {
 		s.eventTag.Text = u.eventText
 		refreshUI(s.eventTag)
+	}
+	if s.miniWin != nil {
+		s.applyDetachedMiniClockText(u.miniText, u.col)
 	}
 	// canvas.Text.Refresh repaints but does not reflow the neighboring badge.
 	// Going from "—" to a multi-digit clock must also recompute its row layout.

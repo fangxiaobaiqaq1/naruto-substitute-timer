@@ -63,13 +63,20 @@ func setFyneWindowOpacity(w fyne.Window, opacity float64) error {
 }
 
 func (s *session) nativeOverlayOpacity(opacity float64) error {
-	if s.win == nil {
+	target := s.win
+	s.mu.Lock()
+	mini := s.miniMode
+	s.mu.Unlock()
+	if mini && s.miniWin != nil {
+		target = s.miniWin
+	}
+	if target == nil {
 		return nil
 	}
 	if s.overlayOpacity != nil {
-		return s.overlayOpacity(s.win, opacity)
+		return s.overlayOpacity(target, opacity)
 	}
-	return setFyneWindowOpacity(s.win, opacity)
+	return setFyneWindowOpacity(target, opacity)
 }
 
 // previewAppearance applies changes immediately, but the settings page saves
@@ -141,11 +148,20 @@ func (s *session) applyOverlayFontScale(scale float64) {
 	if s.overlay != nil {
 		s.overlay.Refresh()
 	}
+	if s.miniStatus != nil {
+		s.miniStatus.TextSize = overlayTextSize(13, scale)
+		s.miniStatus.Refresh()
+		s.fitDetachedMiniWindow()
+	}
 	s.fitOverlayWindow()
 }
 
 func (s *session) fitOverlayWindow() {
 	if s.win == nil || s.overlay == nil {
+		return
+	}
+	if s.miniWin != nil && s.isMini() {
+		s.fitDetachedMiniWindow()
 		return
 	}
 	s.mu.Lock()
