@@ -123,6 +123,7 @@ const (
 	WSCaption     = 0x00C00000
 	WSSysMenu     = 0x00080000
 	WSMinimizeBox = 0x00020000
+	WSMaximizeBox = 0x00010000
 	WSFixedFrame  = 0x00CA0000 // caption+sysmenu+minimize，无厚边框
 	WSThickFrame  = 0x00040000
 
@@ -422,7 +423,7 @@ func SetWindowFrameless(hwnd uintptr, frameless bool, restore uintptr) (uintptr,
 	}
 	next := restore
 	if frameless {
-		next = style &^ (WSCaption | WSSysMenu | WSMinimizeBox)
+		next = style &^ (WSCaption | WSSysMenu | WSMinimizeBox | WSMaximizeBox)
 	} else if next == 0 {
 		next = style | WSCaption
 	}

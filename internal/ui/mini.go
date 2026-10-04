@@ -193,7 +193,11 @@ func (s *session) setupDetachedMiniWindow(a fyne.App) {
 	if a == nil {
 		return
 	}
-	s.miniWin = a.NewWindow(overlayTitle + " · 迷你")
+	if driver, ok := a.Driver().(desktop.Driver); ok {
+		s.miniWin = driver.CreateSplashWindow()
+	} else {
+		s.miniWin = a.NewWindow(overlayTitle + " · 迷你")
+	}
 	s.miniWin.SetPadded(false)
 	s.miniWin.SetFixedSize(false)
 	s.miniWin.SetContent(s.buildDetachedMiniContent())
@@ -555,8 +559,19 @@ func (s *session) fitDetachedMiniWindow() {
 	autoScale := s.cfg.UI.MiniAutoScale
 	s.mu.Unlock()
 	current := s.miniWin.Canvas().Size()
+	minimum := fyne.NewSize(float32(max(260, width)), float32(max(48, height)))
+	if autoScale {
+		if s.miniAdaptiveScale != 1 || s.miniAdaptiveScale == 0 {
+			s.setMiniContentScale(1)
+		}
+		minimum = minimum.Max(s.miniRoot.MinSize())
+		if current != minimum {
+			s.miniWin.Resize(minimum)
+		}
+		return
+	}
 	scale := float32(1)
-	if autoScale && current.Width >= 260 && current.Height >= 48 {
+	if current.Width >= 260 && current.Height >= 48 {
 		baseHeight := float32(48)
 		if s.miniWindowExpanded {
 			baseHeight = 100
@@ -569,13 +584,10 @@ func (s *session) fitDetachedMiniWindow() {
 			scale = 2.0
 		}
 	}
-	if !autoScale {
-		scale = 1
-	}
 	if math.Abs(float64(scale-s.miniAdaptiveScale)) > 0.01 || s.miniAdaptiveScale == 0 {
 		s.setMiniContentScale(scale)
 	}
-	minimum := fyne.NewSize(float32(max(260, width)), float32(max(48, height))).Max(s.miniRoot.MinSize())
+	minimum = minimum.Max(s.miniRoot.MinSize())
 	current = s.miniWin.Canvas().Size()
 	if current.Width < minimum.Width || current.Height < minimum.Height {
 		width, height := current.Width, current.Height
