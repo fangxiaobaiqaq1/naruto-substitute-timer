@@ -230,7 +230,7 @@ func TestSwapKeepsOpenAndReopenedSettingsInSync(t *testing.T) {
 	s.settings.Hide()
 	s.swapSide()
 	s.openSettings()
-	if got := settingsRadio(s.settings.Content()).Selected; got != "左边" {
+	if got := settingsRadio(s.settings.Content()).Selected; got != "自动认边" {
 		t.Fatalf("reopened settings stale: %q", got)
 	}
 }

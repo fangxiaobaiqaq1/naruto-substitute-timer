@@ -422,7 +422,7 @@ func SetWindowFrameless(hwnd uintptr, frameless bool, restore uintptr) (uintptr,
 	}
 	next := restore
 	if frameless {
-		next = style &^ (WSCaption | WSThickFrame)
+		next = style &^ (WSCaption | WSSysMenu | WSMinimizeBox)
 	} else if next == 0 {
 		next = style | WSCaption
 	}

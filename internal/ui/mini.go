@@ -114,7 +114,7 @@ func (s *session) setupDetachedMiniWindow(a fyne.App) {
 	}
 	s.miniWin = a.NewWindow(overlayTitle + " · 迷你")
 	s.miniWin.SetPadded(false)
-	s.miniWin.SetFixedSize(true)
+	s.miniWin.SetFixedSize(false)
 	s.miniWin.SetContent(s.buildDetachedMiniContent())
 	s.miniWin.SetCloseIntercept(func() {
 		if s.isMini() {
@@ -448,8 +448,18 @@ func (s *session) fitDetachedMiniWindow() {
 	s.mu.Lock()
 	width, height := s.cfg.UI.MiniWidth, s.cfg.UI.MiniHeight
 	s.mu.Unlock()
-	minimum := fyne.NewSize(float32(max(260, width)), float32(max(48, height)))
-	s.miniWin.Resize(minimum.Max(s.miniRoot.MinSize()))
+	minimum := fyne.NewSize(float32(max(260, width)), float32(max(48, height))).Max(s.miniRoot.MinSize())
+	current := s.miniWin.Canvas().Size()
+	if current.Width < minimum.Width || current.Height < minimum.Height {
+		width, height := current.Width, current.Height
+		if width < minimum.Width {
+			width = minimum.Width
+		}
+		if height < minimum.Height {
+			height = minimum.Height
+		}
+		s.miniWin.Resize(fyne.NewSize(width, height))
+	}
 }
 
 func (s *session) nativeFloating(on, topmost bool) error {

@@ -226,7 +226,15 @@ class Session(
 
     fun swapSide() {
         synchronized(lock) {
-            lockSideLocked(if (effectiveSideLocked() == "right") "left" else "right")
+            when (effectiveSideLocked()) {
+                "left" -> lockSideLocked("right")
+                "right" -> {
+                    settings.playerSide = "auto"
+                    playerSideState = autoSide
+                    bump()
+                }
+                else -> lockSideLocked("left")
+            }
         }
     }
 
