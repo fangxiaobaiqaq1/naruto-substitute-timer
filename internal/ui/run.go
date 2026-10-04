@@ -239,6 +239,11 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 		w.Hide()
 		s.miniWin.CenterOnScreen()
 		s.miniWin.Show()
+		fyne.Do(func() {
+			if !s.stopped() {
+				s.applyInitialWindowAppearance()
+			}
+		})
 	} else {
 		s.miniWin.Hide()
 	}
