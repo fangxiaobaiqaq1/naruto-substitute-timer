@@ -28,6 +28,7 @@ class TimerAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         connected = true
         instance = this
+        Log.i(TAG, "accessibility service connected")
         // Deliberately do not start the overlay here. The user controls its
         // lifecycle from MainActivity (or the pill's explicit 退出 action).
     }
@@ -92,6 +93,7 @@ class TimerAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         connected = false
         if (instance === this) instance = null
+        Log.i(TAG, "accessibility service destroyed")
         // onDestroy may race with a pending start/stop callback. Do not assume
         // that an overlay exists, and never let teardown escape as a service
         // fault.
@@ -111,7 +113,7 @@ class TimerAccessibilityService : AccessibilityService() {
         fallback = null
     }
 
-    /** Opens a temporary drag mode; the settings Activity remains separate. */
+    /** Opens a temporary drag mode after the in-overlay settings panel closes. */
     fun beginPositionEdit() = onMain { overlay?.startPositionEdit() }
 
     val isOverlayRunning: Boolean

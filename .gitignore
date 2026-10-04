@@ -7,6 +7,9 @@
 
 # 本机配置、工具状态与临时目录
 /config.json
+/.env
+/.env.*
+!/.env.example
 /tmp/
 /.reasonix/
 /.zcode/

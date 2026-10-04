@@ -33,7 +33,7 @@ android/
     capture/{ProjectionCaptureService,ScreenshotCapture,FrameLoop}.kt   # kt-capture-service
     service/TimerAccessibilityService.kt                      # kt-capture-service
     ui/ProjectionPermissionActivity.kt                        # kt-capture-service
-    overlay/{OverlayController,MiniTimerView}.kt              # kt-overlay-ui
+    overlay/{OverlayController,MiniTimerView,OverlaySettingsView}.kt # kt-overlay-ui
     ui/MainActivity.kt                                        # kt-overlay-ui
 ```
 
@@ -175,7 +175,7 @@ android/
 - Go 来源：internal/ui/run.go `overlayContent/applyBothSideVisibility/applyMiniVisibility/applyPendingClock/clockLoop`，
   internal/ui/mini.go（迷你模式、控制按钮、拖动），internal/ui/settings.go `openSettings`（设置项），internal/ui/theme.go。
 - 公开 API：`OverlayController(service, session, settings).show/hide/destroy/isShowing`、
-  `MiniTimerView.render(OverlayState)` + `Listener`、`MainActivity`。
+  `MiniTimerView.render(OverlayState)` + `Listener`、`OverlaySettingsView`（悬浮窗内分组设置、输入和滑杆）。
 - 依赖：Session/OverlayState（kt-tracker）、Settings、TimerApp、TimerAccessibilityService、ProjectionPermissionActivity、ProjectionCaptureService。
 
 ### architect（已完成）
@@ -317,6 +317,8 @@ MediaProjection VirtualDisplay(1280×720) ─▶ ImageReader(RGBA_8888, maxImage
 - 采集源切换/几何变化：native 指纹与 Gated 自动重同步；Kotlin 侧调用 `NativeCore.nativeResetDelivery()` 与
   `session.resyncObservation()`（Go ObservationSpace 变化）。
 - 悬浮窗：`TYPE_ACCESSIBILITY_OVERLAY`（无障碍服务的 WindowManager），无需 SYSTEM_ALERT_WINDOW。
+- 设置：从计时条操作栏直接打开第三个 `TYPE_ACCESSIBILITY_OVERLAY` 窗口；面板覆盖安全显示区域，
+  保存、保存并退出、输入法、内容滚动、返回键和录屏授权都在悬浮窗生命周期内处理，不启动 `MainActivity`。
 - Android 14：先 `startForeground(..., FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)` 再 `getMediaProjection`；
   `createVirtualDisplay` 前必须 `registerCallback`；授权 Intent 只能用一次。
 

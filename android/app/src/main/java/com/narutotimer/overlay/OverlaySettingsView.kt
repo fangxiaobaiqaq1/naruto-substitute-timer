@@ -41,6 +41,7 @@ class OverlaySettingsView(
     interface Callbacks {
         fun onClose() {}
         fun onSaved() {}
+        fun onSavedAndClose() {}
         fun onEditPosition() {}
         fun onResetPosition() {}
         fun onRequestProjection() {}
@@ -115,6 +116,20 @@ class OverlaySettingsView(
         onConfigChanged?.invoke()
     }
 
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        if (View.MeasureSpec.getMode(heightMeasureSpec) == View.MeasureSpec.AT_MOST) {
+            super.onMeasure(
+                widthMeasureSpec,
+                View.MeasureSpec.makeMeasureSpec(
+                    View.MeasureSpec.getSize(heightMeasureSpec),
+                    View.MeasureSpec.EXACTLY,
+                ),
+            )
+        } else {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) callbacks.onClose()
@@ -127,11 +142,25 @@ class OverlaySettingsView(
     fun setStatus(text: CharSequence) { statusText.text = text }
 
     private fun buildHeader() {
-        val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        val title = label("计时器设置", 19f, true).apply { setTextColor(TimerColors.CLOCK_LIVE) }
+        val header = LinearLayout(context).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), 0, dp(4), 0)
+            background = rounded(0xFF2F78BE.toInt(), 14f)
+        }
+        val title = label("计时器设置", 17f, true).apply { setTextColor(Color.WHITE) }
         header.addView(title, LinearLayout.LayoutParams(0, dp(44), 1f))
-        header.addView(button("保存") { save() }, LinearLayout.LayoutParams(dp(72), dp(42)))
-        header.addView(button("关闭") { callbacks.onClose() }, LinearLayout.LayoutParams(dp(72), dp(42)).apply { leftMargin = dp(6) })
+        header.addView(
+            button("保存") { save() }.apply { textSize = 12f; setPadding(0, 0, 0, 0) },
+            LinearLayout.LayoutParams(dp(56), dp(42)),
+        )
+        header.addView(
+            button("保存并退出") { saveAndClose() }.apply { textSize = 12f; setPadding(0, 0, 0, 0) },
+            LinearLayout.LayoutParams(dp(78), dp(42)).apply { leftMargin = dp(4) },
+        )
+        header.addView(
+            button("关闭") { callbacks.onClose() }.apply { textSize = 12f; setPadding(0, 0, 0, 0) },
+            LinearLayout.LayoutParams(dp(56), dp(42)).apply { leftMargin = dp(4) },
+        )
         addView(header, LinearLayout.LayoutParams(MATCH, WRAP))
     }
 
@@ -150,14 +179,16 @@ class OverlaySettingsView(
             }
             category.addView(item, LinearLayout.LayoutParams(dp(78), dp(52)))
         }
-        body.addView(category, LinearLayout.LayoutParams(dp(82), WRAP))
+        body.addView(category, LinearLayout.LayoutParams(dp(82), MATCH))
         panelHost.orientation = VERTICAL
         panelHost.background = rounded(0xFF123044.toInt(), 16f)
         body.addView(ScrollView(context).apply {
             isFillViewport = true
+            isVerticalScrollBarEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
             addView(panelHost, ViewGroup.LayoutParams(MATCH, WRAP))
-        }, LinearLayout.LayoutParams(0, dp(360), 1f).apply { leftMargin = dp(8) })
-        addView(body, LinearLayout.LayoutParams(MATCH, dp(360)).apply { topMargin = dp(8) })
+        }, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = dp(8) })
+        addView(body, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(8) })
         panels += buildGamePanel()
         panels += buildAppearancePanel()
         panels += buildPositionPanel()
@@ -269,6 +300,16 @@ class OverlaySettingsView(
     }
 
     private fun save() {
+        applySettings()
+        callbacks.onSaved()
+    }
+
+    private fun saveAndClose() {
+        applySettings()
+        callbacks.onSavedAndClose()
+    }
+
+    private fun applySettings() {
         val values = names.text.toString().split(',', '，', '\n').map { it.trim() }.filter { it.isNotEmpty() }
         val side = when (sideGroup.checkedRadioButtonId) {
             sideGroup.getChildAt(1).id -> "left"
@@ -276,7 +317,6 @@ class OverlaySettingsView(
             else -> "auto"
         }
         session.applySettings(values, ninja.text.toString(), side, remember.isChecked)
-        callbacks.onSaved()
     }
 
     private fun showPanel(index: Int) {
@@ -286,6 +326,10 @@ class OverlaySettingsView(
             val v = category.getChildAt(i) as TextView
             v.setTextColor(if (i == index) TimerColors.CLOCK_LIVE else Color.WHITE)
             v.setTypeface(null, if (i == index) Typeface.BOLD else Typeface.NORMAL)
+            v.background = rounded(
+                if (i == index) TimerColors.PANEL_HOVER else 0x00102030,
+                10f,
+            )
         }
         if (index == 2) invalidate()
     }
@@ -345,6 +389,9 @@ class OverlaySettingsView(
 
     private fun button(text: String, click: () -> Unit) = Button(context).apply {
         this.text = text
+        setTextColor(Color.WHITE)
+        setAllCaps(false)
+        background = rounded(0xFF2F78BE.toInt(), 8f)
         minHeight = dp(42)
         setOnClickListener { click() }
     }

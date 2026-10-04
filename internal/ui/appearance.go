@@ -149,9 +149,7 @@ func (s *session) applyOverlayFontScale(scale float64) {
 		s.overlay.Refresh()
 	}
 	if s.miniStatus != nil {
-		s.miniStatus.TextSize = overlayTextSize(13, scale)
-		s.miniStatus.Refresh()
-		s.fitDetachedMiniWindow()
+		s.applyMiniContentScale()
 	}
 	s.fitOverlayWindow()
 }
