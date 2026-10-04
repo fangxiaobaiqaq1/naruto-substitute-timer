@@ -225,17 +225,19 @@ class MiniTimerView(context: Context) : View(context) {
         max(dp(MIN_BUTTON_WIDTH_DP), textW(label, textSize(BUTTON_TEXT), false) + 2 * dp(BUTTON_PAD_DP))
 
     private fun collapsedText(s: OverlayState): String {
-        val value = s.primaryText.takeIf { it.isNotEmpty() && it != "—" } ?: "等待决斗"
+        val scene = s.infoText.substringBefore("  豆").ifBlank { "未识别场景" }
+        val opponent = s.tagText.substringBefore(" · ").ifBlank { "对面·待认边" }
+        val value = s.primaryText.takeIf { it.isNotEmpty() && it != "—" }
         if (s.showBothSides) {
-            val left = s.leftText.takeIf { it.isNotEmpty() && it != "—" } ?: "等待决斗"
-            val right = s.rightText.takeIf { it.isNotEmpty() && it != "—" } ?: "等待决斗"
-            return "替身计时·${s.sideModeText}：左 $left / 右 $right"
+            val left = s.leftText.takeIf { it.isNotEmpty() && it != "—" } ?: "—"
+            val right = s.rightText.takeIf { it.isNotEmpty() && it != "—" } ?: "—"
+            return "$opponent · 左 $left / 右 $right"
         }
         if (s.dual) {
             val alternate = s.altText.takeIf { it.isNotEmpty() } ?: "—"
-            return "替身计时·${s.sideModeText}：15秒 $value / 10秒 $alternate"
+            return if (value == null) "$scene · $opponent" else "$opponent · 15秒 $value / 10秒 $alternate"
         }
-        return "替身计时·${s.sideModeText}：$value"
+        return value?.let { "$opponent · $it" } ?: "$scene · $opponent"
     }
 
     private fun prepareButtons(s: OverlayState) {
@@ -285,7 +287,7 @@ class MiniTimerView(context: Context) : View(context) {
         if (!controlsVisible) {
             val label = collapsedText(s)
             val size = textSize(COLLAPSED_TEXT)
-            val desired = min(textW(label, size, false), maxContentW)
+            val desired = min(dp(COLLAPSED_WIDTH_DP), maxContentW)
             layoutW = desired + 2 * pad
             layoutH = textH(size, false) + 2 * pad
             grownW = desired
@@ -777,6 +779,7 @@ class MiniTimerView(context: Context) : View(context) {
         private const val BORDER_DP = 1f
         private const val CONTROLS_PANEL_PAD_DP = 3f
         private const val MAX_CARD_WIDTH_DP = 360f
+        private const val COLLAPSED_WIDTH_DP = 320f
         private const val PAD_DP = 9f
         private const val GAP_DP = 5f
 

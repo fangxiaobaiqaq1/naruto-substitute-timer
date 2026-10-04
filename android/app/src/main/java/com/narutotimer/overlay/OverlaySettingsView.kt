@@ -201,7 +201,7 @@ class OverlaySettingsView(
         val p = panel()
         add(p, label("我方所在边", 15f, true))
         sideGroup.orientation = RadioGroup.HORIZONTAL
-        listOf("自动", "左", "右").forEachIndexed { i, text ->
+        listOf("自动识别我方", "我方在左", "我方在右").forEachIndexed { i, text ->
             val rb = RadioButton(context).apply { id = View.generateViewId(); this.text = text; minHeight = dp(46); setTextColor(Color.WHITE) }
             sideGroup.addView(rb, RadioGroup.LayoutParams(0, WRAP, 1f))
         }
@@ -232,7 +232,7 @@ class OverlaySettingsView(
         ninja.inputType = InputType.TYPE_CLASS_TEXT
         ninja.isSingleLine = true
         add(p, ninja, 2)
-        add(p, note("边与两边计时立即生效；名字和忍者名点击顶部保存后生效。"), 8)
+        add(p, note("左/右均指我方，对手位置自动取另一侧；边与两边计时立即生效。"), 8)
         return p
     }
 
