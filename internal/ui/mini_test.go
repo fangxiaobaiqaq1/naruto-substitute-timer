@@ -201,11 +201,19 @@ func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
 	s.win = fynetest.NewTempWindow(t, s.overlayContent())
 	s.setupDetachedMiniWindow(a)
 	t.Cleanup(func() { s.miniWin.Close() })
+	if s.miniWin.FixedSize() {
+		t.Fatal("detached mini window is still fixed-size")
+	}
 
 	s.side = "left"
 	s.applyDetachedMiniClock("12.4", tagMine)
 	if got := s.miniStatus.Text; got != "替身计时·自动·左：12.4" {
 		t.Fatalf("mini pill text = %q", got)
+	}
+	s.miniWin.Resize(fyne.NewSize(480, 160))
+	s.applyDetachedMiniClock("11.4", tagMine)
+	if size := s.miniWin.Canvas().Size(); size.Width < 480 || size.Height < 160 {
+		t.Fatalf("detached mini window shrank after user resize: %v", size)
 	}
 	if s.miniWindowControls.Visible() {
 		t.Fatal("mini controls visible before tapping the pill")
@@ -245,6 +253,23 @@ func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
 		t.Fatal("mini settings action did not open the main settings window")
 	}
 	s.settings.Close()
+}
+
+func TestSwapSideCyclesThroughAutoMode(t *testing.T) {
+	s := &session{cfg: config.Default(), cfgPath: filepath.Join(t.TempDir(), "config.json"), side: "left", remember: true}
+	s.cfg.UI.PlayerSide = "left"
+	s.swapSide()
+	if s.side != "right" || s.cfg.UI.PlayerSide != "right" {
+		t.Fatalf("left to right: side=%q mode=%q", s.side, s.cfg.UI.PlayerSide)
+	}
+	s.swapSide()
+	if s.side != "" || s.cfg.UI.PlayerSide != "auto" {
+		t.Fatalf("right to auto: side=%q mode=%q", s.side, s.cfg.UI.PlayerSide)
+	}
+	s.swapSide()
+	if s.side != "left" || s.cfg.UI.PlayerSide != "left" {
+		t.Fatalf("auto to left: side=%q mode=%q", s.side, s.cfg.UI.PlayerSide)
+	}
 }
 
 func TestDetachedMiniShowsBothSideClockValues(t *testing.T) {

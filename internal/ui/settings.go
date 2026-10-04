@@ -378,11 +378,18 @@ func (s *session) applySettings(nameText, ninjaText, sideText string, remember, 
 
 func (s *session) swapSide() {
 	s.mu.Lock()
-	next := "right"
-	if s.side == "right" {
-		next = "left"
+	next := "left"
+	switch s.side {
+	case "left":
+		next = "right"
+	case "right":
+		next = "auto"
 	}
 	s.mu.Unlock()
+	if next == "auto" {
+		showSettingsError(s.selectSideMode(next), s.win)
+		return
+	}
 	s.lockSide(next)
 }
 
