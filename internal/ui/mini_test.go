@@ -194,6 +194,7 @@ func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
 	t.Cleanup(a.Quit)
 	a.Settings().SetTheme(newChromaTheme())
 	cfg := config.Default()
+	cfg.UI.MiniAutoScale = false
 	s := newSession(cfg, nil, nil)
 	s.cfgPath = filepath.Join(t.TempDir(), "config.json")
 	s.overlayOpacity = func(fyne.Window, float64) error { return nil }

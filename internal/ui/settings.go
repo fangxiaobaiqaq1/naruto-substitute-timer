@@ -205,7 +205,7 @@ func (s *session) openSettings() {
 	bothChk := widget.NewCheck("左右两边都显示替身倒计时", nil)
 	bothChk.SetChecked(showBoth)
 	bothChk.OnChanged = func(on bool) { showSettingsError(s.setShowBothSides(on), w) }
-	autoScaleChk := widget.NewCheck("迷你窗口内容自适应大小（随窗口等比例缩放）", nil)
+	autoScaleChk := widget.NewCheck("迷你窗口自动适应内容大小（关闭后可自由拉伸并等比例缩放内容）", nil)
 	autoScaleChk.SetChecked(miniAutoScale)
 	autoScaleChk.OnChanged = func(on bool) {
 		s.mu.Lock()
