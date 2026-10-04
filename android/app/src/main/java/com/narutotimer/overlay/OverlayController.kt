@@ -395,7 +395,7 @@ class OverlayController(
     private fun updateSettingsStatus() {
         settingsView?.setStatus(
             "悬浮窗运行中\n" +
-                "识别状态：${if (session.fighting) "对局中" else "等待画面"}\n" +
+                "识别状态：${if (session.fighting) "对局中" else "等待场景识别"}\n" +
                 "录屏采集：${if (ProjectionCaptureService.running) "运行中" else "未运行（可用无障碍截屏）"}",
         )
     }

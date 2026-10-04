@@ -73,7 +73,7 @@ class ProjectionCaptureService : Service() {
             )
         }
         val notification = Notification.Builder(this, NOTIFICATION_CHANNEL)
-            .setContentTitle("替身计时器")
+            .setContentTitle("火影识别服务")
             .setContentText("正在识别模拟器画面")
             .setSmallIcon(com.narutotimer.R.drawable.ic_launcher)
             .setOngoing(true)

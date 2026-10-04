@@ -10,7 +10,7 @@ data class OverlayState(
     val revision: Long,
     val tagText: String,
     val tagColor: Int,
-    /** Explicit recognition mode shown in the Android pill: 自动 / 左 / 右. */
+    /** Explicit player-side mode shown in the Android pill. */
     val sideModeText: String,
     val primaryText: String,
     val primaryColor: Int,
@@ -205,16 +205,18 @@ class Session(
         }
         val currentBeads = lastFrame?.frameBeads.orEmpty()
         val modeText = when (settings.playerSide) {
-            "left" -> "左"
-            "right" -> "右"
-            else -> effectiveSideLocked().let { if (it == "left") "自动·左" else if (it == "right") "自动·右" else "自动" }
+            "left" -> "我方·左"
+            "right" -> "我方·右"
+            else -> effectiveSideLocked().let {
+                if (it == "left") "我方·自动·左" else if (it == "right") "我方·自动·右" else "我方·自动·待认边"
+            }
         }
         OverlayState(
             revision, tag, if (opponentNinja.isEmpty()) TimerColors.TAG_IDLE else TimerColors.TAG_MINE,
             modeText, SideClock.formatCD(opp), clockColor(opp), event, dual, alt,
             if (alt == "—" || alt == "就绪" || alt.isEmpty()) TimerColors.CLOCK_IDLE else TimerColors.CLOCK_LIVE,
             SideClock.formatCD(left), clockColor(left), SideClock.formatCD(right), clockColor(right),
-            "${if (scene.isNotEmpty()) sceneName(scene) else "等待画面"} · ${when {
+            "${sceneName(scene, layoutProfile)} · ${when {
                 fHoldLocked() -> "待识别"
                 isFighting -> "对局"
                 else -> "待机"
@@ -563,15 +565,15 @@ class Session(
 
     private fun isHoldScene(s: String): Boolean = s.isNotEmpty() && s in settings.holdScenes
     private fun isEndScene(s: String): Boolean = s.isNotEmpty() && s in settings.endScenes
-    private fun sceneName(s: String) = when (s) {
-        "fight" -> "决斗场"
-        "result" -> "结算"
-        "lobby" -> "大厅"
+    private fun sceneName(s: String, profile: String) = when (s) {
+        "fight" -> if (profile == "camp") "训" else "决"
+        "result" -> "结"
+        "lobby" -> "厅"
         "vs" -> "VS"
-        "queue" -> "匹配"
-        "pick" -> "选人"
-        "ban" -> "禁用忍者"
-        else -> s
+        "queue" -> "匹"
+        "pick" -> "选"
+        "ban" -> "禁"
+        else -> s.ifEmpty { "待识别" }
     }
 
     private fun bump() {
