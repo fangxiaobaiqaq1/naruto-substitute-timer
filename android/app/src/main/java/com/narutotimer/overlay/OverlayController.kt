@@ -37,7 +37,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** Owns the two TYPE_ACCESSIBILITY_OVERLAY windows used by the Android timer. */
+/** Owns the timer, handle, and in-overlay settings TYPE_ACCESSIBILITY_OVERLAY windows. */
 class OverlayController(
     private val service: AccessibilityService,
     private val session: Session,
@@ -298,6 +298,10 @@ class OverlayController(
                 override fun onClose() = closeSettings()
                 override fun onSaved() {
                     refreshSoon()
+                    settingsView?.refresh()
+                }
+                override fun onSavedAndClose() {
+                    refreshSoon()
                     closeSettings()
                 }
                 override fun onEditPosition() {
@@ -313,7 +317,7 @@ class OverlayController(
                 override fun onStopProjection() {
                     runCatching { ProjectionCaptureService.stop(service) }
                         .onFailure { Log.e(TAG, "projection stop failed", it) }
-                    updateSettingsStatus()
+                    main.postDelayed({ updateSettingsStatus() }, 300)
                 }
             },
         )
@@ -322,7 +326,7 @@ class OverlayController(
             panel,
             FrameLayout.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
                 Gravity.CENTER,
             ),
         )

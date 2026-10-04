@@ -243,6 +243,7 @@ type UIConfig struct {
 	MiniOpacity float64 `json:"miniOpacity"`
 	// MiniFloating is retained for config compatibility; desktop mini mode is always a separate floating window.
 	MiniFloating    bool     `json:"miniFloating"`
+	MiniAutoScale   bool     `json:"miniAutoScale"`
 	GPUAcceleration bool     `json:"gpuAcceleration"`
 	PlayerNames     []string `json:"playerNames"`
 }
@@ -339,6 +340,7 @@ func Default() Config {
 			ShowBothSides:             false,
 			MiniOpacity:               0.85,
 			MiniFloating:              false,
+			MiniAutoScale:             true,
 			GPUAcceleration:           false,
 			// Keep the published default neutral. Users can add their own names
 			// in config.json or through the settings window.

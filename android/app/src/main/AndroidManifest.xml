@@ -40,7 +40,7 @@
 
         <service
             android:name=".service.TimerAccessibilityService"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/accessibility_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>

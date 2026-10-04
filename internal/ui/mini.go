@@ -80,6 +80,87 @@ type miniButton struct {
 	detached bool
 }
 
+type scaledMiniButton struct {
+	widget.BaseWidget
+	s          *session
+	Text       string
+	OnTapped   func()
+	high       bool
+	hovered    bool
+	scale      float32
+	label      *canvas.Text
+	background *canvas.Rectangle
+}
+
+func newScaledMiniButton(s *session, label string, tapped func(), high bool) *scaledMiniButton {
+	b := &scaledMiniButton{s: s, Text: label, OnTapped: tapped, high: high, scale: 1}
+	b.label = canvas.NewText(label, clockLive)
+	b.label.Alignment = fyne.TextAlignCenter
+	b.background = canvas.NewRectangle(panelBtn)
+	b.ExtendBaseWidget(b)
+	b.setScale(1)
+	return b
+}
+
+func (b *scaledMiniButton) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(container.NewStack(b.background, container.NewCenter(b.label)))
+}
+
+func (b *scaledMiniButton) setScale(scale float32) {
+	if scale <= 0 {
+		scale = 1
+	}
+	b.scale = scale
+	b.label.TextSize = b.s.miniTextSize(13 * scale)
+	b.label.Refresh()
+	b.refreshColors()
+}
+
+func (b *scaledMiniButton) refreshColors() {
+	if b.high {
+		b.background.FillColor = clockLive
+		b.label.Color = glassBG
+	} else if b.hovered {
+		b.background.FillColor = panelHover
+		b.label.Color = clockLive
+	} else {
+		b.background.FillColor = panelBtn
+		b.label.Color = clockLive
+	}
+	b.background.Refresh()
+	b.label.Refresh()
+}
+
+func (b *scaledMiniButton) MouseIn(*desktop.MouseEvent) {
+	b.hovered = true
+	b.refreshColors()
+}
+
+func (b *scaledMiniButton) MouseOut() {
+	b.hovered = false
+	b.refreshColors()
+}
+
+func (b *scaledMiniButton) Tapped(*fyne.PointEvent) {
+	if b.OnTapped != nil {
+		b.OnTapped()
+	}
+}
+
+func (b *scaledMiniButton) SetText(text string) {
+	b.Text = text
+	b.label.Text = text
+	b.label.Refresh()
+	b.Refresh()
+}
+
+func (s *session) miniTextSize(base float32) float32 {
+	s.mu.Lock()
+	fontScale := s.cfg.UI.FontScale
+	s.mu.Unlock()
+	return overlayTextSize(base, fontScale)
+}
+
 func newMiniButton(s *session, label string, tapped func()) *miniButton {
 	b := &miniButton{s: s}
 	b.Text, b.OnTapped = label, tapped
@@ -134,11 +215,11 @@ func (s *session) buildDetachedMiniContent() fyne.CanvasObject {
 	s.miniStatus.TextSize = overlayTextSize(13, scale)
 	s.miniStatus.Alignment = fyne.TextAlignCenter
 
-	settings := newDetachedMiniButton(s, "设置", s.openSettings)
-	swap := newDetachedMiniButton(s, "换边", s.swapSide)
-	s.miniWindowBoth = newDetachedMiniButton(s, "两边计时", s.toggleBothSides)
-	exit := newDetachedMiniButton(s, "退出", s.toggleMini)
-	exit.Importance = widget.HighImportance
+	settings := newScaledMiniButton(s, "设置", s.openSettings, false)
+	swap := newScaledMiniButton(s, "换边", s.swapSide, false)
+	s.miniWindowBoth = newScaledMiniButton(s, "两边计时", s.toggleBothSides, false)
+	exit := newScaledMiniButton(s, "退出", s.toggleMini, true)
+	s.miniWindowButtons = []*scaledMiniButton{settings, swap, s.miniWindowBoth, exit}
 	buttons := container.NewGridWithColumns(4, settings, swap, s.miniWindowBoth, exit)
 	s.miniWindowControls = container.NewStack(canvas.NewRectangle(miniControlsBG), buttons)
 	s.miniWindowControls.Hide()
@@ -176,6 +257,30 @@ func (s *session) syncDetachedMiniControls() {
 	}
 	if s.miniWindowBoth.Text != label {
 		s.miniWindowBoth.SetText(label)
+	}
+}
+
+func (s *session) applyMiniContentScale() {
+	if s.miniWin == nil || s.miniRoot == nil {
+		return
+	}
+	s.fitDetachedMiniWindow()
+}
+
+func (s *session) setMiniContentScale(scale float32) {
+	if scale <= 0 {
+		scale = 1
+	}
+	s.miniAdaptiveScale = scale
+	if s.miniStatus != nil {
+		s.miniStatus.TextSize = s.miniTextSize(13 * scale)
+		s.miniStatus.Refresh()
+	}
+	for _, button := range s.miniWindowButtons {
+		button.setScale(scale)
+	}
+	if s.miniRoot != nil {
+		s.miniRoot.Refresh()
 	}
 }
 
@@ -447,9 +552,31 @@ func (s *session) fitDetachedMiniWindow() {
 	}
 	s.mu.Lock()
 	width, height := s.cfg.UI.MiniWidth, s.cfg.UI.MiniHeight
+	autoScale := s.cfg.UI.MiniAutoScale
 	s.mu.Unlock()
-	minimum := fyne.NewSize(float32(max(260, width)), float32(max(48, height))).Max(s.miniRoot.MinSize())
 	current := s.miniWin.Canvas().Size()
+	scale := float32(1)
+	if autoScale && current.Width >= 260 && current.Height >= 48 {
+		baseHeight := float32(48)
+		if s.miniWindowExpanded {
+			baseHeight = 100
+		}
+		scale = float32(math.Min(float64(current.Width/280), float64(current.Height/baseHeight)))
+		if scale < 0.75 {
+			scale = 0.75
+		}
+		if scale > 2.0 {
+			scale = 2.0
+		}
+	}
+	if !autoScale {
+		scale = 1
+	}
+	if math.Abs(float64(scale-s.miniAdaptiveScale)) > 0.01 || s.miniAdaptiveScale == 0 {
+		s.setMiniContentScale(scale)
+	}
+	minimum := fyne.NewSize(float32(max(260, width)), float32(max(48, height))).Max(s.miniRoot.MinSize())
+	current = s.miniWin.Canvas().Size()
 	if current.Width < minimum.Width || current.Height < minimum.Height {
 		width, height := current.Width, current.Height
 		if width < minimum.Width {

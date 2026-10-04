@@ -172,8 +172,10 @@ type session struct {
 	miniStatus         *canvas.Text
 	miniWindowSurface  *miniSurface
 	miniWindowControls *fyne.Container
-	miniWindowBoth     *miniButton
+	miniWindowButtons  []*scaledMiniButton
+	miniWindowBoth     *scaledMiniButton
 	miniWindowExpanded bool
+	miniAdaptiveScale  float32
 }
 
 type Option func(*session)

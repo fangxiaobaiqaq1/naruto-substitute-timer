@@ -248,7 +248,7 @@ func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
 		file.Close()
 	}
 	buttons := s.miniWindowControls.Objects[1].(*fyne.Container)
-	buttons.Objects[0].(*miniButton).OnTapped()
+	buttons.Objects[0].(*scaledMiniButton).OnTapped()
 	if s.settings == nil || s.settings.Title() != "替身设置" {
 		t.Fatal("mini settings action did not open the main settings window")
 	}

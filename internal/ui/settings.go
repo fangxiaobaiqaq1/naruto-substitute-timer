@@ -165,7 +165,7 @@ func (s *session) openSettings() {
 	updateSource := s.cfg.UI.UpdateSource
 	opacity, fontScale := s.cfg.UI.WindowOpacity, s.cfg.UI.FontScale
 	overlayMode, showBoth, gpuAccel := s.cfg.UI.OverlayMode, s.cfg.UI.ShowBothSides, s.cfg.UI.GPUAcceleration
-	miniOpacity := s.cfg.UI.MiniOpacity
+	miniOpacity, miniAutoScale := s.cfg.UI.MiniOpacity, s.cfg.UI.MiniAutoScale
 	appearanceError := s.appearanceError
 	textStatus := s.textStatusText()
 	s.mu.Unlock()
@@ -205,6 +205,16 @@ func (s *session) openSettings() {
 	bothChk := widget.NewCheck("左右两边都显示替身倒计时", nil)
 	bothChk.SetChecked(showBoth)
 	bothChk.OnChanged = func(on bool) { showSettingsError(s.setShowBothSides(on), w) }
+	autoScaleChk := widget.NewCheck("迷你窗口内容自适应大小（随窗口等比例缩放）", nil)
+	autoScaleChk.SetChecked(miniAutoScale)
+	autoScaleChk.OnChanged = func(on bool) {
+		s.mu.Lock()
+		s.cfg.UI.MiniAutoScale = on
+		err := s.saveSettingsLocked()
+		s.mu.Unlock()
+		s.applyMiniContentScale()
+		showSettingsError(err, w)
+	}
 	miniOpacityText := widget.NewLabel("")
 	miniOpacitySlider := widget.NewSlider(minimumMiniOpacity, maximumMiniOpacity)
 	miniOpacitySlider.Step = 0.05
@@ -315,7 +325,7 @@ func (s *session) openSettings() {
 		widget.NewLabel("我的名字"), nameEntry, textCheck, s.textStatusLabel,
 		widget.NewLabel("指定对面忍者（留空自动识别）"), ninjaEntry,
 		widget.NewLabel("仅照美冥［五代目水影］同时显示15秒/10秒"), topChk,
-		miniSel, bothChk, miniOpacityText, miniOpacitySlider, gpuChk,
+		miniSel, bothChk, autoScaleChk, miniOpacityText, miniOpacitySlider, gpuChk,
 		widget.NewLabel("GPU 加速仅作用于本地 OCR；不可用时自动回退 CPU。修改后重启生效。"),
 		widget.NewLabel("Ctrl+M 可随时切换迷你窗口；迷你窗口独立于完整浮窗，点击计时区域显示设置、换边、两边计时和退出。"),
 		widget.NewSeparator(), widget.NewLabel("外观与更新"),
