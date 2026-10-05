@@ -8,6 +8,22 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val releaseVersionName = providers.environmentVariable("TIMER_VERSION").orNull
+    ?.trim()
+    ?.removePrefix("v")
+    ?.takeIf { it.matches(Regex("\\d+\\.\\d+\\.\\d+")) }
+    ?: "0.2.9"
+val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
+val releaseKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull
+val hasReleaseSigning = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.narutotimer"
     compileSdk = 35
@@ -18,7 +34,7 @@ android {
         minSdk = 31
         targetSdk = 34
         versionCode = 29
-        versionName = "2.9.0"
+        versionName = releaseVersionName
 
         ndk {
             abiFilters += listOf("x86_64", "arm64-v8a")
@@ -36,10 +52,21 @@ android {
         buildConfig = true
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
         debug {

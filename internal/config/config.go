@@ -267,7 +267,9 @@ func Default() Config {
 		},
 		Layout: LayoutConfig{
 			PreferredProfile: "auto",
-			ReferenceWidth:   1920, ReferenceHeight: 1080, ContentMode: "auto",
+			// Unity SurfaceView 覆盖完整物理屏幕；超宽/超高设备的装饰边框
+			// 也是游戏绘制内容，坐标必须按完整 Surface 映射，不能裁成 16:9。
+			ReferenceWidth: 1920, ReferenceHeight: 1080, ContentMode: "stretch",
 			AutoAspectTolerance: 0.015, BeadsPerSide: 4,
 			Left: SideLayout{
 				Search:         NormalizedRect{X: 0.04, Y: 0.05, Width: 0.18, Height: 0.12},

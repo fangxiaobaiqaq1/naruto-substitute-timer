@@ -1,0 +1,222 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  ANDROID_NDK_VERSION: 27.2.12479018
+  ANDROID_CMAKE_VERSION: 3.22.1
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      notes: ${{ steps.release.outputs.notes }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: release
+        shell: bash
+        env:
+          PUSH_TAG: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$PUSH_TAG}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must look like v0.2.9"; exit 1; }
+          notes="docs/release-${tag}.md"
+          test -f "$notes" || { echo "::error::missing $notes"; exit 1; }
+          git rev-parse "$tag^{commit}" >/dev/null
+          {
+            echo "tag=$tag"
+            echo "notes=$notes"
+            echo "commit=$(git rev-parse "$tag^{commit}")"
+          } >> "$GITHUB_OUTPUT"
+
+  android:
+    needs: metadata
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.tag }}
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" \
+            "cmake;${ANDROID_CMAKE_VERSION}" "ndk;${ANDROID_NDK_VERSION}"
+      - name: Decode release keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "::error::ANDROID_KEYSTORE_BASE64 is required for a stable release APK"; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "::error::ANDROID_KEYSTORE_PASSWORD is required with ANDROID_KEYSTORE_BASE64"; exit 1; }
+          test -n "$ANDROID_KEY_ALIAS" || { echo "::error::ANDROID_KEY_ALIAS is required with ANDROID_KEYSTORE_BASE64"; exit 1; }
+          test -n "$ANDROID_KEY_PASSWORD" || { echo "::error::ANDROID_KEY_PASSWORD is required with ANDROID_KEYSTORE_BASE64"; exit 1; }
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/naruto-timer-release.jks"
+          test -s "$RUNNER_TEMP/naruto-timer-release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/naruto-timer-release.jks" >> "$GITHUB_ENV"
+      - name: Build release APK
+        working-directory: android
+        env:
+          TIMER_VERSION: ${{ needs.metadata.outputs.tag }}
+        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
+      - name: Prepare APK artifact
+        shell: bash
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp android/app/build/outputs/apk/release/app-release.apk release-assets/naruto-timer-universal.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: release-assets
+          if-no-files-found: error
+
+  windows:
+    needs: metadata
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.tag }}
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.1"
+          cache: true
+      - name: Set up MinGW toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-glfw
+            mingw-w64-ucrt-x86_64-pkgconf
+      - name: Build Windows binaries
+        shell: pwsh
+        env:
+          TIMER_VERSION: ${{ needs.metadata.outputs.tag }}
+          CGO_ENABLED: "1"
+        run: |
+          $env:Path = "C:\msys64\ucrt64\bin;$env:Path"
+          $env:PKG_CONFIG_PATH = "C:\msys64\ucrt64\lib\pkgconfig"
+          & .\build.bat
+          if ($LASTEXITCODE -ne 0) { throw "build.bat failed" }
+      - name: Package Windows archive
+        shell: pwsh
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path release-assets, release-assets\windows | Out-Null
+          Copy-Item bin\timer-app.exe, bin\timer.exe, bin\timer-gui.exe, bin\timer-lab.exe release-assets\windows
+          # Keep the canonical executable at the release root. The desktop
+          # updater only accepts this exact asset name and GitHub's digest.
+          Copy-Item bin\timer-app.exe release-assets\timer-app.exe
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md release-assets\windows
+          Compress-Archive -Path release-assets\windows\* -DestinationPath "release-assets\naruto-timer-$env:TAG-windows-x64.zip" -CompressionLevel Optimal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: release-assets
+          if-no-files-found: error
+
+  github:
+    needs: [metadata, android, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-release"
+          path: release-assets
+          merge-multiple: true
+      - name: Create checksums
+        shell: bash
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd release-assets
+          rm -rf windows RELEASE_TAG
+          find . -type f \( -name '*.apk' -o -name '*.zip' -o -name 'timer-app.exe' \) | sort | xargs sha256sum > SHA256SUMS.txt
+          test -s SHA256SUMS.txt
+          test -f "naruto-timer-universal.apk"
+          test -f "naruto-timer-$TAG-windows-x64.zip"
+          test -f "timer-app.exe"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          NOTES: ${{ needs.metadata.outputs.notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -printf '%p\n' | sort)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" --title "替身计时器 $TAG" --notes-file "$NOTES"
+          else
+            gh release create "$TAG" "${assets[@]}" --verify-tag --title "替身计时器 $TAG" --notes-file "$NOTES"
+          fi
+
+  gitee:
+    needs: [metadata, github]
+    runs-on: ubuntu-latest
+    env:
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      GITEE_REPOSITORY: xiaobaiqaq/naruto-substitute-timer
+      GITEE_TARGET_COMMITISH: ${{ needs.metadata.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-release"
+          path: release-assets
+          merge-multiple: true
+      - name: Publish Gitee release
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+          NOTES: ${{ needs.metadata.outputs.notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GITEE_TOKEN" || { echo "::error::GITEE_TOKEN is required to publish the mirrored release"; exit 1; }
+          rm -rf release-assets/windows release-assets/RELEASE_TAG
+          find release-assets -type f \( -name '*.apk' -o -name '*.zip' -o -name 'timer-app.exe' \) -print0 | sort -z | xargs -0 sha256sum > release-assets/SHA256SUMS.txt
+          scripts/release/publish-gitee.sh "$TAG" "$NOTES" release-assets/*

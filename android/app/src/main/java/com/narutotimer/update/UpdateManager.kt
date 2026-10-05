@@ -13,6 +13,7 @@ import android.widget.Toast
 import com.narutotimer.BuildConfig
 import com.narutotimer.R
 import com.narutotimer.Settings as AppSettings
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -75,21 +76,43 @@ object UpdateManager {
         val tag = root.optString("tag_name").trim()
         require(compare(tag, "0.0.0") >= 0 && tag.matches(Regex("v?\\d+\\.\\d+(\\.\\d+)?"))) { "版本号无效" }
         require(!root.optBoolean("draft") && !root.optBoolean("prerelease")) { "最新版本不是正式版" }
-        val assetsJson = root.optJSONArray("assets") ?: error("发行版没有附件")
+        val assetsJson = if (source == Source.GITEE) {
+            val releaseId = root.optLong("id", 0L)
+            require(releaseId > 0L) { "Gitee 发行版 ID 无效" }
+            JSONArray(getText(giteeAttachmentsApi(releaseId), source, MAX_RESPONSE))
+        } else {
+            root.optJSONArray("assets") ?: error("发行版没有附件")
+        }
         val assets = ArrayList<Asset>()
         for (i in 0 until assetsJson.length()) {
             val item = assetsJson.optJSONObject(i) ?: continue
             val name = item.optString("name")
-            val url = if (source == Source.GITHUB) item.optString("browser_download_url") else item.optString("browser_download_url").ifBlank { item.optString("download_url") }
+            val url = if (source == Source.GITHUB) {
+                item.optString("browser_download_url")
+            } else {
+                val releaseId = root.optLong("id", 0L)
+                val assetId = item.optLong("id", 0L)
+                giteeAttachmentsApi(releaseId, assetId, download = true)
+            }
             val size = item.optLong("size", 0)
             if (name.isNotBlank() && url.isNotBlank()) assets += Asset(name, url, size, item.optString("digest").takeIf { it.isNotBlank() })
         }
-        val apk = assets.filter { it.name.endsWith(".apk", true) && it.size in 1..MAX_APK }
+        // Gitee's public release API omits attachment sizes. Keep accepting a
+        // missing size here; downloadTo still enforces the actual response
+        // length and the SHA-256 check before installation.
+        val apk = assets.filter { it.name.endsWith(".apk", true) && (it.size == 0L || it.size in 1..MAX_APK) }
             .maxByOrNull { scoreApk(it.name) } ?: error("没有可用 APK 附件")
         val page = root.optString("html_url").ifBlank { "https://${if (source == Source.GITEE) "gitee.com" else "github.com"}/${source.repository}/releases" }
         return Release(tag, root.optString("name"), root.optString("body").take(4000), page, assets, source).let {
             if (apk.digest != null) it else it
         }
+    }
+
+    private fun giteeAttachmentsApi(releaseId: Long, assetId: Long = 0L, download: Boolean = false): String {
+        require(releaseId > 0L) { "Gitee 发行版 ID 无效" }
+        val suffix = if (download) "/$assetId/download" else "?per_page=100"
+        if (download) require(assetId > 0L) { "Gitee 附件 ID 无效" }
+        return "https://gitee.com/api/v5/repos/${Source.GITEE.repository}/releases/$releaseId/attach_files$suffix"
     }
 
     private fun download(context: Context, release: Release): File {
@@ -119,12 +142,12 @@ object UpdateManager {
         try {
             require(conn.responseCode == HttpURLConnection.HTTP_OK) { "下载返回 HTTP ${conn.responseCode}" }
             val length = conn.contentLengthLong
-            require(length in 1..MAX_APK && (expected <= 0 || length == expected)) { "APK 大小不符" }
+            require((length <= 0L || length <= MAX_APK) && (expected <= 0L || length <= 0L || length == expected)) { "APK 大小不符" }
             conn.inputStream.use { input -> FileOutputStream(out).use { output ->
                 val buf = ByteArray(128 * 1024); var total = 0L
                 while (true) { val n = input.read(buf); if (n < 0) break; total += n; require(total <= MAX_APK); output.write(buf, 0, n) }
                 output.fd.sync()
-                require(total == length) { "下载不完整" }
+                require(total > 0L && (length <= 0L || total == length) && (expected <= 0L || total == expected)) { "下载不完整" }
             } }
         } finally { conn.disconnect() }
     }
