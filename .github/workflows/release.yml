@@ -39,7 +39,7 @@ jobs:
           tag="${INPUT_TAG:-$PUSH_TAG}"
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must look like v0.2.9"; exit 1; }
           notes="docs/release-${tag}.md"
-          test -f "$notes" || { echo "::error::missing $notes"; exit 1; }
+          git show "$tag:$notes" >/dev/null 2>&1 || { echo "::error::missing $notes in $tag"; exit 1; }
           git rev-parse "$tag^{commit}" >/dev/null
           {
             echo "tag=$tag"
