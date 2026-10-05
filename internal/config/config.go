@@ -99,7 +99,10 @@ type NormalizedPoint struct {
 }
 
 type SideLayout struct {
-	Search         NormalizedRect    `json:"search"`
+	Search NormalizedRect `json:"search"`
+	// NominalCenters are normalized in the fixed-height 1600x900 HUD
+	// calibration space. Layout.ReferenceWidth/Height still describe the
+	// scene/content transform and are not the HUD width basis.
 	NominalCenters []NormalizedPoint `json:"nominalCenters"`
 }
 
@@ -235,7 +238,7 @@ type UIConfig struct {
 	UpdateSource     string `json:"updateSource,omitempty"`
 	// WindowOpacity applies only to the compact timer overlay, in [0.40, 1.00].
 	WindowOpacity float64 `json:"windowOpacity"`
-	// FontScale scales compact-overlay text, in [0.80, 1.60].
+	// FontScale scales compact-overlay text, in [0.25, 3.00].
 	FontScale     float64 `json:"fontScale"`
 	OverlayMode   string  `json:"overlayMode"`
 	ShowBothSides bool    `json:"showBothSides"`
@@ -342,7 +345,7 @@ func Default() Config {
 			ShowBothSides:             false,
 			MiniOpacity:               0.85,
 			MiniFloating:              false,
-			MiniAutoScale:             true,
+			MiniAutoScale:             false,
 			GPUAcceleration:           false,
 			// Keep the published default neutral. Users can add their own names
 			// in config.json or through the settings window.

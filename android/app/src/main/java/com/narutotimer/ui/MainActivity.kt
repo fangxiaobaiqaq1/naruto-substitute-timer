@@ -340,7 +340,11 @@ class MainActivity : Activity() {
         }
         add(advancedPanel, opacityBar, 0)
         fontScaleText = text("", 13f).also { add(advancedPanel, it, 4) }
-        fontScaleBar = slider(FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP) { v ->
+        fontScaleBar = slider(
+            Settings.FONT_SCALE_MIN.toDouble(),
+            Settings.FONT_SCALE_MAX.toDouble(),
+            Settings.FONT_SCALE_STEP.toDouble(),
+        ) { v ->
             fontScaleText.text = String.format(Locale.ROOT, "悬浮窗大小：%.0f%%", v * 100)
             settings.fontScale = v.toFloat()
         }
@@ -348,7 +352,7 @@ class MainActivity : Activity() {
         add(advancedPanel, row(
             button("默认外观") {
                 settings.windowOpacity = 1f
-                settings.fontScale = 0.75f
+                settings.fontScale = Settings.DEFAULT_FONT_SCALE
                 loadFromSettings()
             },
             button("默认位置") {
@@ -428,7 +432,12 @@ class MainActivity : Activity() {
             miniOpacityText.text = String.format(Locale.ROOT, "迷你窗口不透明度：%.0f%%", settings.miniOpacity * 100)
             setSlider(opacityBar, WINDOW_OPACITY_MIN, OPACITY_STEP, settings.windowOpacity.toDouble())
             opacityText.text = String.format(Locale.ROOT, "窗口不透明度：%.0f%%", settings.windowOpacity * 100)
-            setSlider(fontScaleBar, FONT_SCALE_MIN, FONT_SCALE_STEP, settings.fontScale.toDouble())
+            setSlider(
+                fontScaleBar,
+                Settings.FONT_SCALE_MIN.toDouble(),
+                Settings.FONT_SCALE_STEP.toDouble(),
+                settings.fontScale.toDouble(),
+            )
             fontScaleText.text = String.format(Locale.ROOT, "悬浮窗大小：%.0f%%", settings.fontScale * 100)
             projectionChk.isChecked = settings.preferProjection
             debugChk.isChecked = settings.debug
@@ -836,15 +845,12 @@ class MainActivity : Activity() {
         /** AppOpsManager.OPSTR_PROJECT_MEDIA（隐藏常量）。 */
         private const val OPSTR_PROJECT_MEDIA = "android:project_media"
 
-        // Go settings.go：minimumOverlayOpacity…maximumOverlayOpacity、minimumMiniOpacity…、minimumOverlayScale…
+        // Go settings.go：minimumOverlayOpacity…maximumOverlayOpacity、minimumMiniOpacity…
         private const val WINDOW_OPACITY_MIN = 0.40
         private const val WINDOW_OPACITY_MAX = 1.00
         private const val MINI_OPACITY_MIN = 0.20
         private const val MINI_OPACITY_MAX = 1.00
         private const val OPACITY_STEP = 0.05
-        private const val FONT_SCALE_MIN = 0.55
-        private const val FONT_SCALE_MAX = 1.20
-        private const val FONT_SCALE_STEP = 0.05
 
         private const val COLOR_OK = 0xFF7EE8A0.toInt()
         private const val COLOR_WARN = 0xFFFFD27E.toInt()

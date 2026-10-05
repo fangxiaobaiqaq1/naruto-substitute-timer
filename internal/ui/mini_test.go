@@ -4,7 +4,6 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -194,7 +193,7 @@ func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
 	t.Cleanup(a.Quit)
 	a.Settings().SetTheme(newChromaTheme())
 	cfg := config.Default()
-	cfg.UI.MiniAutoScale = false
+	cfg.UI.MiniAutoScale = true
 	s := newSession(cfg, nil, nil)
 	s.cfgPath = filepath.Join(t.TempDir(), "config.json")
 	s.overlayOpacity = func(fyne.Window, float64) error { return nil }
@@ -208,8 +207,8 @@ func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
 
 	s.side = "left"
 	s.applyDetachedMiniClock("12.4", tagMine)
-	if got := s.miniStatus.Text; got != "替身计时·自动·左：12.4" {
-		t.Fatalf("mini pill text = %q", got)
+	if got := s.miniStatus.Text; got != "12.4" {
+		t.Fatalf("mini timer text = %q", got)
 	}
 	s.miniWin.Resize(fyne.NewSize(480, 160))
 	s.applyDetachedMiniClock("11.4", tagMine)
@@ -282,7 +281,7 @@ func TestDetachedMiniShowsBothSideClockValues(t *testing.T) {
 	observeBothSides(s, at)
 	applyDetachedClockAt(s, at.Add(5*time.Second))
 	text := s.miniStatus.Text
-	if !strings.Contains(text, "左 10.0") || !strings.Contains(text, "右 10.0") || !strings.Contains(text, " / ") {
+	if text != "左10.0 右10.0" {
 		t.Fatalf("detached both-side text = %q", text)
 	}
 }
@@ -299,12 +298,12 @@ func TestDetachedMiniShowsFifthMizukageDualEstimates(t *testing.T) {
 	s.right.Observe(3, true, at.Add(16*time.Millisecond), s.cooldown(), 2)
 	applyDetachedClockAt(s, at.Add(32*time.Millisecond))
 	text := s.miniStatus.Text
-	if !strings.Contains(text, "15秒 14.9") || !strings.Contains(text, "10秒 9.9") {
+	if text != "14.9 / 9.9" {
 		t.Fatalf("detached dual text = %q", text)
 	}
 }
 
-func TestDetachedMiniSideLabelRefreshesWithoutClockChange(t *testing.T) {
+func TestDetachedMiniTextDoesNotExposeSide(t *testing.T) {
 	s := newDetachedMiniTestSession(t, config.Default())
 
 	at := time.Unix(1700000000, 0)
@@ -315,14 +314,15 @@ func TestDetachedMiniSideLabelRefreshesWithoutClockChange(t *testing.T) {
 	s.side = "right"
 	applyDetachedClockAt(s, at.Add(5*time.Second))
 	right := s.miniStatus.Text
-	if left == right || !strings.Contains(left, "自动·左") || !strings.Contains(right, "自动·右") {
-		t.Fatalf("side label did not refresh: left=%q right=%q", left, right)
+	if left != right || left != "10.0" {
+		t.Fatalf("side leaked into mini text: left=%q right=%q", left, right)
 	}
 }
 
 func TestDetachedMiniUsesStoredFontScale(t *testing.T) {
 	cfg := config.Default()
 	cfg.UI.FontScale = 1.6
+	cfg.UI.MiniAutoScale = true
 	s := newDetachedMiniTestSession(t, cfg)
 	if got, want := s.miniStatus.TextSize, overlayTextSize(13, cfg.UI.FontScale); got != want {
 		t.Fatalf("detached mini font scale = %v, want %v", got, want)

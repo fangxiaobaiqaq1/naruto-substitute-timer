@@ -71,8 +71,9 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 			return res
 		}
 		ref := p.ReferenceSize()
-		vision.SampleWidthReferencePX *= float64(detect.LogicWidth) / float64(ref.X)
-		vision.SampleHeightReferencePX *= float64(detect.LogicHeight) / float64(ref.Y)
+		scale := float64(detect.LogicHeight) / float64(ref.Y)
+		vision.SampleWidthReferencePX *= scale
+		vision.SampleHeightReferencePX *= scale
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -191,8 +192,9 @@ func sampleUnverifiedSpecial(img *image.RGBA, p detect.BeadPosition, w, h, guard
 }
 
 func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, identified [2]ninja.Readout) []engine.BeadInfo {
-	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*float64(area.W)/detect.LogicWidth)))
-	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*float64(area.H)/detect.LogicHeight)))
+	scale := float64(area.H) / detect.LogicHeight
+	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*scale)))
+	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*scale)))
 	var out []engine.BeadInfo
 	for index, side := range []engine.Side{engine.Left, engine.Right} {
 		palette := identified[index].Palette
@@ -267,8 +269,9 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 // centers shifted by delta. It is the strict core sampler; the retry grid only
 // re-centers the diamond, every judgment stays at the calibrated thresholds.
 func sampleCalibratedRow(img *image.RGBA, row []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, palette ninja.Palette, xiayin bool, identified ninja.Readout, delta image.Point) ([]engine.BeadInfo, []detect.BeadState) {
-	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*float64(area.W)/detect.LogicWidth)))
-	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*float64(area.H)/detect.LogicHeight)))
+	scale := float64(area.H) / detect.LogicHeight
+	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*scale)))
+	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*scale)))
 	var infos []engine.BeadInfo
 	var states []detect.BeadState
 	for _, p := range row {

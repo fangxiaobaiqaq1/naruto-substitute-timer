@@ -82,10 +82,10 @@ class Settings(context: Context) {
         @Synchronized get() = prefs.getFloat(KEY_MINI_OPACITY, 0.85f).coerceIn(0.20f, 1f)
         set(value) = put(KEY_MINI_OPACITY) { putFloat(KEY_MINI_OPACITY, value.coerceIn(0.20f, 1f)) }
 
-    /** Android overlay scale ∈ [0.55, 1.20]. Kept under the old key for migration. */
+    /** Android overlay scale ∈ [0.25, 3.00], with 1% slider precision. */
     var fontScale: Float
-        @Synchronized get() = prefs.getFloat(KEY_FONT_SCALE, 0.75f).coerceIn(0.55f, 1.20f)
-        set(value) = put(KEY_FONT_SCALE) { putFloat(KEY_FONT_SCALE, value.coerceIn(0.55f, 1.20f)) }
+        @Synchronized get() = prefs.getFloat(KEY_FONT_SCALE, DEFAULT_FONT_SCALE).coerceIn(FONT_SCALE_MIN, FONT_SCALE_MAX)
+        set(value) = put(KEY_FONT_SCALE) { putFloat(KEY_FONT_SCALE, value.coerceIn(FONT_SCALE_MIN, FONT_SCALE_MAX)) }
 
     /** 悬浮窗位置（px，相对屏幕左上；Int.MIN_VALUE = 未设置，用默认位置）。 */
     var overlayX: Int
@@ -139,5 +139,9 @@ class Settings(context: Context) {
         const val KEY_UPDATE_SOURCE = "updateSource"
         const val KEY_AUTO_UPDATES = "autoCheckUpdates"
         const val KEY_DEBUG = "debug"
+        const val DEFAULT_FONT_SCALE = 0.75f
+        const val FONT_SCALE_MIN = 0.25f
+        const val FONT_SCALE_MAX = 3.00f
+        const val FONT_SCALE_STEP = 0.01f
     }
 }

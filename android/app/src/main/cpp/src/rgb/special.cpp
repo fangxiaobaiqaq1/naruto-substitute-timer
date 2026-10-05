@@ -37,7 +37,8 @@ std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::strin
             // Stored name strips use the 960-wide HUD reference. Individual
             // integer-rounded bean centers may alternate 15/16px; their first
             // interval must not accidentally stretch all of the name lettering.
-            double scale = double(area.W) / 960;
+            // NGUI scales the HUD from height, not ultrawide width.
+            double scale = double(area.H) / 540;
             Point first = Pt(row[0].X, row[0].Y);
             identified[index] = nameTracker_[profileIndex][index].ReadWithAvatar(
                 names_.get(), &avatarTracker_[profileIndex][index], img, ninja::NameRegion(first, scale, index == 0),
@@ -56,9 +57,9 @@ std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::strin
                     bead.Idx = i;
                     bead.LX = lx;
                     bead.LY = ly;
-                    row.push_back(BeadPosition(
-                        bead, area.X + static_cast<int>(std::round(lx * double(area.W) / detect::LogicWidth)),
-                        area.Y + static_cast<int>(std::round(ly * double(area.H) / detect::LogicHeight))));
+                    const Point mapped = area.MapHUDPixel(lx, ly, name == "right", detect::HUDReferenceWidth,
+                                                           detect::HUDReferenceHeight);
+                    row.push_back(BeadPosition(bead, mapped.X, mapped.Y));
                 }
             }
             // Some exact variants have an extra energy bar above their ordinary
@@ -67,8 +68,9 @@ std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::strin
             // subsequent frames. This applies to Sasuke Xiayin and Minato Kyubi.
             if (double offset = identified[index].RowOffsetY; offset != 0) {
                 for (BeadPosition& p : row) {
-                    p.LY += offset * detect::LogicHeight / 540;
-                    p.Y = area.Y + static_cast<int>(std::round(p.LY * double(area.H) / detect::LogicHeight));
+                    p.LY += offset * detect::HUDReferenceHeight / 540;
+                    p.Y = area.MapHUDPixel(p.LX, p.LY, name == "right", detect::HUDReferenceWidth,
+                                           detect::HUDReferenceHeight).Y;
                 }
             }
         }

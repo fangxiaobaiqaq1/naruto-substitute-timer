@@ -75,14 +75,15 @@ func TestConfiguredHUDUsesPixelBarsAndImageOrigin(t *testing.T) {
 			}
 		})
 	}
-	// Deliberately stretch a valid HUD into a different native aspect ratio.
-	// Auto must not quietly return a guessed ready count from wrong coordinates.
+	// A native non-16:9 surface is valid NGUI HUD geometry. Auto must keep
+	// the full surface instead of returning unsupported-resolution; the source
+	// below is intentionally stretched and therefore is not a count assertion.
 	wide := image.NewRGBA(image.Rect(0, 0, 1920, 900))
 	xdraw.BiLinear.Scale(wide, wide.Bounds(), src, src.Bounds(), draw.Src, nil)
 	e := NewConfigured(engine.NewConfiguredLayout(detect.ModeAuto, cfg.Layout), cfg.Vision)
 	e.Prefer("duel")
 	res := e.Analyze(wide)
-	if !res.Uncertain || res.Scene != "unsupported-resolution" || len(res.Beads) != 0 {
-		t.Fatalf("uncalibrated native aspect returned bead votes: %+v", res)
+	if res.Uncertain || res.Scene == "unsupported-resolution" {
+		t.Fatalf("native aspect was rejected: %+v", res)
 	}
 }

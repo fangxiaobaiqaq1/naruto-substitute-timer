@@ -63,8 +63,9 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
             return res;
         }
         Point ref = calibrated->ReferenceSize();
-        vision.SampleWidthReferencePX *= double(detect::LogicWidth) / double(ref.X);
-        vision.SampleHeightReferencePX *= double(detect::LogicHeight) / double(ref.Y);
+        const double scale = double(detect::LogicHeight) / double(ref.Y);
+        vision.SampleWidthReferencePX *= scale;
+        vision.SampleHeightReferencePX *= scale;
     }
     std::string prefer = prefer_;
     auto positions = [&](const std::string& name) -> std::vector<detect::BeadPosition> {
@@ -188,10 +189,11 @@ BeadState sampleUnverifiedSpecial(const RGBA* img, const BeadPosition& p, int w,
 std::vector<BeadInfo> sampleCalibratedSpecial(const RGBA* img, const std::vector<BeadPosition>& positions,
                                               const detect::ContentArea& area, const config::VisionConfig& cfg,
                                               const std::array<ninja::Readout, 2>& identified) {
+    const double hudScale = double(area.H) / detect::LogicHeight;
     const int w = std::max(
-        2, static_cast<int>(std::round(cfg.SampleWidthReferencePX * cfg.CoreScale * double(area.W) / detect::LogicWidth)));
+        2, static_cast<int>(std::round(cfg.SampleWidthReferencePX * cfg.CoreScale * hudScale)));
     const int h = std::max(
-        2, static_cast<int>(std::round(cfg.SampleHeightReferencePX * cfg.CoreScale * double(area.H) / detect::LogicHeight)));
+        2, static_cast<int>(std::round(cfg.SampleHeightReferencePX * cfg.CoreScale * hudScale)));
     std::vector<BeadInfo> out;
     for (int index = 0; index < 2; index++) {
         const engine::Side side = kSides[index];
@@ -290,10 +292,11 @@ void sampleCalibratedRow(const RGBA* img, const std::vector<BeadPosition>& row, 
     (void)xiayin;  // Go 签名保留该参数但函数体不使用。
     infos.clear();
     states.clear();
+    const double hudScale = double(area.H) / detect::LogicHeight;
     const int w = std::max(
-        2, static_cast<int>(std::round(cfg.SampleWidthReferencePX * cfg.CoreScale * double(area.W) / detect::LogicWidth)));
+        2, static_cast<int>(std::round(cfg.SampleWidthReferencePX * cfg.CoreScale * hudScale)));
     const int h = std::max(
-        2, static_cast<int>(std::round(cfg.SampleHeightReferencePX * cfg.CoreScale * double(area.H) / detect::LogicHeight)));
+        2, static_cast<int>(std::round(cfg.SampleHeightReferencePX * cfg.CoreScale * hudScale)));
     const Rect bounds = img->Bounds();
     for (const BeadPosition& orig : row) {
         const BeadPosition p(static_cast<const detect::Bead&>(orig), orig.X + delta.X, orig.Y + delta.Y);

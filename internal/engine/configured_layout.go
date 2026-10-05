@@ -2,7 +2,6 @@ package engine
 
 import (
 	"image"
-	"math"
 
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
@@ -65,9 +64,8 @@ func (l *ConfiguredLayout) PositionsIn(name string, ca detect.ContentArea) []det
 			return nil
 		}
 		for i, point := range side.data.NominalCenters {
-			x := ca.X + int(math.Round(float64(ca.W)*point.X))
-			y := ca.Y + int(math.Round(float64(ca.H)*point.Y))
-			out = append(out, detect.BeadPosition{Bead: detect.Bead{Side: side.name, Idx: i, LX: point.X * detect.LogicWidth, LY: point.Y * detect.LogicHeight}, X: x, Y: y})
+			mapped := ca.MapHUDNormalized(point.X, point.Y, side.name, detect.HUDReferenceWidth, detect.HUDReferenceHeight)
+			out = append(out, detect.BeadPosition{Bead: detect.Bead{Side: side.name, Idx: i, LX: point.X * detect.HUDReferenceWidth, LY: point.Y * detect.HUDReferenceHeight}, X: mapped.X, Y: mapped.Y})
 		}
 	}
 	return out

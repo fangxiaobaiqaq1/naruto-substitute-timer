@@ -25,10 +25,10 @@ func TestResolveContentAreaRequiresPixelEvidenceForBars(t *testing.T) {
 				t.Fatalf("pixel bars: got %+v, %v; want %+v", got, ok, want)
 			}
 			// The same dimensions with game pixels all the way to the edges
-			// are not evidence that the old HUD calibration still applies.
+			// are a native full-screen HUD, not evidence of centered bars.
 			draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{50, 100, 150, 255}), image.Point{}, draw.Src)
-			if _, ok := ResolveContentArea(img, ModeAuto, 1920, 1080, .015); ok {
-				t.Fatal("native different aspect ratio accepted as letterbox")
+			if got, ok := ResolveContentArea(img, ModeAuto, 1920, 1080, .015); !ok || got != (ContentArea{tc.bounds.Min.X, tc.bounds.Min.Y, tc.bounds.Dx(), tc.bounds.Dy()}) {
+				t.Fatalf("native full surface rejected: %+v, %v", got, ok)
 			}
 		})
 	}
@@ -51,8 +51,8 @@ func TestResolveContentAreaRespectsReferenceAndTolerance(t *testing.T) {
 	if _, ok := ResolveContentArea(near, ModeAuto, 1920, 1080, .015); !ok {
 		t.Fatal("configured tolerance ignored")
 	}
-	if _, ok := ResolveContentArea(near, ModeAuto, 1920, 1080, .001); ok {
-		t.Fatal("strict configured tolerance ignored")
+	if got, ok := ResolveContentArea(near, ModeAuto, 1920, 1080, .001); !ok || got != (ContentArea{0, 0, 1600, 910}) {
+		t.Fatalf("native surface should not depend on aspect tolerance: %+v, %v", got, ok)
 	}
 	if _, ok := ResolveContentArea(nil, ModeAuto, 1920, 1080, .015); ok {
 		t.Fatal("nil accepted")
@@ -62,8 +62,8 @@ func TestResolveContentAreaRespectsReferenceAndTolerance(t *testing.T) {
 func TestResolveContentAreaDoesNotTreatOneToolbarAsCenteredBars(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 1600, 1000))
 	draw.Draw(img, image.Rect(0, 50, 1600, 1000), image.NewUniform(color.RGBA{50, 100, 150, 255}), image.Point{}, draw.Src)
-	if _, ok := ResolveContentArea(img, ModeAuto, 1920, 1080, .015); ok {
-		t.Fatal("a top toolbar is not centered letterboxing")
+	if got, ok := ResolveContentArea(img, ModeAuto, 1920, 1080, .015); !ok || got != (ContentArea{0, 0, 1600, 1000}) {
+		t.Fatalf("a top toolbar must keep the native surface: %+v, %v", got, ok)
 	}
 	if got, ok := ResolveContentArea(img, ModeStretch, 1920, 1080, .015); !ok || got.H != 1000 {
 		t.Fatal("explicit stretch ignored")

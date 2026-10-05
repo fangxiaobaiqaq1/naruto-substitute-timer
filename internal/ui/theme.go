@@ -7,7 +7,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 )
 
-// 查克拉青 HUD。背景保持不透明，确保读秒不受底下画面干扰。
+// 查克拉青 HUD。完整浮窗背景保持不透明；仅计时器模式会在原生窗口层抠除背景。
 var (
 	clockIdle = color.NRGBA{R: 184, G: 244, B: 255, A: 255}
 	clockLive = color.NRGBA{R: 126, G: 235, B: 255, A: 255}

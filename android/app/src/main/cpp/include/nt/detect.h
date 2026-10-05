@@ -12,13 +12,20 @@
 
 namespace nt::detect {
 
-// 游戏画面逻辑分辨率（火影忍者手游决斗场 UI 以 1920×1080 为基准布局）。
+// 游戏画面逻辑分辨率（场景/旧标定基准）。
 constexpr int LogicWidth = 1920;
 constexpr int LogicHeight = 1080;
 
+// NGUI fixed-height HUD calibration unit. Unlike the scene reference, HUD
+// width is not stretched across an ultrawide surface; its left/right edges are
+// anchored and its physical scale follows the content height.
+constexpr double HUDReferenceWidth = 1600.0;
+constexpr double HUDReferenceHeight = 900.0;
+
 // ContentMode 描述游戏画面在窗口客户区内的呈现方式。
 enum class ContentMode {
-    ModeAuto = 0,   // 自动判断：客户区宽高比接近 16:9 视为铺满（拉伸），否则按等比黑边。
+    ModeAuto = 0,   // 自动判断：接近参考比例时铺满；否则结合像素黑边
+                    // 区分等比内容与原生 NGUI 全屏 HUD。
     ModeStretch,    // 强制铺满客户区（无黑边，画面拉伸变形）。
     ModeLetterbox,  // 强制等比缩放（上下或左右黑边）。
 };
@@ -35,6 +42,10 @@ struct ContentArea {
 
     // Map 把 1920×1080 逻辑坐标映射到内容区内的实际坐标（截断取整，与 Go int() 一致）。
     Point Map(double lx, double ly) const;
+    // MapHUDPixel/Normalized implement the NGUI fixed-height + edge-anchor
+    // transform used by configured and legacy HUD layouts.
+    Point MapHUDPixel(double x, double y, bool right, double referenceWidth, double referenceHeight) const;
+    Point MapHUDNormalized(double x, double y, bool right, double referenceWidth, double referenceHeight) const;
     bool operator==(const ContentArea& o) const { return X == o.X && Y == o.Y && W == o.W && H == o.H; }
     bool operator!=(const ContentArea& o) const { return !(*this == o); }
 };

@@ -2,13 +2,17 @@
 
 package win32
 
-import "errors"
+import (
+	"errors"
+	"image/color"
+)
 
 var errUnsupported = errors.New("Win32 API 仅支持 Windows")
 
 func HasConsole() bool                                           { return true }
 func MsgBoxError(title, text string)                             {}
 func SetWindowOpacity(uintptr, float64) error                    { return errUnsupported }
+func SetWindowColorKey(uintptr, color.NRGBA, float64) error      { return errUnsupported }
 func ApplyWindowAlpha(string, byte)                              {}
 func SetWindowFrameless(uintptr, bool, uintptr) (uintptr, error) { return 0, errUnsupported }
 func SetWindowTopmost(uintptr, bool) error                       { return errUnsupported }

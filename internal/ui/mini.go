@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	minimumMiniOpacity = 0.20
-	maximumMiniOpacity = 1.00
+	minimumMiniOpacity      = 0.20
+	maximumMiniOpacity      = 1.00
+	minimumMiniWindowWidth  = 96
+	minimumMiniWindowHeight = 28
 	// Moving from the timer surface onto a hover button fires MouseOut before
 	// the button's MouseIn; the hide check runs after that hand-over.
 	miniHoverSettle = 80 * time.Millisecond
@@ -201,6 +203,10 @@ func (s *session) setupDetachedMiniWindow(a fyne.App) {
 	s.miniWin.SetPadded(false)
 	s.miniWin.SetFixedSize(false)
 	s.miniWin.SetContent(s.buildDetachedMiniContent())
+	s.mu.Lock()
+	width, height := s.cfg.UI.MiniWidth, s.cfg.UI.MiniHeight
+	s.mu.Unlock()
+	s.miniWin.Resize(fyne.NewSize(float32(max(minimumMiniWindowWidth, width)), float32(max(minimumMiniWindowHeight, height))))
 	s.miniWin.SetCloseIntercept(func() {
 		if s.isMini() {
 			showSettingsError(s.setMiniMode(false), s.win)
@@ -215,7 +221,7 @@ func (s *session) buildDetachedMiniContent() fyne.CanvasObject {
 	s.mu.Lock()
 	scale := s.cfg.UI.FontScale
 	s.mu.Unlock()
-	s.miniStatus = canvas.NewText("替身计时·自动：等待决斗", tagIdle)
+	s.miniStatus = canvas.NewText("待机", tagIdle)
 	s.miniStatus.TextSize = overlayTextSize(13, scale)
 	s.miniStatus.Alignment = fyne.TextAlignCenter
 
@@ -231,7 +237,9 @@ func (s *session) buildDetachedMiniContent() fyne.CanvasObject {
 	s.miniWindowSurface = newMiniSurface(s)
 	status := container.NewStack(canvas.NewRectangle(transparentColor), container.NewCenter(s.miniStatus), s.miniWindowSurface)
 	s.miniRoot = container.NewVBox(status, s.miniWindowControls)
-	return container.NewStack(canvas.NewRectangle(panelBG), container.NewCenter(s.miniRoot))
+	// The mini window is a timer-only surface. Its native color key removes the
+	// Fyne canvas clear color around the text; controls still get their own panel.
+	return container.NewStack(canvas.NewRectangle(transparentColor), container.NewCenter(s.miniRoot))
 }
 
 func (s *session) toggleDetachedMiniControls() {
@@ -288,43 +296,32 @@ func (s *session) setMiniContentScale(scale float32) {
 	}
 }
 
-func (s *session) miniSideTextLocked() string {
-	switch s.cfg.UI.PlayerSide {
-	case "left":
-		return "左"
-	case "right":
-		return "右"
-	}
-	switch s.side {
-	case "left":
-		return "自动·左"
-	case "right":
-		return "自动·右"
-	default:
-		return "自动"
-	}
-}
-
 func miniTextValue(text string) string {
 	if text == "" || text == "—" {
-		return "等待决斗"
+		return "待机"
+	}
+	return text
+}
+
+func miniBothSideValue(text string) string {
+	if text == "" || text == "—" {
+		return "—"
 	}
 	return text
 }
 
 func (s *session) miniTextLocked(primary, alternate, left, right string, dual bool) string {
-	mode := s.miniSideTextLocked()
 	if s.cfg.UI.ShowBothSides {
-		return fmt.Sprintf("替身计时·%s：左 %s / 右 %s", mode, miniTextValue(left), miniTextValue(right))
+		return fmt.Sprintf("左%s 右%s", miniBothSideValue(left), miniBothSideValue(right))
 	}
 	primary = miniTextValue(primary)
 	if dual {
 		if alternate == "" {
 			alternate = "—"
 		}
-		return fmt.Sprintf("替身计时·%s：15秒 %s / 10秒 %s", mode, primary, alternate)
+		return fmt.Sprintf("%s / %s", primary, alternate)
 	}
-	return fmt.Sprintf("替身计时·%s：%s", mode, primary)
+	return primary
 }
 
 func (s *session) miniCollapsedText(primary string) string {
@@ -505,6 +502,11 @@ func (s *session) applyMiniWindowState() {
 			s.floatingApplied = floating
 		}
 	}
+	if mini {
+		// Reapply the key after SetWindowOpacity: LWA_ALPHA otherwise replaces
+		// the color-key flag on Windows.
+		_ = s.nativeMiniColorKey(opacity)
+	}
 	s.mu.Lock()
 	s.appearanceError = ""
 	if len(errs) > 0 {
@@ -537,6 +539,7 @@ func (s *session) setMiniOpacity(opacity float64, save bool) error {
 			s.appearanceError = "窗口透明度未应用：" + nativeErr.Error()
 			s.mu.Unlock()
 		}
+		_ = s.nativeMiniColorKey(opacity)
 	}
 	return err
 }
@@ -558,47 +561,53 @@ func (s *session) fitDetachedMiniWindow() {
 	width, height := s.cfg.UI.MiniWidth, s.cfg.UI.MiniHeight
 	autoScale := s.cfg.UI.MiniAutoScale
 	s.mu.Unlock()
+	minimum := fyne.NewSize(float32(minimumMiniWindowWidth), float32(minimumMiniWindowHeight)).Max(s.miniRoot.MinSize())
 	current := s.miniWin.Canvas().Size()
-	minimum := fyne.NewSize(float32(max(260, width)), float32(max(48, height)))
+	if current.Width <= 1 || current.Height <= 1 {
+		initial := fyne.NewSize(float32(max(minimumMiniWindowWidth, width)), float32(max(minimumMiniWindowHeight, height)))
+		current = initial.Max(minimum)
+		s.miniWin.Resize(current)
+	}
 	if autoScale {
 		if s.miniAdaptiveScale != 1 || s.miniAdaptiveScale == 0 {
 			s.setMiniContentScale(1)
 		}
-		minimum = minimum.Max(s.miniRoot.MinSize())
-		if current != minimum {
-			s.miniWin.Resize(minimum)
-		}
-		return
-	}
-	scale := float32(1)
-	if current.Width >= 260 && current.Height >= 48 {
+	} else {
 		baseHeight := float32(48)
 		if s.miniWindowExpanded {
 			baseHeight = 100
 		}
-		scale = float32(math.Min(float64(current.Width/280), float64(current.Height/baseHeight)))
+		scale := float32(math.Min(float64(current.Width/280), float64(current.Height/baseHeight)))
 		if scale < 0.75 {
 			scale = 0.75
 		}
 		if scale > 2.0 {
 			scale = 2.0
 		}
+		if math.Abs(float64(scale-s.miniAdaptiveScale)) > 0.01 || s.miniAdaptiveScale == 0 {
+			s.setMiniContentScale(scale)
+		}
 	}
-	if math.Abs(float64(scale-s.miniAdaptiveScale)) > 0.01 || s.miniAdaptiveScale == 0 {
-		s.setMiniContentScale(scale)
-	}
-	minimum = minimum.Max(s.miniRoot.MinSize())
+	minimum = fyne.NewSize(float32(minimumMiniWindowWidth), float32(minimumMiniWindowHeight)).Max(s.miniRoot.MinSize())
 	current = s.miniWin.Canvas().Size()
 	if current.Width < minimum.Width || current.Height < minimum.Height {
-		width, height := current.Width, current.Height
-		if width < minimum.Width {
-			width = minimum.Width
+		if current.Width < minimum.Width {
+			current.Width = minimum.Width
 		}
-		if height < minimum.Height {
-			height = minimum.Height
+		if current.Height < minimum.Height {
+			current.Height = minimum.Height
 		}
-		s.miniWin.Resize(fyne.NewSize(width, height))
+		s.miniWin.Resize(current)
 	}
+}
+
+func (s *session) nativeMiniColorKey(opacity float64) error {
+	if s.miniWin == nil {
+		return nil
+	}
+	return s.runNativeWindowHWND(s.miniWin, func(hwnd uintptr) error {
+		return win32.SetWindowColorKey(hwnd, glassBG, opacity)
+	})
 }
 
 func (s *session) nativeFloating(on, topmost bool) error {

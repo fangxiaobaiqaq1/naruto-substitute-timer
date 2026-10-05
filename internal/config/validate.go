@@ -171,8 +171,8 @@ func Validate(c Config) error {
 	if c.UI.MiniOpacity < 0.20 || c.UI.MiniOpacity > 1.00 {
 		return fmt.Errorf("ui.miniOpacity: must be in [0.20,1.00]")
 	}
-	if c.UI.FontScale < 0.80 || c.UI.FontScale > 1.60 {
-		return fmt.Errorf("ui.fontScale: must be in [0.80,1.60]")
+	if c.UI.FontScale < 0.25 || c.UI.FontScale > 3.00 {
+		return fmt.Errorf("ui.fontScale: must be in [0.25,3.00]")
 	}
 	if c.UI.OverlayMode != "full" && c.UI.OverlayMode != "mini" {
 		return fmt.Errorf("ui.overlayMode: must be full or mini")

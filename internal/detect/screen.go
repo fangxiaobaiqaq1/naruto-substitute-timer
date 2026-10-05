@@ -72,12 +72,18 @@ func ClassifyScreen(img *image.RGBA, mode ContentMode) ScreenState {
 		return ScreenUnknown
 	}
 	// 豆子行：略放宽，避免标题栏/缩放把豆挤出旧的 80~98 窄带。
-	y0 := ca.Y + ca.H*70/LogicHeight
-	y1 := ca.Y + ca.H*130/LogicHeight
-	xL0 := ca.X + ca.W*80/LogicWidth
-	xL1 := ca.X + ca.W*340/LogicWidth
-	xR0 := ca.X + ca.W*1560/LogicWidth
-	xR1 := ca.X + ca.W*1800/LogicWidth
+	// 这是 HUD ROI，不是中央 16:9 场景 ROI；按 fixed-height + edge
+	// anchor 映射，超宽屏不会把扫描带横向拉伸到屏幕中间。
+	left0 := ca.MapHUDPixel(80, 70, "left", LogicWidth, LogicHeight)
+	left1 := ca.MapHUDPixel(340, 130, "left", LogicWidth, LogicHeight)
+	right0 := ca.MapHUDPixel(1560, 70, "right", LogicWidth, LogicHeight)
+	right1 := ca.MapHUDPixel(1800, 130, "right", LogicWidth, LogicHeight)
+	y0 := max(min(left0.Y, left1.Y), bounds.Min.Y)
+	y1 := min(max(left0.Y, left1.Y), bounds.Max.Y)
+	xL0 := max(min(left0.X, left1.X), bounds.Min.X)
+	xL1 := min(max(left0.X, left1.X), bounds.Max.X)
+	xR0 := max(min(right0.X, right1.X), bounds.Min.X)
+	xR1 := min(max(right0.X, right1.X), bounds.Max.X)
 
 	var beadPix, total int
 	for y := y0; y < y1; y++ {

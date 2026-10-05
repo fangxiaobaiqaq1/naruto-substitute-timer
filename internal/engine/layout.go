@@ -2,8 +2,8 @@ package engine
 
 import "narutotimer/internal/detect"
 
-// DefaultLayout 是默认豆位提供者：基于 detect 的 1920×1080 逻辑标定 +
-// ComputeContentArea 等比映射。RGB 与模型引擎共用。
+// DefaultLayout 是默认豆位提供者：基于 detect 的 1920×1080 旧标定，
+// 通过 NGUI fixed-height HUD 映射到实际客户区。RGB 与模型引擎共用。
 //
 // 豆位标定目前硬编码在 detect.DefaultBeads()，后续可改为从配置文件加载
 // （本结构预留了 Beads 字段，配置接入时直接替换数据源即可）。

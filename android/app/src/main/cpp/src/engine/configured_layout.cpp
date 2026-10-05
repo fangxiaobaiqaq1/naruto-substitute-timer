@@ -61,14 +61,14 @@ std::vector<detect::BeadPosition> ConfiguredLayout::PositionsIn(const std::strin
         }
         for (size_t i = 0; i < side.data->NominalCenters.size(); ++i) {
             const config::NormalizedPoint& point = side.data->NominalCenters[i];
-            int x = ca.X + static_cast<int>(std::round(static_cast<double>(ca.W) * point.X));
-            int y = ca.Y + static_cast<int>(std::round(static_cast<double>(ca.H) * point.Y));
+            const bool right = std::string(side.name) == "right";
+            const Point mapped = ca.MapHUDNormalized(point.X, point.Y, right, detect::HUDReferenceWidth, detect::HUDReferenceHeight);
             detect::Bead b;
             b.Side = side.name;
             b.Idx = static_cast<int>(i);
-            b.LX = point.X * detect::LogicWidth;
-            b.LY = point.Y * detect::LogicHeight;
-            out.emplace_back(b, x, y);
+            b.LX = point.X * detect::HUDReferenceWidth;
+            b.LY = point.Y * detect::HUDReferenceHeight;
+            out.emplace_back(b, mapped.X, mapped.Y);
         }
     }
     return out;
