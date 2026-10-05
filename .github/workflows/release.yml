@@ -182,7 +182,7 @@ jobs:
           set -euo pipefail
           cd release-assets
           rm -rf windows RELEASE_TAG
-          find . -type f \( -name '*.apk' -o -name '*.zip' -o -name 'timer-app.exe' \) | sort | xargs sha256sum > SHA256SUMS.txt
+          find . -maxdepth 1 -type f \( -name '*.apk' -o -name '*.zip' -o -name 'timer-app.exe' \) -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS.txt
           test -s SHA256SUMS.txt
           test -f "naruto-timer-universal.apk"
           test -f "naruto-timer-$TAG-windows-x64.zip"
@@ -228,5 +228,8 @@ jobs:
           set -euo pipefail
           test -n "$GITEE_TOKEN" || { echo "::error::GITEE_TOKEN is required to publish the mirrored release"; exit 1; }
           rm -rf release-assets/windows release-assets/RELEASE_TAG
-          find release-assets -type f \( -name '*.apk' -o -name '*.zip' -o -name 'timer-app.exe' \) -print0 | sort -z | xargs -0 sha256sum > release-assets/SHA256SUMS.txt
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f \( -name '*.apk' -o -name '*.zip' -o -name 'timer-app.exe' \) -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS.txt
+          )
           scripts/release/publish-gitee.sh "$TAG" "$NOTES" release-assets/*
