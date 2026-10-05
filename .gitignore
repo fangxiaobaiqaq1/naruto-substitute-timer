@@ -24,6 +24,7 @@
 *.log
 *.txt
 !/scripts/fyne-diagnostics/frame_hook.go.txt
+!/android/app/src/main/cpp/CMakeLists.txt
 /assets/identity/*.png
 /assets/identity/**/*.png
 /assets/identity/seen/
