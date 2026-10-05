@@ -90,6 +90,7 @@ bool parseSpec(const json& t, TemplateSpec& s) {
         return false;
     }
     s.TemplateScale = JsonNumber(t, "templateScale");
+    s.Anchor = JsonString(t, "anchor");
     s.ContinuationOnly = JsonBool(t, "continuationOnly");
     s.RoundOpening = JsonBool(t, "roundOpening");
     s.LayoutProfile = JsonString(t, "layoutProfile");
@@ -302,6 +303,10 @@ std::shared_ptr<Catalog> Load(const config::Config& cfg, std::string* err) {
     for (const auto& id : sc.HoldScenes) out->holdSet.insert(id);
 
     for (TemplateSpec spec : man.Templates) {
+        if (spec.Anchor != "" && spec.Anchor != "legacy" && spec.Anchor != "center" && spec.Anchor != "left" && spec.Anchor != "right") {
+            if (err) *err = "scene: template " + spec.ID + ": unsupported anchor " + quote(spec.Anchor);
+            return nullptr;
+        }
         if (spec.TemplateScale != 0 && (spec.TemplateScale < 0.5 || spec.TemplateScale > 2)) {
             if (err) *err = "scene: template " + spec.ID + ": templateScale must be between 0.5 and 2";
             return nullptr;
@@ -591,16 +596,20 @@ void Catalog::setHint(int index, Point peak, bool valid) {
 }
 
 preparedTemplate prepareOne(const detect::ContentArea& ca, const template_& t) {
-    Rect roi = mapRect(ca, t.spec.ROI);
+    Rect roi = mapRect(ca, t.spec.ROI, t.spec.Anchor, t.refW, t.refH);
     preparedTemplate out;
     out.spec = t.spec;
     out.roi = roi;
     double scale = t.spec.TemplateScale;
     if (scale == 0) scale = 1;
-    int tw = static_cast<int>(std::round(static_cast<double>(t.gray.Bounds().Dx()) * static_cast<double>(ca.W) /
-                                         static_cast<double>(t.refW) * scale));
-    int th = static_cast<int>(std::round(static_cast<double>(t.gray.Bounds().Dy()) * static_cast<double>(ca.H) /
-                                         static_cast<double>(t.refH) * scale));
+    double twScale = static_cast<double>(ca.W) / static_cast<double>(t.refW);
+    const double thScale = static_cast<double>(ca.H) / static_cast<double>(t.refH);
+    if (!t.spec.Anchor.empty() && t.spec.Anchor != "legacy") {
+        // NGUI HUD widgets keep their physical size with root height.
+        twScale = thScale;
+    }
+    int tw = static_cast<int>(std::round(static_cast<double>(t.gray.Bounds().Dx()) * twScale * scale));
+    int th = static_cast<int>(std::round(static_cast<double>(t.gray.Bounds().Dy()) * thScale * scale));
     if (tw < 4) tw = 4;
     if (th < 4) th = 4;
     if (tw > roi.Dx()) tw = roi.Dx();
@@ -667,13 +676,37 @@ std::vector<Hit> Catalog::scoreAll(const RGBA* img, const std::vector<preparedTe
     return hitsOut;
 }
 
-Rect mapRect(const detect::ContentArea& ca, const config::NormalizedRect& r) {
-    Point p0 = ca.Map(r.X * detect::LogicWidth, r.Y * detect::LogicHeight);
-    Point p1 = ca.Map((r.X + r.Width) * detect::LogicWidth, (r.Y + r.Height) * detect::LogicHeight);
+Point mapAnchoredPoint(const detect::ContentArea& ca, double x, double y, int refW, int refH,
+                       const std::string& anchor);
+
+Rect mapRect(const detect::ContentArea& ca, const config::NormalizedRect& r, const std::string& anchor,
+             int refW, int refH) {
+    Point p0;
+    Point p1;
+    if (anchor.empty() || anchor == "legacy") {
+        p0 = ca.Map(r.X * detect::LogicWidth, r.Y * detect::LogicHeight);
+        p1 = ca.Map((r.X + r.Width) * detect::LogicWidth, (r.Y + r.Height) * detect::LogicHeight);
+    } else {
+        p0 = mapAnchoredPoint(ca, r.X, r.Y, refW, refH, anchor);
+        p1 = mapAnchoredPoint(ca, r.X + r.Width, r.Y + r.Height, refW, refH, anchor);
+    }
     int x0 = p0.X, y0 = p0.Y, x1 = p1.X, y1 = p1.Y;
     if (x1 <= x0) x1 = x0 + 1;
     if (y1 <= y0) y1 = y0 + 1;
     return MakeRect(x0, y0, x1, y1);
+}
+
+Point mapAnchoredPoint(const detect::ContentArea& ca, double x, double y, int refW, int refH,
+                       const std::string& anchor) {
+    const double s = static_cast<double>(ca.H) / static_cast<double>(refH);
+    const double logicalX = x * static_cast<double>(refW);
+    double px = static_cast<double>(ca.X) + logicalX * s;
+    if (anchor == "right") {
+        px = static_cast<double>(ca.X + ca.W) - (static_cast<double>(refW) - logicalX) * s;
+    } else if (anchor == "center") {
+        px = static_cast<double>(ca.X + ca.W) / 2.0 + (logicalX - static_cast<double>(refW) / 2.0) * s;
+    }
+    return Pt(static_cast<int>(px), ca.Y + static_cast<int>(y * static_cast<double>(refH) * s));
 }
 
 bool lumaBlank(const RGBA* img, engine::GateKind& kind) {
