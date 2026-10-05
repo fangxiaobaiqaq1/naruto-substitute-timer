@@ -12,7 +12,7 @@ val releaseVersionName = providers.environmentVariable("TIMER_VERSION").orNull
     ?.trim()
     ?.removePrefix("v")
     ?.takeIf { it.matches(Regex("\\d+\\.\\d+\\.\\d+")) }
-    ?: "0.2.9"
+    ?: "0.2.10"
 val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
 val releaseKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
@@ -33,7 +33,7 @@ android {
         applicationId = "com.narutotimer"
         minSdk = 31
         targetSdk = 34
-        versionCode = 29
+        versionCode = 30
         versionName = releaseVersionName
 
         ndk {
