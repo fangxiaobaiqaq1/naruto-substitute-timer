@@ -96,9 +96,9 @@ struct hit {
     double Score = 0;
 };
 
-Rect mapRect(const detect::ContentArea& ca, const config::NormalizedRect& r) {
-    Point p0 = ca.Map(r.X * detect::LogicWidth, r.Y * detect::LogicHeight);
-    Point p1 = ca.Map((r.X + r.Width) * detect::LogicWidth, (r.Y + r.Height) * detect::LogicHeight);
+Rect mapRect(const detect::ContentArea& ca, const config::NormalizedRect& r, bool right) {
+    Point p0 = ca.MapHUDNormalized(r.X, r.Y, right, detect::LogicWidth, detect::LogicHeight);
+    Point p1 = ca.MapHUDNormalized(r.X + r.Width, r.Y + r.Height, right, detect::LogicWidth, detect::LogicHeight);
     int x0 = p0.X, y0 = p0.Y, x1 = p1.X, y1 = p1.Y;
     if (x1 <= x0) x1 = x0 + 1;
     if (y1 <= y0) y1 = y0 + 1;
@@ -114,10 +114,10 @@ Gray templateGray(const Named& n) {
 const Gray* maskPtr(const Gray& m) { return m.Nil() ? nullptr : &m; }
 
 hit bestHit(const RGBA* img, const detect::ContentArea& ca, const config::NormalizedRect& roi,
-            const std::vector<Named>& names, int maxWidth) {
+            const std::vector<Named>& names, int maxWidth, bool right) {
     hit best;
     if (names.empty()) return best;
-    RGBA search = match::CropRGBA(img, mapRect(ca, roi));
+    RGBA search = match::CropRGBA(img, mapRect(ca, roi, right));
     if (search.Nil() || search.Bounds().Empty()) return best;
     Gray gray = match::ToGray(&search);
     double scale = 1.0;
@@ -129,13 +129,12 @@ hit bestHit(const RGBA* img, const detect::ContentArea& ca, const config::Normal
         search = RGBA::New(gray.Bounds());  // Query.Gray supplies pixels, Image supplies bounds.
     }
     const Rect sb = search.Bounds();
+    const double hudScale = static_cast<double>(ca.H) / detect::LogicHeight;
     match::NCC ncc;
     for (const auto& n : names) {
         if (!n.Image) continue;
-        int tw = static_cast<int>(std::round(static_cast<double>(n.Image->Width) * static_cast<double>(ca.W) /
-                                             static_cast<double>(detect::LogicWidth) * scale));
-        int th = static_cast<int>(std::round(static_cast<double>(n.Image->Height) * static_cast<double>(ca.H) /
-                                             static_cast<double>(detect::LogicHeight) * scale));
+        int tw = static_cast<int>(std::round(static_cast<double>(n.Image->Width) * hudScale * scale));
+        int th = static_cast<int>(std::round(static_cast<double>(n.Image->Height) * hudScale * scale));
         if (tw < 8 || th < 8 || tw > gray.Bounds().Dx() || th > gray.Bounds().Dy()) continue;
         Gray src = templateGray(n);
         Gray templ = match::ScaleGray(&src, tw, th);
@@ -209,10 +208,10 @@ Readout readNames(const RGBA* img, const std::vector<Named>& book, detect::Conte
     // a masked player name from making the timer choose a random side.
     if (mine.empty()) return out;
     std::vector<Named> others = othersOf(book);
-    hit leftMine = bestHit(img, ca, rois.Left, mine, maxWidth);
-    hit rightMine = bestHit(img, ca, rois.Right, mine, maxWidth);
-    hit leftOpp = bestHit(img, ca, rois.Left, others, maxWidth);
-    hit rightOpp = bestHit(img, ca, rois.Right, others, maxWidth);
+    hit leftMine = bestHit(img, ca, rois.Left, mine, maxWidth, false);
+    hit rightMine = bestHit(img, ca, rois.Right, mine, maxWidth, true);
+    hit leftOpp = bestHit(img, ca, rois.Left, others, maxWidth, false);
+    hit rightOpp = bestHit(img, ca, rois.Right, others, maxWidth, true);
     if (leftMine.Score >= threshold && leftMine.Score >= rightMine.Score + minGap) {
         out.Side = "left";
         out.Mine = leftMine.Name;
@@ -401,7 +400,7 @@ void saveOppCrop(const RGBA* img, const std::string& side, detect::ContentMode m
     if (!ok) return;
     config::NormalizedRect roi = DefaultROIs.Left;
     if (side == "right") roi = DefaultROIs.Right;
-    RGBA crop = match::CropRGBA(img, mapRect(ca, roi));
+    RGBA crop = match::CropRGBA(img, mapRect(ca, roi, side == "right"));
     if (crop.Nil() || crop.Bounds().Dx() < 8) return;
     // Go 的采集帧一律不透明（leidian ForceOpaque / mumu |= 0xff000000），png.Encode 因此写成 RGB，
     // 回读走不透明亮度路径。RGBX_8888 / 截图帧的 alpha 字节未定义，这里补成 255 以保持同一不变量
