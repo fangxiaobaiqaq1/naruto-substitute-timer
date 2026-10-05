@@ -34,7 +34,10 @@ type Manifest struct {
 }
 
 type TemplateSpec struct {
-	TemplateScale    float64               `json:"templateScale,omitempty"`
+	TemplateScale float64 `json:"templateScale,omitempty"`
+	// Anchor selects the geometry for HUD-like templates. Empty/legacy keeps
+	// the historical full-scene transform for external manifests.
+	Anchor           string                `json:"anchor,omitempty"`
 	ContinuationOnly bool                  `json:"continuationOnly,omitempty"`
 	RoundOpening     bool                  `json:"roundOpening,omitempty"`
 	LayoutProfile    string                `json:"layoutProfile,omitempty"`
@@ -190,6 +193,9 @@ func Load(cfg config.Config) (*Catalog, error) {
 		out.holdSet[id] = true
 	}
 	for _, spec := range man.Templates {
+		if spec.Anchor != "" && spec.Anchor != "legacy" && spec.Anchor != "center" && spec.Anchor != "left" && spec.Anchor != "right" {
+			return nil, fmt.Errorf("scene: template %s: unsupported anchor %q", spec.ID, spec.Anchor)
+		}
 		if spec.TemplateScale != 0 && (spec.TemplateScale < 0.5 || spec.TemplateScale > 2) {
 			return nil, fmt.Errorf("scene: template %s: templateScale must be between 0.5 and 2", spec.ID)
 		}
@@ -516,14 +522,20 @@ func (c *Catalog) setHint(index int, peak image.Point, valid bool) {
 }
 
 func prepareOne(ca detect.ContentArea, t template) preparedTemplate {
-	roi := mapRect(ca, t.spec.ROI)
+	roi := mapRect(ca, t.spec.ROI, t.spec.Anchor, t.refW, t.refH)
 	out := preparedTemplate{spec: t.spec, roi: roi}
 	scale := t.spec.TemplateScale
 	if scale == 0 {
 		scale = 1
 	}
-	tw := int(math.Round(float64(t.gray.Bounds().Dx()) * float64(ca.W) / float64(t.refW) * scale))
-	th := int(math.Round(float64(t.gray.Bounds().Dy()) * float64(ca.H) / float64(t.refH) * scale))
+	twScale, thScale := float64(ca.W)/float64(t.refW), float64(ca.H)/float64(t.refH)
+	if t.spec.Anchor != "" && t.spec.Anchor != "legacy" {
+		// NGUI HUD widgets keep their physical size with root height; only
+		// their anchor determines where the extra ultrawide space goes.
+		twScale = thScale
+	}
+	tw := int(math.Round(float64(t.gray.Bounds().Dx()) * twScale * scale))
+	th := int(math.Round(float64(t.gray.Bounds().Dy()) * thScale * scale))
 	if tw < 4 {
 		tw = 4
 	}
@@ -747,9 +759,16 @@ func (c *Catalog) matchIn(img *image.RGBA, gray *image.Gray, roi image.Rectangle
 	})
 }
 
-func mapRect(ca detect.ContentArea, r config.NormalizedRect) image.Rectangle {
-	x0, y0 := ca.Map(r.X*detect.LogicWidth, r.Y*detect.LogicHeight)
-	x1, y1 := ca.Map((r.X+r.Width)*detect.LogicWidth, (r.Y+r.Height)*detect.LogicHeight)
+func mapRect(ca detect.ContentArea, r config.NormalizedRect, anchor string, refW, refH int) image.Rectangle {
+	var x0, y0, x1, y1 int
+	if anchor == "" || anchor == "legacy" {
+		x0, y0 = ca.Map(r.X*detect.LogicWidth, r.Y*detect.LogicHeight)
+		x1, y1 = ca.Map((r.X+r.Width)*detect.LogicWidth, (r.Y+r.Height)*detect.LogicHeight)
+	} else {
+		p0 := mapAnchoredPoint(ca, r.X, r.Y, refW, refH, anchor)
+		p1 := mapAnchoredPoint(ca, r.X+r.Width, r.Y+r.Height, refW, refH, anchor)
+		x0, y0, x1, y1 = p0.X, p0.Y, p1.X, p1.Y
+	}
 	if x1 <= x0 {
 		x1 = x0 + 1
 	}
@@ -757,6 +776,21 @@ func mapRect(ca detect.ContentArea, r config.NormalizedRect) image.Rectangle {
 		y1 = y0 + 1
 	}
 	return image.Rect(x0, y0, x1, y1)
+}
+
+func mapAnchoredPoint(ca detect.ContentArea, x, y float64, refW, refH int, anchor string) image.Point {
+	s := float64(ca.H) / float64(refH)
+	logicalX := x * float64(refW)
+	var px float64
+	switch anchor {
+	case "right":
+		px = float64(ca.X+ca.W) - (float64(refW)-logicalX)*s
+	case "center":
+		px = float64(ca.X+ca.W)/2 + (logicalX-float64(refW)/2)*s
+	default: // left
+		px = float64(ca.X) + logicalX*s
+	}
+	return image.Pt(int(px), ca.Y+int(y*float64(refH)*s))
 }
 
 func lumaBlank(img *image.RGBA) (bool, engine.GateKind) {

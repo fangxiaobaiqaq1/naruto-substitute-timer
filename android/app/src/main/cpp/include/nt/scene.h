@@ -29,8 +29,9 @@ inline const std::string DefaultManifest = "assets/templates/manifest.json";
 inline const std::string ManifestAsset = "templates/manifest.json";
 
 struct TemplateSpec {
-    double TemplateScale = 0;     // "templateScale"
-    bool ContinuationOnly = false;  // "continuationOnly"
+    double TemplateScale = 0;       // "templateScale"
+    std::string Anchor;              // "anchor": legacy/center/left/right
+    bool ContinuationOnly = false;   // "continuationOnly"
     bool RoundOpening = false;    // "roundOpening"
     std::string LayoutProfile;    // "layoutProfile"
     std::string ID;               // "id"
@@ -132,7 +133,7 @@ detect::ContentMode parseMode(const std::string& s);
 
 // prepareOne / mapRect / lumaBlank：同 Go。
 preparedTemplate prepareOne(const detect::ContentArea& ca, const template_& t);
-Rect mapRect(const detect::ContentArea& ca, const config::NormalizedRect& r);
+Rect mapRect(const detect::ContentArea& ca, const config::NormalizedRect& r, const std::string& anchor, int refW, int refH);
 // 返回 blank；kind 写入门闩结论（GateUncertain / GateBlank）。
 bool lumaBlank(const RGBA* img, engine::GateKind& kind);
 
