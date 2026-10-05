@@ -24,6 +24,7 @@ import com.narutotimer.capture.ProjectionCaptureService
 import com.narutotimer.tracker.Session
 import com.narutotimer.tracker.TimerColors
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Settings card rendered inside the accessibility overlay window.
@@ -100,7 +101,7 @@ class OverlaySettingsView(
             modeGroup.check(if (settings.overlayMode == "mini") modeGroup.getChildAt(1).id else modeGroup.getChildAt(0).id)
             setBar(fullOpacity, settings.windowOpacity, 0.40f, 1f)
             setBar(miniOpacity, settings.miniOpacity, 0.20f, 1f)
-            setBar(sizeBar, settings.fontScale, 0.55f, 1.20f)
+            setBar(sizeBar, settings.fontScale, Settings.FONT_SCALE_MIN, Settings.FONT_SCALE_MAX)
             projection.isChecked = settings.preferProjection
             debug.isChecked = settings.debug
             updateSliderLabels()
@@ -251,7 +252,7 @@ class OverlaySettingsView(
         add(p, sizeText, 8); add(p, sizeBar, 0)
         configureBar(fullOpacity, 0.40f, 1f) { settings.windowOpacity = it }
         configureBar(miniOpacity, 0.20f, 1f) { settings.miniOpacity = it }
-        configureBar(sizeBar, 0.55f, 1.20f) { settings.fontScale = it }
+        configureBar(sizeBar, Settings.FONT_SCALE_MIN, Settings.FONT_SCALE_MAX) { settings.fontScale = it }
         return p
     }
 
@@ -345,11 +346,11 @@ class OverlaySettingsView(
     }
 
     private fun configureBar(bar: SeekBar, min: Float, max: Float, onChange: (Float) -> Unit) {
-        bar.max = 100
+        bar.max = ((max - min) * 100f).roundToInt().coerceAtLeast(1)
         bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(b: SeekBar, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
-                val value = min + (max - min) * progress / 100f
+                val value = min + (max - min) * progress / b.max.toFloat()
                 onChange(value)
                 updateSliderLabels()
             }
@@ -359,7 +360,7 @@ class OverlaySettingsView(
     }
 
     private fun setBar(bar: SeekBar, value: Float, min: Float, max: Float) {
-        bar.progress = (((value.coerceIn(min, max) - min) / (max - min)) * 100f).toInt()
+        bar.progress = (((value.coerceIn(min, max) - min) / (max - min)) * bar.max).roundToInt()
     }
 
     private fun sideId(side: String): Int = when (side) {

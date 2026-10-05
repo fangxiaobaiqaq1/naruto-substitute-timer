@@ -43,7 +43,8 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			// Stored name strips use the 960-wide HUD reference. Individual
 			// integer-rounded bean centers may alternate 15/16px; their first
 			// interval must not accidentally stretch all of the name lettering.
-			scale := float64(area.W) / 960
+			// NGUI scales this reference from screen height, not ultrawide width.
+			scale := float64(area.H) / 540
 			first := image.Pt(row[0].X, row[0].Y)
 			identified[index] = e.nameTracker[profileIndex][index].ReadWithAvatar(e.names, &e.avatarTracker[profileIndex][index], img, ninja.NameRegion(first, scale, index == 0), ninja.AvatarRegion(first, scale, index == 0), scale, at)
 			// Only a recognized six-slot NAME permits usable slots five and six.
@@ -55,7 +56,8 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 				}
 				for i := 4; i < 6; i++ {
 					lx, ly := row[0].LX+float64(i)*dx, row[0].LY+float64(i)*dy
-					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: name, Idx: i, LX: lx, LY: ly}, X: area.X + int(math.Round(lx*float64(area.W)/detect.LogicWidth)), Y: area.Y + int(math.Round(ly*float64(area.H)/detect.LogicHeight))})
+					mapped := area.MapHUDPixel(lx, ly, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight)
+					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: name, Idx: i, LX: lx, LY: ly}, X: mapped.X, Y: mapped.Y})
 				}
 			}
 			// Some exact variants have an extra energy bar above their ordinary
@@ -64,8 +66,8 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			// subsequent frames. This applies to Sasuke Xiayin and Minato Kyubi.
 			if offset := identified[index].RowOffsetY; offset != 0 {
 				for i := range row {
-					row[i].LY += offset * detect.LogicHeight / 540
-					row[i].Y = area.Y + int(math.Round(row[i].LY*float64(area.H)/detect.LogicHeight))
+					row[i].LY += offset * detect.HUDReferenceHeight / 540
+					row[i].Y = area.MapHUDPixel(row[i].LX, row[i].LY, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight).Y
 				}
 			}
 		}

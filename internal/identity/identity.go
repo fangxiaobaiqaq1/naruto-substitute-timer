@@ -264,10 +264,10 @@ func readNames(img *image.RGBA, book []Named, mode detect.ContentMode, rois side
 		return out
 	}
 	others := othersOf(book)
-	leftMine := bestHit(img, ca, rois.Left, mine, maxWidth)
-	rightMine := bestHit(img, ca, rois.Right, mine, maxWidth)
-	leftOpp := bestHit(img, ca, rois.Left, others, maxWidth)
-	rightOpp := bestHit(img, ca, rois.Right, others, maxWidth)
+	leftMine := bestHit(img, ca, rois.Left, mine, maxWidth, "left")
+	rightMine := bestHit(img, ca, rois.Right, mine, maxWidth, "right")
+	leftOpp := bestHit(img, ca, rois.Left, others, maxWidth, "left")
+	rightOpp := bestHit(img, ca, rois.Right, others, maxWidth, "right")
 	switch {
 	case leftMine.Score >= threshold && leftMine.Score >= rightMine.Score+minGap:
 		out.Side, out.Mine = "left", leftMine.Name
@@ -308,18 +308,27 @@ type hit struct {
 	Score float64
 }
 
-func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, names []Named, maxWidth int) hit {
+func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, names []Named, maxWidth int, sides ...string) hit {
 	var best hit
 	if len(names) == 0 {
 		return best
 	}
-	search := match.CropRGBA(img, mapRect(ca, roi))
+	side := "left"
+	if len(sides) > 0 && sides[0] != "" {
+		side = sides[0]
+	} else if roi.X+roi.Width/2 >= 0.5 {
+		side = "right"
+	}
+	search := match.CropRGBA(img, mapRect(ca, roi, side))
 	if search == nil || search.Bounds().Empty() {
 		return best
 	}
 	gray := match.ToGray(search)
 	scale := 1.0
 	if maxWidth > 0 && ca.W > maxWidth {
+		// maxWidth is a processing cap in physical pixels, not another HUD
+		// reference dimension. The template itself still uses the fixed-height
+		// HUD scale below before this optional downsample is applied.
 		scale = float64(maxWidth) / float64(ca.W)
 		w := int(math.Round(float64(gray.Bounds().Dx()) * scale))
 		h := int(math.Round(float64(gray.Bounds().Dy()) * scale))
@@ -330,8 +339,9 @@ func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, 
 		if n.Image == nil {
 			continue
 		}
-		tw := int(math.Round(float64(n.Image.Bounds().Dx()) * float64(ca.W) / detect.LogicWidth * scale))
-		th := int(math.Round(float64(n.Image.Bounds().Dy()) * float64(ca.H) / detect.LogicHeight * scale))
+		hudScale := ca.HeightScale(detect.LogicHeight)
+		tw := int(math.Round(float64(n.Image.Bounds().Dx()) * hudScale * scale))
+		th := int(math.Round(float64(n.Image.Bounds().Dy()) * hudScale * scale))
 		if tw < 8 || th < 8 || tw > gray.Bounds().Dx() || th > gray.Bounds().Dy() {
 			continue
 		}
@@ -375,9 +385,16 @@ func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, 
 	return best
 }
 
-func mapRect(ca detect.ContentArea, r config.NormalizedRect) image.Rectangle {
-	x0, y0 := ca.Map(r.X*detect.LogicWidth, r.Y*detect.LogicHeight)
-	x1, y1 := ca.Map((r.X+r.Width)*detect.LogicWidth, (r.Y+r.Height)*detect.LogicHeight)
+func mapRect(ca detect.ContentArea, r config.NormalizedRect, sides ...string) image.Rectangle {
+	side := "left"
+	if len(sides) > 0 && sides[0] != "" {
+		side = sides[0]
+	} else if r.X+r.Width/2 >= 0.5 {
+		side = "right"
+	}
+	p0 := ca.MapHUDNormalized(r.X, r.Y, side, detect.LogicWidth, detect.LogicHeight)
+	p1 := ca.MapHUDNormalized(r.X+r.Width, r.Y+r.Height, side, detect.LogicWidth, detect.LogicHeight)
+	x0, y0, x1, y1 := p0.X, p0.Y, p1.X, p1.Y
 	if x1 <= x0 {
 		x1 = x0 + 1
 	}
@@ -417,7 +434,7 @@ func saveOppCrop(img *image.RGBA, side string, mode detect.ContentMode) {
 	if side == "right" {
 		roi = DefaultROIs.Right
 	}
-	crop := match.CropRGBA(img, mapRect(ca, roi))
+	crop := match.CropRGBA(img, mapRect(ca, roi, side))
 	if crop == nil || crop.Bounds().Dx() < 8 {
 		return
 	}

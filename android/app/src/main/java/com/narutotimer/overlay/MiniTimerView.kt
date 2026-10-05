@@ -225,19 +225,17 @@ class MiniTimerView(context: Context) : View(context) {
         max(dp(MIN_BUTTON_WIDTH_DP), textW(label, textSize(BUTTON_TEXT), false) + 2 * dp(BUTTON_PAD_DP))
 
     private fun collapsedText(s: OverlayState): String {
-        val scene = s.infoText.substringBefore("  豆").ifBlank { "未识别场景" }
-        val opponent = s.tagText.substringBefore(" · ").ifBlank { "对面·待认边" }
-        val value = s.primaryText.takeIf { it.isNotEmpty() && it != "—" }
+        val value = s.primaryText.takeIf { it.isNotEmpty() && it != "—" } ?: "待机"
         if (s.showBothSides) {
             val left = s.leftText.takeIf { it.isNotEmpty() && it != "—" } ?: "—"
             val right = s.rightText.takeIf { it.isNotEmpty() && it != "—" } ?: "—"
-            return "$opponent · 左 $left / 右 $right"
+            return "左$left 右$right"
         }
         if (s.dual) {
             val alternate = s.altText.takeIf { it.isNotEmpty() } ?: "—"
-            return if (value == null) "$scene · $opponent" else "$opponent · 15秒 $value / 10秒 $alternate"
+            return "$value / $alternate"
         }
-        return value?.let { "$opponent · $it" } ?: "$scene · $opponent"
+        return value
     }
 
     private fun prepareButtons(s: OverlayState) {
@@ -272,7 +270,8 @@ class MiniTimerView(context: Context) : View(context) {
         prepareButtons(s)
         val pad = dp(PAD_DP)
         val gap = dp(GAP_DP)
-        val maxContentW = (dp(MAX_CARD_WIDTH_DP) - 2 * pad).coerceAtLeast(dp(160f))
+        val maxContentW = (resources.displayMetrics.widthPixels * 0.92f - 2 * pad)
+            .coerceAtLeast(dp(160f))
         var contentW: Float
         var contentH: Float
 
@@ -287,7 +286,13 @@ class MiniTimerView(context: Context) : View(context) {
         if (!controlsVisible) {
             val label = collapsedText(s)
             val size = textSize(COLLAPSED_TEXT)
-            val desired = min(dp(COLLAPSED_WIDTH_DP), maxContentW)
+            val template = when {
+                s.showBothSides -> "左$CLOCK_TEMPLATE 右$CLOCK_TEMPLATE"
+                s.dual -> "$CLOCK_TEMPLATE / $CLOCK_TEMPLATE"
+                else -> CLOCK_TEMPLATE
+            }
+            val desired = max(textW(label, size, false), textW(template, size, false))
+                .coerceIn(dp(COLLAPSED_MIN_WIDTH_DP), maxContentW)
             layoutW = desired + 2 * pad
             layoutH = textH(size, false) + 2 * pad
             grownW = desired
@@ -751,11 +756,11 @@ class MiniTimerView(context: Context) : View(context) {
 
     companion object {
         // Public scale contract used by MainActivity and overlay tests.
-        const val MINIMUM_OVERLAY_SCALE = 0.55
-        const val MAXIMUM_OVERLAY_SCALE = 1.20
+        const val MINIMUM_OVERLAY_SCALE = 0.25
+        const val MAXIMUM_OVERLAY_SCALE = 3.00
 
         fun normalizedOverlayScale(scale: Double): Double =
-            if (scale < MINIMUM_OVERLAY_SCALE || scale > MAXIMUM_OVERLAY_SCALE) 1.0 else scale
+            scale.coerceIn(MINIMUM_OVERLAY_SCALE, MAXIMUM_OVERLAY_SCALE)
 
         private const val CLOCK_TEMPLATE = "88.8"
         private const val COLLAPSED_TEXT = 13f
@@ -778,8 +783,7 @@ class MiniTimerView(context: Context) : View(context) {
         private const val CARD_RADIUS_DP = 10f
         private const val BORDER_DP = 1f
         private const val CONTROLS_PANEL_PAD_DP = 3f
-        private const val MAX_CARD_WIDTH_DP = 360f
-        private const val COLLAPSED_WIDTH_DP = 320f
+        private const val COLLAPSED_MIN_WIDTH_DP = 104f
         private const val PAD_DP = 9f
         private const val GAP_DP = 5f
 

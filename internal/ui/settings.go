@@ -189,23 +189,23 @@ func (s *session) openSettings() {
 	rememberChk.OnChanged = func(checked bool) { showSettingsError(s.setRememberSide(checked), w) }
 	topChk := widget.NewCheck("窗口置顶", nil)
 	topChk.SetChecked(top)
-	miniSel := widget.NewRadioGroup([]string{"完整浮窗", "迷你窗口"}, nil)
+	miniSel := widget.NewRadioGroup([]string{"完整浮窗", "仅计时器"}, nil)
 	if overlayMode == "mini" {
-		miniSel.SetSelected("迷你窗口")
+		miniSel.SetSelected("仅计时器")
 	} else {
 		miniSel.SetSelected("完整浮窗")
 	}
 	miniSel.Horizontal = true
 	miniSel.Required = true
 	miniSel.OnChanged = func(label string) {
-		if on := label == "迷你窗口"; on != s.isMini() {
+		if on := label == "仅计时器"; on != s.isMini() {
 			showSettingsError(s.setMiniMode(on), w)
 		}
 	}
 	bothChk := widget.NewCheck("左右两边都显示替身倒计时", nil)
 	bothChk.SetChecked(showBoth)
 	bothChk.OnChanged = func(on bool) { showSettingsError(s.setShowBothSides(on), w) }
-	autoScaleChk := widget.NewCheck("迷你窗口自动适应内容大小（关闭后可自由拉伸并等比例缩放内容）", nil)
+	autoScaleChk := widget.NewCheck("自动适应内容大小（关闭后可自由拉伸并等比例缩放）", nil)
 	autoScaleChk.SetChecked(miniAutoScale)
 	autoScaleChk.OnChanged = func(on bool) {
 		s.mu.Lock()
@@ -275,7 +275,7 @@ func (s *session) openSettings() {
 	opacitySlider.Step = 0.05
 	opacitySlider.SetValue(opacity)
 	fontScaleSlider := widget.NewSlider(minimumOverlayScale, maximumOverlayScale)
-	fontScaleSlider.Step = 0.10
+	fontScaleSlider.Step = 0.01
 	fontScaleSlider.SetValue(fontScale)
 	updateAppearanceLabels := func() {
 		opacityText.SetText(fmt.Sprintf("窗口不透明度：%.0f%%", opacitySlider.Value*100))
@@ -327,10 +327,10 @@ func (s *session) openSettings() {
 		widget.NewLabel("仅照美冥［五代目水影］同时显示15秒/10秒"), topChk,
 		miniSel, bothChk, autoScaleChk, miniOpacityText, miniOpacitySlider, gpuChk,
 		widget.NewLabel("GPU 加速仅作用于本地 OCR；不可用时自动回退 CPU。修改后重启生效。"),
-		widget.NewLabel("Ctrl+M 可随时切换迷你窗口；迷你窗口独立于完整浮窗，点击计时区域显示设置、换边、两边计时和退出。"),
+		widget.NewLabel("Ctrl+M 可随时切换仅计时器模式；它独立于完整浮窗，点击计时区域显示设置、换边、两边计时和退出。"),
 		widget.NewSeparator(), widget.NewLabel("外观与更新"),
 		opacityText, opacitySlider, fontScaleText, fontScaleSlider, resetAppearance,
-		widget.NewLabel("迷你模式使用独立悬浮屏，点击迷你屏幕展开操作；设置窗口和更新窗口始终保持不透明。字号会立即预览并自动留出所需空间。"), appearanceNote,
+		widget.NewLabel("仅计时器模式使用独立悬浮屏，点击计时区域展开操作；设置窗口和更新窗口始终保持不透明。字号会立即预览并自动留出所需空间。"), appearanceNote,
 		autoUpdateCheck, widget.NewLabel("更新源"), updateSourceSelect, updateHint,
 	)
 	diagnosticEntry := widget.NewButton("采集与延迟诊断 / 原帧录制", s.openDiagnostics)

@@ -363,8 +363,8 @@ func HasConsole() bool {
 
 // SetWindowOpacity changes one known native window. It deliberately uses the
 // HWND supplied by Fyne instead of a title lookup, so another timer instance
-// cannot accidentally receive the setting. Color-key transparency is never
-// used: the OpenGL canvas must remain clickable.
+// cannot accidentally receive the setting. Color-key transparency is applied
+// separately and only to the timer-only mini window.
 func SetWindowOpacity(hwnd uintptr, opacity float64) error {
 	if hwnd == 0 {
 		return fmt.Errorf("window handle is unavailable")
@@ -409,9 +409,47 @@ func SetWindowOpacity(hwnd uintptr, opacity float64) error {
 	return nil
 }
 
-// SetWindowFrameless removes (or restores) the title bar and sizing border of
-// one known HWND. It returns the style that was replaced so the caller can put
-// back exactly what the window backend created.
+// SetWindowColorKey makes one known window transparent wherever its canvas
+// renders the key color. It is used only by the timer-only mini window.
+func SetWindowColorKey(hwnd uintptr, key color.NRGBA, opacity float64) error {
+	if hwnd == 0 {
+		return fmt.Errorf("window handle is unavailable")
+	}
+	if opacity <= 0 || opacity > 1.00 {
+		return fmt.Errorf("opacity %.2f is outside (0,1.00]", opacity)
+	}
+	ProcSetLastError.Call(0)
+	style, _, callErr := ProcGetWindowLongPtrW.Call(hwnd, GWLExStyle)
+	if style == 0 && callErr != nil && callErr != syscall.Errno(0) {
+		return fmt.Errorf("read window style: %w", callErr)
+	}
+	next := style | WSExLayered
+	if next != style {
+		ProcSetLastError.Call(0)
+		previous, _, callErr := ProcSetWindowLongPtrW.Call(hwnd, GWLExStyle, next)
+		if previous == 0 && callErr != nil && callErr != syscall.Errno(0) {
+			return fmt.Errorf("update window style: %w", callErr)
+		}
+	}
+	alpha := byte(opacity*255 + 0.5)
+	if alpha == 0 {
+		alpha = 1
+	}
+	colorRef := uintptr(uint32(key.B)<<16 | uint32(key.G)<<8 | uint32(key.R))
+	ok, _, callErr := ProcSetLayeredWindowAttributes.Call(hwnd, colorRef, uintptr(alpha), LWAColorKey|LWAAlpha)
+	if ok == 0 {
+		if callErr == nil || callErr == syscall.Errno(0) {
+			return fmt.Errorf("set window color key failed")
+		}
+		return fmt.Errorf("set window color key: %w", callErr)
+	}
+	return nil
+}
+
+// SetWindowFrameless removes (or restores) the title bar of one known HWND.
+// Frameless windows retain a native sizing border so the user can resize them.
+// It returns the style that was replaced so the caller can put back exactly
+// what the window backend created.
 func SetWindowFrameless(hwnd uintptr, frameless bool, restore uintptr) (uintptr, error) {
 	if hwnd == 0 {
 		return 0, fmt.Errorf("window handle is unavailable")
@@ -423,7 +461,7 @@ func SetWindowFrameless(hwnd uintptr, frameless bool, restore uintptr) (uintptr,
 	}
 	next := restore
 	if frameless {
-		next = style &^ (WSCaption | WSSysMenu | WSMinimizeBox | WSMaximizeBox)
+		next = style&^(WSCaption|WSSysMenu|WSMinimizeBox|WSMaximizeBox) | WSThickFrame
 	} else if next == 0 {
 		next = style | WSCaption
 	}

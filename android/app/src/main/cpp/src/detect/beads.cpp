@@ -3,6 +3,7 @@
 // Contract: include/nt/detect.h — see android/ARCHITECTURE.md.
 //
 // Package detect 负责把游戏逻辑坐标映射到窗口实际坐标，并定义豆子位置。
+#include <cmath>
 #include <cstdio>
 
 #include "nt/detect.h"
@@ -108,6 +109,21 @@ Point ContentArea::Map(double lx, double ly) const {
     return Pt(x, y);
 }
 
+Point ContentArea::MapHUDPixel(double x, double y, bool right, double referenceWidth, double referenceHeight) const {
+    if (W <= 0 || H <= 0 || referenceWidth <= 0 || referenceHeight <= 0) {
+        return Pt(X, Y);
+    }
+    const double scale = static_cast<double>(H) / referenceHeight;
+    const double px = right ? static_cast<double>(X + W) - (referenceWidth - x) * scale
+                            : static_cast<double>(X) + x * scale;
+    const double py = static_cast<double>(Y) + y * scale;
+    return Pt(static_cast<int>(std::round(px)), static_cast<int>(std::round(py)));
+}
+
+Point ContentArea::MapHUDNormalized(double x, double y, bool right, double referenceWidth, double referenceHeight) const {
+    return MapHUDPixel(x * referenceWidth, y * referenceHeight, right, referenceWidth, referenceHeight);
+}
+
 std::string BeadStateString(BeadState s) {
     switch (s) {
         case StateDark: return "暗(冷却中)";
@@ -174,7 +190,7 @@ std::vector<BeadPosition> Layout(int clientW, int clientH, ContentMode mode, con
     std::vector<BeadPosition> pos;
     pos.reserve(beads.size());
     for (const Bead& b : beads) {
-        const Point p = ca.Map(b.LX, b.LY);
+        const Point p = ca.MapHUDPixel(b.LX, b.LY, b.Side == "right", LogicWidth, LogicHeight);
         pos.emplace_back(b, p.X, p.Y);
     }
     return pos;

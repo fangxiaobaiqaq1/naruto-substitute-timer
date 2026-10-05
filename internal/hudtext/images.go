@@ -57,13 +57,20 @@ func nameRegions(img *image.RGBA, cfg config.LayoutConfig, profile string) ([2]i
 		return out, false
 	}
 	p := cfg.Profile(profile)
-	scale := float64(ca.W) / 960
+	// Name geometry is an NGUI HUD element, so both its position and its
+	// 960x540 OCR offsets scale from height. Width-based scaling makes the
+	// right title grow into the center on 21:9/ultrawide captures.
+	scale := float64(ca.H) / 540
 	for i, side := range []config.SideLayout{p.Left, p.Right} {
 		if len(side.NominalCenters) == 0 {
 			return out, false
 		}
 		first := side.NominalCenters[0]
-		center := image.Pt(ca.X+int(math.Round(first.X*float64(ca.W))), ca.Y+int(math.Round(first.Y*float64(ca.H))))
+		sideName := "left"
+		if i == 1 {
+			sideName = "right"
+		}
+		center := ca.MapHUDNormalized(first.X, first.Y, sideName, detect.HUDReferenceWidth, detect.HUDReferenceHeight)
 		x0, x1 := -4., 330.
 		if i == 1 {
 			x0, x1 = -330., 4.

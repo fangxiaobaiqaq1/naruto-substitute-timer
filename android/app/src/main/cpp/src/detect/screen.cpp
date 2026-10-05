@@ -1,6 +1,8 @@
 // Owner: cpp-match-detect
 // Port of: internal/detect/screen.go
 // Contract: include/nt/detect.h — see android/ARCHITECTURE.md.
+#include <algorithm>
+
 #include "nt/detect.h"
 
 namespace nt::detect {
@@ -60,13 +62,18 @@ ScreenState ClassifyScreen(const RGBA* img, ContentMode mode) {
     if (!supported) {
         return ScreenState::ScreenUnknown;
     }
-    // 豆子行：略放宽，避免标题栏/缩放把豆挤出旧的 80~98 窄带。
-    const int y0 = ca.Y + ca.H * 70 / LogicHeight;
-    const int y1 = ca.Y + ca.H * 130 / LogicHeight;
-    const int xL0 = ca.X + ca.W * 80 / LogicWidth;
-    const int xL1 = ca.X + ca.W * 340 / LogicWidth;
-    const int xR0 = ca.X + ca.W * 1560 / LogicWidth;
-    const int xR1 = ca.X + ca.W * 1800 / LogicWidth;
+    // 豆子行：略放宽，使用与 HUD 豆位相同的 fixed-height + edge-anchor
+    // 映射，超宽屏不会把扫描带横向拉伸到中央场景。
+    const Point left0 = ca.MapHUDPixel(80, 70, false, LogicWidth, LogicHeight);
+    const Point left1 = ca.MapHUDPixel(340, 130, false, LogicWidth, LogicHeight);
+    const Point right0 = ca.MapHUDPixel(1560, 70, true, LogicWidth, LogicHeight);
+    const Point right1 = ca.MapHUDPixel(1800, 130, true, LogicWidth, LogicHeight);
+    const int y0 = std::max(std::min(left0.Y, left1.Y), bounds.Min.Y);
+    const int y1 = std::min(std::max(left0.Y, left1.Y), bounds.Max.Y);
+    const int xL0 = std::max(std::min(left0.X, left1.X), bounds.Min.X);
+    const int xL1 = std::min(std::max(left0.X, left1.X), bounds.Max.X);
+    const int xR0 = std::max(std::min(right0.X, right1.X), bounds.Min.X);
+    const int xR1 = std::min(std::max(right0.X, right1.X), bounds.Max.X);
 
     const int regs[2][2] = {{xL0, xL1}, {xR0, xR1}};
     int beadPix = 0, total = 0;

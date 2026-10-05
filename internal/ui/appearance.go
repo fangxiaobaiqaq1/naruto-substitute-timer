@@ -14,8 +14,8 @@ import (
 const (
 	minimumOverlayOpacity = 0.40
 	maximumOverlayOpacity = 1.00
-	minimumOverlayScale   = 0.80
-	maximumOverlayScale   = 1.60
+	minimumOverlayScale   = 0.25
+	maximumOverlayScale   = 3.00
 )
 
 func validOverlayAppearance(opacity, scale float64) error {
