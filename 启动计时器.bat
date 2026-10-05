@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-set "TARGET_VERSION=v0.2.7"
+set "TARGET_VERSION=v0.2.9"
 set "APP_EXE=%~dp0bin\timer-app.exe"
 set "APP_VERSION="
 set "VERSION_FILE=%TEMP%\timer-app-version-%RANDOM%-%RANDOM%.txt"
