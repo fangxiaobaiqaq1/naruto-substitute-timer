@@ -65,12 +65,22 @@ jobs:
           distribution: temurin
           java-version: "17"
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager_bin="$(command -v sdkmanager || true)"
+          if [[ -z "$sdkmanager_bin" ]]; then
+            sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+            sdkmanager_bin="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          test -x "$sdkmanager_bin" || { echo "::error::sdkmanager not found"; exit 1; }
+          echo "ANDROID_SDKMANAGER=$sdkmanager_bin" >> "$GITHUB_ENV"
+          yes | "$sdkmanager_bin" --licenses >/dev/null || true
       - name: Install Android build tools
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" \
+          "$ANDROID_SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" \
             "cmake;${ANDROID_CMAKE_VERSION}" "ndk;${ANDROID_NDK_VERSION}"
       - name: Decode release keystore
         shell: bash
