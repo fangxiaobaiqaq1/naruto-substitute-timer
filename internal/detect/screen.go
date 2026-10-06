@@ -71,13 +71,14 @@ func ClassifyScreen(img *image.RGBA, mode ContentMode) ScreenState {
 	if !supported {
 		return ScreenUnknown
 	}
-	// 豆子行：略放宽，避免标题栏/缩放把豆挤出旧的 80~98 窄带。
+	// 豆子行：覆盖名字/血条下方的一整段窄带。真实帧的标题、系统
+	// 浮层或缩放可能让豆子上下漂几像素，不能只扫旧的 80~98 窄带。
 	// 这是 HUD ROI，不是中央 16:9 场景 ROI；按 fixed-height + edge
 	// anchor 映射，超宽屏不会把扫描带横向拉伸到屏幕中间。
-	left0 := ca.MapHUDPixel(80, 70, "left", LogicWidth, LogicHeight)
-	left1 := ca.MapHUDPixel(340, 130, "left", LogicWidth, LogicHeight)
-	right0 := ca.MapHUDPixel(1560, 70, "right", LogicWidth, LogicHeight)
-	right1 := ca.MapHUDPixel(1800, 130, "right", LogicWidth, LogicHeight)
+	left0 := ca.MapHUDPixel(60, 60, "left", LogicWidth, LogicHeight)
+	left1 := ca.MapHUDPixel(360, 170, "left", LogicWidth, LogicHeight)
+	right0 := ca.MapHUDPixel(1560, 60, "right", LogicWidth, LogicHeight)
+	right1 := ca.MapHUDPixel(1860, 170, "right", LogicWidth, LogicHeight)
 	y0 := max(min(left0.Y, left1.Y), bounds.Min.Y)
 	y1 := min(max(left0.Y, left1.Y), bounds.Max.Y)
 	xL0 := max(min(left0.X, left1.X), bounds.Min.X)
@@ -85,19 +86,31 @@ func ClassifyScreen(img *image.RGBA, mode ContentMode) ScreenState {
 	xR0 := max(min(right0.X, right1.X), bounds.Min.X)
 	xR1 := min(max(right0.X, right1.X), bounds.Max.X)
 
-	var beadPix, total int
+	var beadPix, leftPix, rightPix, total int
 	for y := y0; y < y1; y++ {
-		for _, reg := range [2][2]int{{xL0, xL1}, {xR0, xR1}} {
+		for side, reg := range [2][2]int{{xL0, xL1}, {xR0, xR1}} {
 			for x := reg[0]; x < reg[1]; x++ {
 				c := img.RGBAAt(x, y)
-				if Classify(int(c.R), int(c.G), int(c.B)) != StateUnknown {
+				state := Classify(int(c.R), int(c.G), int(c.B))
+				// Dark scenery is common; only count a dark pixel when it has
+				// the cyan chroma of a real cooldown bead.
+				colored := state == StateLight || (state == StateDark && int(c.B)-int(c.R) >= 15 && int(c.B)-int(c.G) >= 8)
+				if colored {
 					beadPix++
+					if side == 0 {
+						leftPix++
+					} else {
+						rightPix++
+					}
 				}
 				total++
 			}
 		}
 	}
-	if total > 0 && float64(beadPix)/float64(total) > 0.08 {
+	// This is deliberately a bilateral fallback: it is only used when the
+	// template gate has no usable scene marker, so a colorful single-sided page
+	// must not open the fight state.
+	if total > 0 && leftPix*100 >= total*1/2 && rightPix*100 >= total*1/2 && beadPix*100 >= total*2 {
 		return ScreenFighting
 	}
 	return ScreenOther
