@@ -86,24 +86,16 @@ func ClassifyScreen(img *image.RGBA, mode ContentMode) ScreenState {
 	xR0 := max(min(right0.X, right1.X), bounds.Min.X)
 	xR1 := min(max(right0.X, right1.X), bounds.Max.X)
 
-	marker := func(r, g, b int) bool {
-		state := Classify(r, g, b)
-		if state == StateLight || (state == StateDark && b-r >= 15 && b-g >= 8) {
-			return true
-		}
-		// Newer skins render empty blue diamonds darker than the old
-		// calibrated LightBlueRange. Keep the fallback broad, but only for
-		// blue/cyan/gold chroma; red HP bars and scenery stay out.
-		blue := b >= 80 && b-r >= 25 && b-g >= 8
-		gold := r >= 150 && g >= 90 && g-b >= 25 && r-g <= 100
-		return blue || gold
-	}
 	var beadPix, leftPix, rightPix, total int
 	for y := y0; y < y1; y++ {
 		for side, reg := range [2][2]int{{xL0, xL1}, {xR0, xR1}} {
 			for x := reg[0]; x < reg[1]; x++ {
 				c := img.RGBAAt(x, y)
-				if marker(int(c.R), int(c.G), int(c.B)) {
+				state := Classify(int(c.R), int(c.G), int(c.B))
+				// Dark scenery is common; only count a dark pixel when it has
+				// the cyan chroma of a real cooldown bead.
+				colored := state == StateLight || (state == StateDark && int(c.B)-int(c.R) >= 15 && int(c.B)-int(c.G) >= 8)
+				if colored {
 					beadPix++
 					if side == 0 {
 						leftPix++

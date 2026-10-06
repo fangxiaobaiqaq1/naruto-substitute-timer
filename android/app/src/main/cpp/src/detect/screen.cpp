@@ -78,23 +78,16 @@ ScreenState ClassifyScreen(const RGBA* img, ContentMode mode) {
     const int xR1 = std::min(std::max(right0.X, right1.X), bounds.Max.X);
 
     const int regs[2][2] = {{xL0, xL1}, {xR0, xR1}};
-    const auto marker = [](int r, int g, int b) {
-        const BeadState state = Classify(r, g, b);
-        if (state == StateLight || (state == StateDark && b - r >= 15 && b - g >= 8)) return true;
-        // Newer skins render empty blue diamonds darker than the old
-        // calibrated LightBlueRange. Keep this fallback broad, but only for
-        // blue/cyan/gold chroma; red HP bars and scenery stay out.
-        const bool blue = b >= 80 && b - r >= 25 && b - g >= 8;
-        const bool gold = r >= 150 && g >= 90 && g - b >= 25 && r - g <= 100;
-        return blue || gold;
-    };
     int beadPix = 0, leftPix = 0, rightPix = 0, total = 0;
     for (int y = y0; y < y1; ++y) {
         for (int side = 0; side < 2; ++side) {
             const auto& reg = regs[side];
             for (int x = reg[0]; x < reg[1]; ++x) {
                 const Color c = img->RGBAAt(x, y);
-                if (marker(int(c.R), int(c.G), int(c.B))) {
+                const BeadState state = Classify(int(c.R), int(c.G), int(c.B));
+                const bool colored = state == StateLight ||
+                                     (state == StateDark && int(c.B) - int(c.R) >= 15 && int(c.B) - int(c.G) >= 8);
+                if (colored) {
                     beadPix++;
                     if (side == 0) leftPix++;
                     else rightPix++;

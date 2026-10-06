@@ -81,7 +81,7 @@ func TestClassifyScreenAcceptsNarrowBilateralHUDRows(t *testing.T) {
 		{1674, 155}, {1644, 155}, {1614, 155}, {1584, 155},
 	} {
 		center := ComputeContentArea(1024, 576, ModeStretch).MapHUDPixel(float64(p.X), float64(p.Y), map[bool]string{true: "right", false: "left"}[p.X > 1000], LogicWidth, LogicHeight)
-		draw.Draw(img, image.Rect(center.X-4, center.Y-4, center.X+4, center.Y+4), image.NewUniform(color.RGBA{20, 70, 140, 255}), image.Point{}, draw.Src)
+		draw.Draw(img, image.Rect(center.X-4, center.Y-4, center.X+4, center.Y+4), image.NewUniform(color.RGBA{112, 156, 220, 255}), image.Point{}, draw.Src)
 	}
 	if got := ClassifyScreen(img, ModeStretch); got != ScreenFighting {
 		t.Fatalf("narrow bilateral HUD row classified as %v", got)
