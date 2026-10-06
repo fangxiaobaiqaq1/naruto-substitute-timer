@@ -364,7 +364,7 @@ func (c *Catalog) DecideAt(img *image.RGBA, at time.Time) engine.GateDecision {
 	// animated, covered, or from a newer game skin. Keep the old color fallback
 	// as a conservative last resort; it opens fight with no forced profile, so
 	// the inner engine still chooses camp/duel from the current beads.
-	if fightID == "" && bestOther < minOther && detect.ClassifyScreen(img, c.mode) == detect.ScreenFighting {
+	if fightID == "" && detect.ClassifyScreen(img, c.mode) == detect.ScreenFighting {
 		return engine.GateDecision{Kind: engine.GateFight, SceneID: "fight", Confidence: max(bestRaw, minFight)}
 	}
 	// Result/selection overlays can leave the round label visible behind them.
