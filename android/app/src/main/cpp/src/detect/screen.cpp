@@ -62,12 +62,14 @@ ScreenState ClassifyScreen(const RGBA* img, ContentMode mode) {
     if (!supported) {
         return ScreenState::ScreenUnknown;
     }
-    // 豆子行：略放宽，使用与 HUD 豆位相同的 fixed-height + edge-anchor
+    // 豆子行：覆盖名字/血条下方的一整段窄带。真实帧的标题、系统
+    // 浮层或缩放可能让豆子上下漂几像素，不能只扫旧的 80~98 窄带。
+    // 这是 HUD ROI，不是中央 16:9 场景 ROI；按 fixed-height + edge-anchor
     // 映射，超宽屏不会把扫描带横向拉伸到中央场景。
-    const Point left0 = ca.MapHUDPixel(80, 70, false, LogicWidth, LogicHeight);
-    const Point left1 = ca.MapHUDPixel(340, 130, false, LogicWidth, LogicHeight);
-    const Point right0 = ca.MapHUDPixel(1560, 70, true, LogicWidth, LogicHeight);
-    const Point right1 = ca.MapHUDPixel(1800, 130, true, LogicWidth, LogicHeight);
+    const Point left0 = ca.MapHUDPixel(60, 60, false, LogicWidth, LogicHeight);
+    const Point left1 = ca.MapHUDPixel(360, 170, false, LogicWidth, LogicHeight);
+    const Point right0 = ca.MapHUDPixel(1560, 60, true, LogicWidth, LogicHeight);
+    const Point right1 = ca.MapHUDPixel(1860, 170, true, LogicWidth, LogicHeight);
     const int y0 = std::max(std::min(left0.Y, left1.Y), bounds.Min.Y);
     const int y1 = std::min(std::max(left0.Y, left1.Y), bounds.Max.Y);
     const int xL0 = std::max(std::min(left0.X, left1.X), bounds.Min.X);
@@ -76,19 +78,27 @@ ScreenState ClassifyScreen(const RGBA* img, ContentMode mode) {
     const int xR1 = std::min(std::max(right0.X, right1.X), bounds.Max.X);
 
     const int regs[2][2] = {{xL0, xL1}, {xR0, xR1}};
-    int beadPix = 0, total = 0;
+    int beadPix = 0, leftPix = 0, rightPix = 0, total = 0;
     for (int y = y0; y < y1; ++y) {
-        for (const auto& reg : regs) {
+        for (int side = 0; side < 2; ++side) {
+            const auto& reg = regs[side];
             for (int x = reg[0]; x < reg[1]; ++x) {
                 const Color c = img->RGBAAt(x, y);
-                if (Classify(int(c.R), int(c.G), int(c.B)) != StateUnknown) {
+                const BeadState state = Classify(int(c.R), int(c.G), int(c.B));
+                const bool colored = state == StateLight ||
+                                     (state == StateDark && int(c.B) - int(c.R) >= 15 && int(c.B) - int(c.G) >= 8);
+                if (colored) {
                     beadPix++;
+                    if (side == 0) leftPix++;
+                    else rightPix++;
                 }
                 total++;
             }
         }
     }
-    if (total > 0 && static_cast<double>(beadPix) / static_cast<double>(total) > 0.08) {
+    // This is deliberately bilateral: it is a fallback when template scene
+    // markers are unavailable, not permission for a colorful one-sided page.
+    if (total > 0 && leftPix * 100 >= total / 2 && rightPix * 100 >= total / 2 && beadPix * 100 >= total * 2) {
         return ScreenState::ScreenFighting;
     }
     return ScreenState::ScreenOther;

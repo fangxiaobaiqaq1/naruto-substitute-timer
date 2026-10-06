@@ -444,6 +444,13 @@ engine::GateDecision Catalog::DecideAt(const RGBA* img, TimeNs at) {
         d.RoundOpening = openingScore > 0 && openingLayout == fightLayout;
         return d;
     }
+    // A clear bilateral HUD can be visible while the round-number template is
+    // animated, covered, or from a newer game skin. Keep the color classifier
+    // as a conservative last resort; no profile is forced, so RGB can still
+    // choose camp/duel from the current beads.
+    if (fightID.empty() && bestOther < minOther && detect::ClassifyScreen(img, mode) == detect::ScreenState::ScreenFighting) {
+        return GateDecision{engine::GateFight, "fight", std::max(bestRaw, minFight), "", false};
+    }
     // Result/selection overlays can leave the round label visible behind them.
     // Two separate accepted page controls establish the foreground page even
     // when the old label is within the normal ambiguity margin.
@@ -748,7 +755,7 @@ engine::GateDecision ColorGate::DecideAt(const RGBA* img, TimeNs /*at*/) {
     if (img == nullptr) return GateDecision{engine::GateUncertain, "", 0, "", false};
     switch (detect::ClassifyScreen(img, Mode)) {
         case detect::ScreenState::ScreenFighting:
-            return GateDecision{engine::GateFight, "color-fight", 1, "", false};
+            return GateDecision{engine::GateFight, "fight", 1, "", false};
         case detect::ScreenState::ScreenBlank:
             return GateDecision{engine::GateBlank, "blank", 1, "", false};
         case detect::ScreenState::ScreenUnknown:
