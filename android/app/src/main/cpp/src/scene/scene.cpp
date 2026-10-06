@@ -448,7 +448,7 @@ engine::GateDecision Catalog::DecideAt(const RGBA* img, TimeNs at) {
     // animated, covered, or from a newer game skin. Keep the color classifier
     // as a conservative last resort; no profile is forced, so RGB can still
     // choose camp/duel from the current beads.
-    if (fightID.empty() && detect::ClassifyScreen(img, mode) == detect::ScreenState::ScreenFighting) {
+    if (fightID.empty() && bestOther < minOther && detect::ClassifyScreen(img, mode) == detect::ScreenState::ScreenFighting) {
         return GateDecision{engine::GateFight, "fight", std::max(bestRaw, minFight), "", false};
     }
     // Result/selection overlays can leave the round label visible behind them.
