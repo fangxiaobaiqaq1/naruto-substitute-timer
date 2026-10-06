@@ -559,9 +559,12 @@ class MainActivity : Activity() {
                 else -> "—"
             }
             val size = if (st.lastWidth > 0) " ${st.lastWidth}×${st.lastHeight}" else ""
+            val scene = st.lastScene.ifEmpty { "—" }
+            val uncertain = if (st.lastUncertain) " · uncertain" else ""
             String.format(
-                Locale.ROOT, "识别：已分析 %d 帧 · 丢弃 %d · 平均 %.1fms · %s%s",
+                Locale.ROOT, "识别：已分析 %d 帧 · 丢弃 %d · 平均 %.1fms · %s%s · scene=%s · gate=%.3f%s",
                 st.analyzedFrames, st.droppedFrames, st.avgAnalyzeMillis, method, size,
+                scene, st.lastGateScore, uncertain,
             )
         }
         loopText.setTextColor(statusColor(FrameLoop.running, false))
