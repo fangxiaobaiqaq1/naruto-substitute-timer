@@ -360,13 +360,6 @@ func (c *Catalog) DecideAt(img *image.RGBA, at time.Time) engine.GateDecision {
 			RoundOpening: openingScore > 0 && openingLayout == fightLayout,
 		}
 	}
-	// A clear bilateral HUD can be visible while the round-number template is
-	// animated, covered, or from a newer game skin. Keep the old color fallback
-	// as a conservative last resort; it opens fight with no forced profile, so
-	// the inner engine still chooses camp/duel from the current beads.
-	if fightID == "" && bestOther < minOther && detect.ClassifyScreen(img, c.mode) == detect.ScreenFighting {
-		return engine.GateDecision{Kind: engine.GateFight, SceneID: "fight", Confidence: max(bestRaw, minFight)}
-	}
 	// Result/selection overlays can leave the round label visible behind them.
 	// Two separate accepted page controls establish the foreground page even
 	// when the old label is within the normal ambiguity margin.
@@ -839,7 +832,7 @@ func (g ColorGate) Decide(img *image.RGBA) engine.GateDecision {
 	}
 	switch detect.ClassifyScreen(img, g.Mode) {
 	case detect.ScreenFighting:
-		return engine.GateDecision{Kind: engine.GateFight, SceneID: "fight", Confidence: 1}
+		return engine.GateDecision{Kind: engine.GateFight, SceneID: "color-fight", Confidence: 1}
 	case detect.ScreenBlank:
 		return engine.GateDecision{Kind: engine.GateBlank, SceneID: "blank", Confidence: 1}
 	case detect.ScreenUnknown:
