@@ -561,7 +561,7 @@ class Session(
     private fun clockColor(v: List<Double>): Int = if (v.isEmpty()) TimerColors.CLOCK_IDLE
     else if (SideClock.displayTenths(v[0]) <= 30) TimerColors.CLOCK_WARN else TimerColors.CLOCK_LIVE
 
-    private fun fHoldLocked(): Boolean = lastFrame?.let { it.hold || it.err != null } == true
+    private fun fHoldLocked(): Boolean = lastFrame?.let { it.hold || it.err != null || it.uncertain } == true
 
     private fun isHoldScene(s: String): Boolean = s.isNotEmpty() && s in settings.holdScenes
     private fun isEndScene(s: String): Boolean = s.isNotEmpty() && s in settings.endScenes
