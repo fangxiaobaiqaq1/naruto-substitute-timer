@@ -225,17 +225,18 @@ class MiniTimerView(context: Context) : View(context) {
         max(dp(MIN_BUTTON_WIDTH_DP), textW(label, textSize(BUTTON_TEXT), false) + 2 * dp(BUTTON_PAD_DP))
 
     private fun collapsedText(s: OverlayState): String {
+        val mode = s.sideModeText.ifEmpty { "我方·自动·待认边" }
         val value = s.primaryText.takeIf { it.isNotEmpty() && it != "—" } ?: "待机"
         if (s.showBothSides) {
             val left = s.leftText.takeIf { it.isNotEmpty() && it != "—" } ?: "—"
             val right = s.rightText.takeIf { it.isNotEmpty() && it != "—" } ?: "—"
-            return "左$left 右$right"
+            return "$mode · 左$left 右$right"
         }
         if (s.dual) {
             val alternate = s.altText.takeIf { it.isNotEmpty() } ?: "—"
-            return "$value / $alternate"
+            return "$mode · $value / $alternate"
         }
-        return value
+        return "$mode · $value"
     }
 
     private fun prepareButtons(s: OverlayState) {
