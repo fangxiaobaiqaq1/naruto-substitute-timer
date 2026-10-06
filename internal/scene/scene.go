@@ -786,7 +786,7 @@ func mapAnchoredPoint(ca detect.ContentArea, x, y float64, refW, refH int, ancho
 	case "right":
 		px = float64(ca.X+ca.W) - (float64(refW)-logicalX)*s
 	case "center":
-		px = float64(ca.X+ca.W)/2 + (logicalX-float64(refW)/2)*s
+		px = float64(ca.X) + float64(ca.W)/2 + (logicalX-float64(refW)/2)*s
 	default: // left
 		px = float64(ca.X) + logicalX*s
 	}
