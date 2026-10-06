@@ -30,6 +30,9 @@ object FrameLoop {
         val lastMethod: Int,
         val lastWidth: Int,
         val lastHeight: Int,
+        val lastScene: String,
+        val lastGateScore: Double,
+        val lastUncertain: Boolean,
     )
 
     private val started = AtomicBoolean(false)
@@ -131,7 +134,11 @@ object FrameLoop {
 
     fun stats(): Stats {
         val n = analyzed.get()
-        return Stats(n, dropped.get(), if (n == 0L) 0.0 else totalNs.get().toDouble() / n / 1e6, lastMethod, lastWidth, lastHeight)
+        val r = lastResult
+        return Stats(
+            n, dropped.get(), if (n == 0L) 0.0 else totalNs.get().toDouble() / n / 1e6,
+            lastMethod, lastWidth, lastHeight, r?.scene.orEmpty(), r?.gateScore ?: 0.0, r?.uncertain == true,
+        )
     }
 
     private fun analyze(frame: CapturedFrame): AnalysisResult? {
