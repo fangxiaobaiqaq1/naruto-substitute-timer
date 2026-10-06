@@ -704,7 +704,8 @@ Point mapAnchoredPoint(const detect::ContentArea& ca, double x, double y, int re
     if (anchor == "right") {
         px = static_cast<double>(ca.X + ca.W) - (static_cast<double>(refW) - logicalX) * s;
     } else if (anchor == "center") {
-        px = static_cast<double>(ca.X + ca.W) / 2.0 + (logicalX - static_cast<double>(refW) / 2.0) * s;
+        px = static_cast<double>(ca.X) + static_cast<double>(ca.W) / 2.0 +
+             (logicalX - static_cast<double>(refW) / 2.0) * s;
     }
     return Pt(static_cast<int>(px), ca.Y + static_cast<int>(y * static_cast<double>(refH) * s));
 }
