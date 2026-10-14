@@ -204,6 +204,19 @@ class Session(
             else -> "左${leftClock.eventCount()}次 / 右${rightClock.eventCount()}次"
         }
         val currentBeads = lastFrame?.frameBeads.orEmpty()
+        // Missing visual evidence must not stop an already-confirmed cooldown.
+        // Without a clock, expose why we are waiting instead of the pill's generic "—".
+        val opponentLeft = player == "right"
+        val primary = when {
+            opp.isNotEmpty() -> SideClock.formatCD(opp)
+            lastFrame == null -> "待采集"
+            fHoldLocked() -> "待识别"
+            !isFighting || lastFrame?.fighting != true -> "待机"
+            player.isEmpty() -> "待认边"
+            !sideObservable(currentBeads, opponentLeft) ||
+                sideBeads(currentBeads, opponentLeft).size != expectedSlotsLocked(opponentLeft) -> "待识别"
+            else -> "待替身"
+        }
         val modeText = when (settings.playerSide) {
             "left" -> "我方·左"
             "right" -> "我方·右"
@@ -213,7 +226,7 @@ class Session(
         }
         OverlayState(
             revision, tag, if (opponentNinja.isEmpty()) TimerColors.TAG_IDLE else TimerColors.TAG_MINE,
-            modeText, SideClock.formatCD(opp), clockColor(opp), event, dual, alt,
+            modeText, primary, clockColor(opp), event, dual, alt,
             if (alt == "—" || alt == "就绪" || alt.isEmpty()) TimerColors.CLOCK_IDLE else TimerColors.CLOCK_LIVE,
             SideClock.formatCD(left), clockColor(left), SideClock.formatCD(right), clockColor(right),
             "${sceneName(scene, layoutProfile)} · ${when {
@@ -424,7 +437,6 @@ class Session(
     }
 
     private fun observeBeadsLocked(f: AnalysisResult) {
-        if (f.duplicate) return
         val at = f.capturedAtNanos
         if (at <= 0L) {
             invalidateLocked(at)
@@ -444,6 +456,13 @@ class Session(
         val rc = readyCount(beads, false)
         val leftGood = sideObservable(beads, true) && sideBeads(beads, true).size == expectedSlotsLocked(true)
         val rightGood = sideObservable(beads, false) && sideBeads(beads, false).size == expectedSlotsLocked(false)
+        if (f.duplicate) {
+            // Fresh acquisitions with identical pixels maintain continuity,
+            // but never add a confirmation vote. onHeartbeat remains a no-op.
+            if (!leftGood || !leftClock.holdObservation(lc, at)) leftClock.invalidateObservation(at)
+            if (!rightGood || !rightClock.holdObservation(rc, at)) rightClock.invalidateObservation(at)
+            return
+        }
 
         if (roundBaselineLeft) {
             if (leftGood) {
@@ -573,6 +592,8 @@ class Session(
         "queue" -> "匹"
         "pick" -> "选"
         "ban" -> "禁"
+        "blank" -> "画面遮挡"
+        "unsupported-resolution" -> "画面比例未校准"
         else -> s.ifEmpty { "待识别" }
     }
 

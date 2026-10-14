@@ -94,7 +94,7 @@ func TestSasukeXiayinRowBothSidesAndLayouts(t *testing.T) {
 						}
 						// Extra energy bar at the old row, beans below it.
 						draw.Draw(img, image.Rect(p.X-int(7*scale), p.Y-1, p.X+int(7*scale)+1, p.Y+2), image.NewUniform(color.RGBA{180, 50, 240, 255}), image.Point{}, draw.Src)
-						y := int(math.Round((p.LY + 18) * float64(area.H) / detect.LogicHeight))
+						y := int(math.Round((p.LY/detect.HUDReferenceHeight*540 + 9) * scale))
 						c := color.RGBA{200, 50, 240, 255}
 						if p.Idx == 3 {
 							c = color.RGBA{40, 15, 80, 255}
@@ -114,7 +114,7 @@ func TestSasukeXiayinRowBothSidesAndLayouts(t *testing.T) {
 								}
 								continue
 							}
-							wantY := int(math.Round((p.LY + 18) * float64(area.H) / detect.LogicHeight))
+							wantY := int(math.Round((p.LY/detect.HUDReferenceHeight*540 + 9) * scale))
 							if b.X != p.X || b.Y != wantY || b.Unknown || b.Lit != (p.Idx < 3) {
 								t.Fatalf("frame %d: shifted core %+v; expected y=%d", i, b, wantY)
 							}
@@ -126,7 +126,7 @@ func TestSasukeXiayinRowBothSidesAndLayouts(t *testing.T) {
 					fresh.Prefer(profile)
 					for j, b := range fresh.AnalyzeAt(img, at).Beads {
 						if b.Y != positions[j].Y {
-							t.Fatal("unverified fresh name shifted the row")
+							t.Fatalf("unverified fresh name shifted the row: got=%+v original=%+v", b, positions[j])
 						}
 					}
 				})

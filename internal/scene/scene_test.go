@@ -188,10 +188,10 @@ type scoreSequence struct {
 	index  int
 }
 
-func (m *scoreSequence) Match(match.Query) (match.Score, error) {
+func (m *scoreSequence) Match(q match.Query) (match.Score, error) {
 	v := m.values[m.index]
 	m.index++
-	return match.Score{Value: v}, nil
+	return match.Score{Value: v, Peak: q.ROI.Min}, nil
 }
 
 func TestCatalogScoresStayBoundToAcceptedTemplate(t *testing.T) {

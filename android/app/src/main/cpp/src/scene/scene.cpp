@@ -163,7 +163,25 @@ bool matchIn(const Catalog& c, const RGBA& img, const Gray& gray, const Rect& ro
     q.Template = &t.gray;
     q.Mask = maskOrNull(t.mask);
     q.Prepared = t.ncc.get();
-    return c.matcher.Match(q, s);
+    if (!c.matcher.Match(q, s)) return false;
+    if (!t.spec.ContinuationOnly || t.spec.Anchor != "screen" || s.Value < .65 || s.Value >= t.spec.Threshold) return true;
+    const Point peak = s.Peak;
+    for (int dw = -2; dw <= 2; ++dw) {
+        for (int dh = -2; dh <= 2; ++dh) {
+            const int w = t.gray.Bounds().Dx() + dw, h = t.gray.Bounds().Dy() + dh;
+            if ((dw == 0 && dh == 0) || w < 4 || h < 4) continue;
+            Gray g = match::ScaleGray(&t.gray, w, h);
+            Gray mask;
+            if (!t.mask.Nil()) mask = match::ScaleGray(&t.mask, w, h);
+            q.ROI = Rect{peak, peak.Add(Pt(w, h))}.Inset(-2).Intersect(roi);
+            q.Template = &g;
+            q.Mask = maskOrNull(mask);
+            q.Prepared = nullptr;
+            match::Score candidate;
+            if (c.matcher.Match(q, candidate) && candidate.Value > s.Value) s = candidate;
+        }
+    }
+    return true;
 }
 
 // scoreHinted searches the whole ROI and remembers the peak when the template
@@ -181,7 +199,7 @@ Hit scoreHinted(Catalog& c, const RGBA& img, const Gray& gray, const preparedTem
     } else if (!t.windowed) {
         c.setHint(t.index, Point{}, false);  // Only a full-ROI miss forgets the peak.
     }
-    return Hit{t.spec.ID, t.spec.Scene, s.Value};
+    return Hit{t.spec.ID, t.spec.Scene, s.Value, Rect{s.Peak, s.Peak.Add(t.gray.Bounds().Size())}};
 }
 
 // scoreOne is the exhaustive form used by diagnostics; it never reads hints.
@@ -189,7 +207,7 @@ Hit scoreOne(const Catalog& c, const RGBA& img, const Gray& gray, const prepared
     if (t.gray.Nil()) return Hit{t.spec.ID, t.spec.Scene, 0};
     match::Score s;
     if (!matchIn(c, img, gray, t.roi, t, s)) return Hit{t.spec.ID, t.spec.Scene, 0};
-    return Hit{t.spec.ID, t.spec.Scene, s.Value};
+    return Hit{t.spec.ID, t.spec.Scene, s.Value, Rect{s.Peak, s.Peak.Add(t.gray.Bounds().Size())}};
 }
 
 // scorer converts only searched rectangles, not the animation/background of
@@ -303,7 +321,7 @@ std::shared_ptr<Catalog> Load(const config::Config& cfg, std::string* err) {
     for (const auto& id : sc.HoldScenes) out->holdSet.insert(id);
 
     for (TemplateSpec spec : man.Templates) {
-        if (spec.Anchor != "" && spec.Anchor != "legacy" && spec.Anchor != "center" && spec.Anchor != "left" && spec.Anchor != "right") {
+        if (spec.Anchor != "" && spec.Anchor != "legacy" && spec.Anchor != "screen" && spec.Anchor != "center" && spec.Anchor != "left" && spec.Anchor != "right") {
             if (err) *err = "scene: template " + spec.ID + ": unsupported anchor " + quote(spec.Anchor);
             return nullptr;
         }
@@ -522,9 +540,9 @@ std::pair<detect::ContentArea, bool> Catalog::contentArea(const RGBA* img) const
     return detect::ResolveContentArea(img, mode, w, h, layoutCfg.AutoAspectTolerance);
 }
 
-// SupportsFight checks a separate, static battle control. This evidence cannot
-// establish a scene on its own; Gated also requires a previously identified
-// profile and fresh readable beads in both HUD corners.
+// SupportsFight checks a separate, static battle control for an established
+// match. A cold start instead needs StartFight's independent pair of controls
+// plus Gated's complete, legal current HUD.
 bool Catalog::SupportsFight(const RGBA* img, const std::string& profile) {
     if (img == nullptr) return false;
     auto [ca, supported] = contentArea(img);
@@ -532,9 +550,50 @@ bool Catalog::SupportsFight(const RGBA* img, const std::string& profile) {
     Scorer score(*this, img);
     for (const preparedTemplate& t : prepare(ca)) {
         if (!t.spec.ContinuationOnly || (!t.spec.LayoutProfile.empty() && t.spec.LayoutProfile != profile)) continue;
-        if (score(t).Value >= t.spec.Threshold) return true;
+        Hit hit;
+        if (scoreAtHint(*this, img, score, t, hit) || score(t).Value >= t.spec.Threshold) return true;
     }
     return false;
+}
+
+// StartFight is an alternative to a covered round/toolbar label, not a relaxed
+// bean-color gate. Both controls must pass their original template thresholds
+// in independent regions. Any accepted other-page or competing-profile marker
+// vetoes entry. Gated must verify both complete bean rows before calling this.
+engine::GateDecision Catalog::StartFight(const RGBA* img, const std::string& profile) {
+    const engine::GateDecision blocked{engine::GateUncertain, "", 0, "", false};
+    if (profile != "camp" && profile != "duel") return blocked;
+    auto [ca, supported] = contentArea(img);
+    if (!supported) return blocked;
+    const std::vector<preparedTemplate>& prepared = prepare(ca);
+    const std::vector<Hit> hits = ScoreAll(img);
+    std::vector<Rect> regions;
+    std::string id;
+    double confidence = 1.0;
+    for (size_t i = 0; i < prepared.size(); ++i) {
+        const preparedTemplate& t = prepared[i];
+        if (hits[i].Value < t.spec.Threshold) continue;
+        if (!fightSet.count(t.spec.Scene) || (!t.spec.LayoutProfile.empty() && t.spec.LayoutProfile != profile)) {
+            return blocked;
+        }
+        if (!t.spec.ContinuationOnly) continue;
+        const Rect bounds = hits[i].Bounds;
+        bool independent = !bounds.Empty();
+        for (const Rect& previous : regions) {
+            const Rect overlap = previous.Intersect(bounds);
+            if (overlap.Dx() * overlap.Dy() * 4 >
+                std::min(previous.Dx() * previous.Dy(), bounds.Dx() * bounds.Dy())) {
+                independent = false;
+            }
+        }
+        if (independent) {
+            regions.push_back(bounds);
+            id = t.spec.Scene;
+            confidence = std::min(confidence, hits[i].Value);
+        }
+    }
+    if (regions.size() < 2 || confidence < cfg.MinFightScore) return blocked;
+    return engine::GateDecision{engine::GateFight, id, confidence, profile, false};
 }
 
 const std::vector<preparedTemplate>& Catalog::prepare(const detect::ContentArea& ca) {
@@ -603,10 +662,11 @@ preparedTemplate prepareOne(const detect::ContentArea& ca, const template_& t) {
     double scale = t.spec.TemplateScale;
     if (scale == 0) scale = 1;
     double twScale = static_cast<double>(ca.W) / static_cast<double>(t.refW);
-    const double thScale = static_cast<double>(ca.H) / static_cast<double>(t.refH);
+    double thScale = static_cast<double>(ca.H) / static_cast<double>(t.refH);
     if (!t.spec.Anchor.empty() && t.spec.Anchor != "legacy") {
-        // NGUI HUD widgets keep their physical size with root height.
-        twScale = thScale;
+        // Fit the HUD reference without stretching widgets on 16:10 tablets.
+        twScale = ca.HUDScale(t.refW, t.refH);
+        thScale = twScale;
     }
     int tw = static_cast<int>(std::round(static_cast<double>(t.gray.Bounds().Dx()) * twScale * scale));
     int th = static_cast<int>(std::round(static_cast<double>(t.gray.Bounds().Dy()) * thScale * scale));
@@ -683,7 +743,8 @@ Rect mapRect(const detect::ContentArea& ca, const config::NormalizedRect& r, con
              int refW, int refH) {
     Point p0;
     Point p1;
-    if (anchor.empty() || anchor == "legacy") {
+    // Screen-relative control search, with fitted (not stretched) HUD templates.
+    if (anchor.empty() || anchor == "legacy" || anchor == "screen") {
         p0 = ca.Map(r.X * detect::LogicWidth, r.Y * detect::LogicHeight);
         p1 = ca.Map((r.X + r.Width) * detect::LogicWidth, (r.Y + r.Height) * detect::LogicHeight);
     } else {
@@ -698,7 +759,7 @@ Rect mapRect(const detect::ContentArea& ca, const config::NormalizedRect& r, con
 
 Point mapAnchoredPoint(const detect::ContentArea& ca, double x, double y, int refW, int refH,
                        const std::string& anchor) {
-    const double s = static_cast<double>(ca.H) / static_cast<double>(refH);
+    const double s = ca.HUDScale(refW, refH);
     const double logicalX = x * static_cast<double>(refW);
     double px = static_cast<double>(ca.X) + logicalX * s;
     if (anchor == "right") {

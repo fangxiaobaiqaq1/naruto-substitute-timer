@@ -46,6 +46,32 @@ func TestMapHUDHonorsLetterboxOrigin(t *testing.T) {
 	}
 }
 
+func TestHUDScaleFitsTabletsWithoutMovingTopAnchor(t *testing.T) {
+	for _, size := range []image.Point{{1516, 948}, {2880, 1800}, {2800, 1752}, {1920, 1200}} {
+		ca := ContentArea{X: 23, Y: 31, W: size.X, H: size.Y}
+		wide := ContentArea{X: ca.X, Y: ca.Y, W: ca.W, H: ca.W * 9 / 16}
+		for _, side := range []string{"left", "right"} {
+			p := ca.MapHUDPixel(172, 103, side, HUDReferenceWidth, HUDReferenceHeight)
+			q := wide.MapHUDPixel(172, 103, side, HUDReferenceWidth, HUDReferenceHeight)
+			if d := p.Sub(q); d.X < -1 || d.X > 1 || d.Y < -1 || d.Y > 1 {
+				t.Fatalf("%v %s: tablet=%v 16:9=%v; HUD must fit width and stay at the top", size, side, p, q)
+			}
+		}
+		if got, want := ca.HUDScale(1600, 900), float64(ca.W)/1600; got != want {
+			t.Fatalf("%v scale=%v, want %v", size, got, want)
+		}
+	}
+	for _, ca := range []ContentArea{{}, {W: 1600}, {H: 900}, {W: -1, H: 900}} {
+		if ca.HUDScale(1600, 900) != 0 {
+			t.Fatalf("invalid area has nonzero HUD scale: %+v", ca)
+		}
+	}
+	ca := ContentArea{W: 1600, H: 900}
+	if ca.HUDScale(0, 900) != 0 || ca.HUDScale(1600, 0) != 0 {
+		t.Fatal("invalid reference has nonzero HUD scale")
+	}
+}
+
 func TestLegacyLayoutUsesHUDAnchors(t *testing.T) {
 	pos := Layout(3440, 1440, ModeStretch, []Bead{
 		{Side: "left", LX: 155, LY: 101},

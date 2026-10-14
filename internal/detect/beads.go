@@ -40,27 +40,18 @@ type ContentArea struct {
 	X, Y, W, H int
 }
 
-// ComputeContentArea 根据客户区尺寸与模式计算游戏画面实际区域。
+// ComputeContentArea 根据客户区尺寸与模式计算游戏画面实际区域。ModeAuto 只有尺寸时保留全屏；
+// 需要识别黑边时使用 ResolveContentArea。
 func ComputeContentArea(clientW, clientH int, mode ContentMode) ContentArea {
 	ca := ContentArea{X: 0, Y: 0, W: clientW, H: clientH}
 	if clientW <= 0 || clientH <= 0 {
 		return ca
 	}
 
-	letterbox := false
-	switch mode {
-	case ModeStretch:
-		letterbox = false
-	case ModeLetterbox:
-		letterbox = true
-	default: // ModeAuto
-		// 客户区宽高比与 16:9 偏差小于 1.5% 视为铺满，否则视为有黑边。
-		ratio := float64(clientW) / float64(clientH)
-		if ratio < 16.0/9.0*0.985 || ratio > 16.0/9.0*1.015 {
-			letterbox = true
-		}
-	}
-	if !letterbox {
+	// Size-only callers cannot tell native ultrawide HUD from centered bars.
+	// Auto therefore keeps the full surface; ResolveContentArea is the only
+	// path that may choose letterbox after inspecting pixels.
+	if mode != ModeLetterbox {
 		return ca
 	}
 

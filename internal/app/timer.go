@@ -125,6 +125,24 @@ func (c *SideClock) InvalidateObservation(capturedAt time.Time) {
 	c.clearPending()
 }
 
+// HoldObservation maintains continuity only for a newly acquired, identical
+// pixel frame matching the latest observed count. It never adds a confirmation
+// vote, repairs an expired gap, or accepts a synthetic heartbeat/replayed time.
+func (c *SideClock) HoldObservation(ready int, capturedAt time.Time) bool {
+	if capturedAt.IsZero() || !c.hasPrev || c.validAt.IsZero() || !capturedAt.After(c.observedAt) {
+		return false
+	}
+	expected := c.lastReady
+	if c.pendingHits > 0 {
+		expected = c.pendingReady
+	}
+	if ready != expected || (c.maxGap > 0 && capturedAt.Sub(c.validAt) > c.maxGap) {
+		return false
+	}
+	c.observedAt, c.validAt = capturedAt, capturedAt
+	return true
+}
+
 func (c *SideClock) clearPending() {
 	c.pendingReady = 0
 	c.pendingAt = time.Time{}

@@ -9,7 +9,7 @@
 - 无 AndroidX、无第三方 Kotlin 依赖（纯 framework API）。C++ 只依赖 vendored nlohmann/json。
 - **忠实移植原则（继承本来的思想）**：算法、阈值、ROI、常量、模板名、判定顺序逐行对应 Go；
   保留 Go 里解释"为什么"的中文注释。只删掉 Windows/桌面/OCR(onnx, hudtext)/更新/诊断录制。
-  测试暂不写。
+  识别烟测使用 hostcheck；事件验收必须再经过 JNI 解码和真实 Session/SideClock，不能以静态豆数替代。
 
 ---
 
@@ -49,6 +49,8 @@ android/
 | internal/detect/beads.go | src/detect/beads.cpp |
 | internal/detect/chrome.go | src/detect/chrome.cpp |
 | internal/detect/content.go | src/detect/content.cpp |
+| internal/detect/hud.go | src/detect/beads.cpp（ContentArea HUD 方法） |
+| internal/detect/hud_anchor.go | src/detect/hud_anchor.cpp |
 | internal/detect/screen.go | src/detect/screen.cpp |
 | internal/layout/transform.go | src/layout/transform.cpp |
 
@@ -58,6 +60,11 @@ android/
   `detect::ParseMode/ComputeContentArea/ResolveContentArea/ContentArea::Map/DefaultBeads/DuelBeads/Layout/
   Classify/IsGold/ApplyIncrementRule/IsLegalPrefix/IsPossiblePrefix/CountLight/ClassifyScreen/GuessTopChrome/StripChrome`、
   三个 `ColorRange` 常量；`layout::New` + `Transform` 方法。
+- HUD 契约：`ContentArea::HUDScale(refW, refH)` 返回 `min(W/refW, H/refH)`（非正尺寸为 0）；
+  `MapHUDPixel/Normalized` 保持顶部及左右锚点，不把游戏装饰边框裁成黑边。豆核心、忍者名/头像、
+  身份模板和非 legacy 场景模板必须用同一缩放；16:10 以宽为限，宽屏以高为限。
+- `HUDRowOffset(img, area, first, right, profile)` 仅在宽屏以当前生命条固定外端的三条连续斜边扫描线求 X 偏移；
+  左右独立，缺失/遮挡/异常不修正，不从豆亮度寻峰，不改变 Y、间距或颜色判定阈值。
 - 依赖：nt/image.h、nt/assets.h。
 - 要点：NCC 的整数前缀和、`uint32` 点积分段（maxDotRun）、浮点公式与运算顺序必须与 Go 相同；
   `ToGrayAsset` 走 Go 通用路径（NRGBA 预乘 16 位 → >>8 → 整数亮度，见 image.h `GoLumaFromNRGBA`）。
@@ -83,7 +90,10 @@ android/
 
 - 头文件：`nt/scene.h`（本模块拥有）。
 - 公开 API：`scene::Load(cfg, err)`、`scene::NewGate(cfg, description, err)`、`Catalog`（`engine::Gate` +
-  `engine::FightSupportGate`：`DecideAt`、`SupportsFight`、`ScoreAll`）、`ColorGate`。
+  `engine::FightSupportGate` + `engine::HUDStartGate`：`DecideAt`、`SupportsFight`、`StartFight`、`ScoreAll`）、`ColorGate`。
+- 回合标签被浮窗遮住时，`StartFight` 要求当前帧两个独立区域的战斗控件均通过原模板阈值及 MinFightScore；
+  其他页或竞争布局的已接受模板一律否决。`Gated` 还必须验证两侧完整、合法、高置信豆排与槽数。
+  单个控件只允许延续已确认对局，不能冷启动；备用入口不推断 RoundOpening，也不凭首次豆数开钟。
 - 资源：`AssetStore::Text("templates/manifest.json")`；模板/掩膜 `AssetStore::Image("templates/" + file)`，
   灰度一律 `match::ToGrayAsset`。Android 永远走 Go 的「内置清单」分支（`cfg.Scene.Manifest` 只用于判断是否为默认值）。
 - 依赖：match、detect、engine（GateDecision 等类型）、config、nt/parallel.h（forEach）。
@@ -134,8 +144,10 @@ android/
 
 - 头文件：`nt/engine.h`、`nt/factory.h`、`nt/frame.h`（本模块拥有）。
 - 公开 API：`engine::DefaultLayout`、`ConfiguredLayout`、`Gated`、`NewGated/NewGatedWithGuess`、`pixelHash`、
-  `hasBilateralHUD`、`readyBeads`；`factory::FromApp/DefaultConfig/New`；`frame::Pipeline`（jni 唯一入口）、
+  `hasBilateralHUD`、`hasCompleteHUD`、`readyBeads`；`factory::FromApp/DefaultConfig/New`；`frame::Pipeline`（jni 唯一入口）、
   `frameFingerprint`、`AnalyzeImage`、`DedupedAnalysis`、`MethodName`。
+- `ConfiguredLayout::PositionsInImage(profile, img, area)` 在内置默认四槽标定上应用当前帧 `HUDRowOffset`；
+  显式用户标定及仅尺寸的 `PositionsIn/PositionsFor` 保持原值。六槽扩展必须保留首豆的 X 偏移。
 - `factory::New` = `NewGatedWithGuess(scene::NewGate(cfg.App), rgb::Engine(ConfiguredLayout(mode, cfg.App.Layout), cfg.App.Vision), adapt(identity::Guesser(cfg.App)))`。
   hudtext/OCR 包装（Go `NewLive`）不移植；`Result.TextStatus/TextError` 恒空。
 - `Pipeline::Analyze(img, started, capturedAt, method)` = `DedupedAnalysis::analyze` → 交付判定（成功帧 `Sequence++`，
@@ -160,6 +172,11 @@ android/
   - `NinjaRules.dualCooldown/normalize/shortLabel`。
 - 依赖：`AnalysisResult`/`FrameBead`（NativeCore.kt）、`Settings`。
 - 帧时间：用 `AnalysisResult.capturedAtNanos`（Go f.CapturedAt），不是分析完成时间。
+- 新采集到的 `Duplicate` 只通过 `SideClock.holdObservation(ready, at)` 维持最近一次完整观测的有效时间，
+  不增加确认票、不重新创建基线、不连接已超时的采集间隙；乱序时间拒绝。`onHeartbeat` 仍无操作。
+- 无有效时钟时 `OverlayState.primaryText` 区分待采集、待识别、待机、待认边、待替身；已确认时钟优先继续走。
+- 主机连续链入口：`bash android/tools/chaincheck/run.sh`，使用生产 JNI/Decoder/Settings/Session/SideClock。
+  平台 stub 仅供主机调用 direct RGBA buffer；它不验证设备录屏、HardwareBuffer、FrameLoop 调度或 Canvas。
 
 ### kt-capture-service
 - 文件：capture/ProjectionCaptureService.kt、capture/ScreenshotCapture.kt、capture/FrameLoop.kt、

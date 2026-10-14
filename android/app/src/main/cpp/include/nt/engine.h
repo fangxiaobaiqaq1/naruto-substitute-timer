@@ -7,7 +7,7 @@
 // Go 接口 → C++ 抽象类映射：
 //   Engine + TimedEngine   → Engine（AnalyzeAt 为主入口；Analyze(img) = AnalyzeAt(img, NowNs())）
 //   Gate + TimedGate       → Gate（DecideAt 为主入口；Decide(img) = DecideAt(img, NowNs())）
-//   FightSupportGate       → FightSupportGate（Gated 用 dynamic_cast 检测，等价 Go 类型断言）
+//   FightSupportGate / HUDStartGate → 同名抽象类（Gated 用 dynamic_cast 检测，等价 Go 类型断言）
 //   LayoutPreferrer        → LayoutPreferrer（同上，dynamic_cast）
 //   LayoutProvider / ProfiledLayout → 同名抽象类；ConfiguredLayout 由 rgb 用 dynamic_cast 识别
 //
@@ -96,6 +96,9 @@ public:
     // ContentArea is shared with scene matching. A size alone cannot prove bars.
     std::pair<detect::ContentArea, bool> ContentArea(const RGBA* img) const;
     Point ReferenceSize() const { return reference_; }
+    // Align built-in rows to current image anchors; explicit calibration remains authoritative.
+    std::vector<detect::BeadPosition> PositionsInImage(const std::string& name, const RGBA* img,
+                                                     const detect::ContentArea& ca) const;
     std::vector<detect::BeadPosition> PositionsIn(const std::string& name, const detect::ContentArea& ca) const;
 
 private:
@@ -105,6 +108,7 @@ private:
     int count_ = 0;
     Point reference_;
     double tolerance_ = 0;
+    bool autoAnchor_ = false;
 };
 
 // GateKind 是场景门闩的四种结论。场景名本身来自资源，不写死在代码里。
@@ -136,6 +140,15 @@ class FightSupportGate {
 public:
     virtual ~FightSupportGate() = default;
     virtual bool SupportsFight(const RGBA* img, const std::string& profile) = 0;
+};
+
+// HUDStartGate may recover a covered primary marker only with multiple
+// independent current battle controls. Gated additionally requires complete,
+// legal, freshly sampled bean rows; a single continuity control is not enough.
+class HUDStartGate {
+public:
+    virtual ~HUDStartGate() = default;
+    virtual GateDecision StartFight(const RGBA* img, const std::string& profile) = 0;
 };
 
 // Identity 是 VS / 换人画面上认出的双方账号。
@@ -180,6 +193,7 @@ private:
 uint64_t pixelHash(const RGBA* img);
 
 bool hasBilateralHUD(const std::vector<BeadInfo>& beads);
+bool hasCompleteHUD(const Result& res);
 int readyBeads(const std::vector<BeadInfo>& beads);
 
 // NewGated 包装任意 Engine。inner 为 nullptr 时返回 nopEngine（Name "nop"），

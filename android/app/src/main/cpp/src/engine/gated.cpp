@@ -181,6 +181,18 @@ Result Gated::AnalyzeAt(const RGBA* img, TimeNs at) {
     } else {
         res = analyzeInner(img, at);
     }
+    if (d.Kind == GateUncertain && d.SceneID.empty() && lastFight_.SceneID.empty() &&
+        !res.Uncertain && hasCompleteHUD(res)) {
+        if (auto* start = dynamic_cast<HUDStartGate*>(Gate_.get())) {
+            GateDecision candidate = start->StartFight(img, res.LayoutProfile);
+            if (candidate.Kind == GateFight && candidate.LayoutProfile == res.LayoutProfile) {
+                d = std::move(candidate);
+                if (auto* p = dynamic_cast<LayoutPreferrer*>(Inner.get())) {
+                    p->Prefer(d.LayoutProfile);
+                }
+            }
+        }
+    }
     if (res.Name.empty()) {
         res.Name = name_;
     }
@@ -255,6 +267,31 @@ bool hasBilateralHUD(const std::vector<BeadInfo>& beads) {
         }
     }
     return known[0] >= 3 && known[1] >= 3;
+}
+
+bool hasCompleteHUD(const Result& res) {
+    if (res.LayoutProfile != "camp" && res.LayoutProfile != "duel") {
+        return false;
+    }
+    for (char side : {'L', 'R'}) {
+        std::vector<detect::BeadState> states;
+        for (const BeadInfo& b : res.Beads) {
+            if (b.Label.empty() || b.Label[0] != side) {
+                continue;
+            }
+            if (b.Unknown || b.Conf < .6 || b.Label.size() != 2 ||
+                b.Label[1] != static_cast<char>('1' + states.size())) {
+                return false;
+            }
+            states.push_back(b.Lit || b.Gold ? detect::StateLight : detect::StateDark);
+        }
+        int slots = side == 'L' ? res.LeftSlots : res.RightSlots;
+        if ((slots > 0 && static_cast<int>(states.size()) != slots) ||
+            (states.size() != 4 && states.size() != 6) || !detect::IsLegalPrefix(states)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 int readyBeads(const std::vector<BeadInfo>& beads) {

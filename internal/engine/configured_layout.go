@@ -2,6 +2,7 @@ package engine
 
 import (
 	"image"
+	"slices"
 
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
@@ -9,16 +10,21 @@ import (
 
 // ConfiguredLayout is immutable after construction and shared by both engines.
 type ConfiguredLayout struct {
-	mode      detect.ContentMode
-	preferred string
-	profiles  map[string]config.LayoutProfile
-	count     int
-	reference image.Point
-	tolerance float64
+	mode       detect.ContentMode
+	preferred  string
+	profiles   map[string]config.LayoutProfile
+	count      int
+	reference  image.Point
+	tolerance  float64
+	autoAnchor bool
 }
 
 func NewConfiguredLayout(mode detect.ContentMode, cfg config.LayoutConfig) *ConfiguredLayout {
-	return &ConfiguredLayout{mode: mode, preferred: cfg.PreferredProfile, count: cfg.BeadsPerSide,
+	defaults := config.Default().Layout
+	autoAnchor := len(cfg.Profiles) == 0 && cfg.BeadsPerSide == defaults.BeadsPerSide &&
+		slices.Equal(cfg.Left.NominalCenters, defaults.Left.NominalCenters) &&
+		slices.Equal(cfg.Right.NominalCenters, defaults.Right.NominalCenters)
+	return &ConfiguredLayout{mode: mode, preferred: cfg.PreferredProfile, count: cfg.BeadsPerSide, autoAnchor: autoAnchor,
 		reference: image.Pt(cfg.ReferenceWidth, cfg.ReferenceHeight), tolerance: cfg.AutoAspectTolerance,
 		profiles: map[string]config.LayoutProfile{"camp": cloneProfile(cfg.Profile("camp")), "duel": cloneProfile(cfg.Profile("duel"))}}
 }
@@ -48,6 +54,28 @@ func (l *ConfiguredLayout) ContentArea(img *image.RGBA) (detect.ContentArea, boo
 }
 
 func (l *ConfiguredLayout) ReferenceSize() image.Point { return l.reference }
+
+// PositionsInImage aligns built-in rows with a current wide-screen HUD anchor.
+// Explicit user calibrations remain authoritative. Size-only callers never
+// invent safe-area margins from a resolution or from old frames.
+func (l *ConfiguredLayout) PositionsInImage(name string, img *image.RGBA, ca detect.ContentArea) []detect.BeadPosition {
+	positions := l.PositionsIn(name, ca)
+	if !l.autoAnchor {
+		return positions
+	}
+	for _, first := range positions {
+		if first.Idx != 0 {
+			continue
+		}
+		dx := detect.HUDRowOffset(img, ca, image.Pt(first.X, first.Y), first.Side == "right", name)
+		for i := range positions {
+			if positions[i].Side == first.Side {
+				positions[i].X += dx
+			}
+		}
+	}
+	return positions
+}
 
 func (l *ConfiguredLayout) PositionsIn(name string, ca detect.ContentArea) []detect.BeadPosition {
 	p, ok := l.profiles[name]

@@ -447,6 +447,25 @@ func TestCaptureOnceDuplicatePixelsDoNotConfirm(t *testing.T) {
 	}
 }
 
+func TestCaptureOnceRepeatedCapturesDoNotSwallowNextDrop(t *testing.T) {
+	at := time.Unix(1700000000, 0)
+	var frames []frame.Frame
+	for i := 0; i <= 96; i++ {
+		frames = append(frames, frame.Frame{Fighting: true, Beads: testBeads(2, 4), CapturedAt: at.Add(time.Duration(i) * 16 * time.Millisecond), Duplicate: i > 32})
+	}
+	firstDrop := at.Add(97 * 16 * time.Millisecond)
+	for i := 0; i < 2; i++ {
+		frames = append(frames, frame.Frame{Fighting: true, Beads: testBeads(1, 4), CapturedAt: firstDrop.Add(time.Duration(i) * 16 * time.Millisecond)})
+	}
+	s := testSession(frames)
+	for range frames {
+		s.captureOnce()
+	}
+	if event, _ := s.left.LastEvent(); s.left.EventCount() != 1 || !event.Equal(firstDrop) || s.right.EventCount() != 0 {
+		t.Fatalf("fresh captures were mistaken for a blackout: events=%d/%d firstDrop=%v event=%v", s.left.EventCount(), s.right.EventCount(), firstDrop, event)
+	}
+}
+
 func TestCaptureOnceLayoutSwitchStartsNewBaseline(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	s := testSession([]frame.Frame{

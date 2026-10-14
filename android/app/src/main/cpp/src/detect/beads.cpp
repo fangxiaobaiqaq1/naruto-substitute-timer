@@ -3,6 +3,7 @@
 // Contract: include/nt/detect.h — see android/ARCHITECTURE.md.
 //
 // Package detect 负责把游戏逻辑坐标映射到窗口实际坐标，并定义豆子位置。
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -57,32 +58,18 @@ bool ParseMode(const std::string& s, ContentMode& out, std::string* err) {
     return false;
 }
 
-// ComputeContentArea 根据客户区尺寸与模式计算游戏画面实际区域。
+// ComputeContentArea 根据客户区尺寸与模式计算游戏画面实际区域。ModeAuto 只有尺寸时保留全屏；
+// 需要识别黑边时使用 ResolveContentArea。
 ContentArea ComputeContentArea(int clientW, int clientH, ContentMode mode) {
     ContentArea ca{0, 0, clientW, clientH};
     if (clientW <= 0 || clientH <= 0) {
         return ca;
     }
 
-    bool letterbox = false;
-    switch (mode) {
-        case ModeStretch:
-            letterbox = false;
-            break;
-        case ModeLetterbox:
-            letterbox = true;
-            break;
-        default: {  // ModeAuto
-            // 客户区宽高比与 16:9 偏差小于 1.5% 视为铺满，否则视为有黑边。
-            // Go 的 16.0/9.0*0.985 是无类型常量，按精确有理数求值后只舍入一次：
-            // 16/9*0.985 = 394/225，16/9*1.015 = 406/225（整数相除只舍入一次，逐位一致）。
-            const double ratio = static_cast<double>(clientW) / static_cast<double>(clientH);
-            if (ratio < 394.0 / 225.0 || ratio > 406.0 / 225.0) {
-                letterbox = true;
-            }
-        }
-    }
-    if (!letterbox) {
+    // Size-only callers cannot tell native ultrawide HUD from centered bars.
+    // Auto therefore keeps the full surface; ResolveContentArea is the only
+    // path that may choose letterbox after inspecting pixels.
+    if (mode != ModeLetterbox) {
         return ca;
     }
 
@@ -109,11 +96,18 @@ Point ContentArea::Map(double lx, double ly) const {
     return Pt(x, y);
 }
 
-Point ContentArea::MapHUDPixel(double x, double y, bool right, double referenceWidth, double referenceHeight) const {
+double ContentArea::HUDScale(double referenceWidth, double referenceHeight) const {
     if (W <= 0 || H <= 0 || referenceWidth <= 0 || referenceHeight <= 0) {
+        return 0;
+    }
+    return std::min(static_cast<double>(W) / referenceWidth, static_cast<double>(H) / referenceHeight);
+}
+
+Point ContentArea::MapHUDPixel(double x, double y, bool right, double referenceWidth, double referenceHeight) const {
+    const double scale = HUDScale(referenceWidth, referenceHeight);
+    if (scale <= 0) {
         return Pt(X, Y);
     }
-    const double scale = static_cast<double>(H) / referenceHeight;
     const double px = right ? static_cast<double>(X + W) - (referenceWidth - x) * scale
                             : static_cast<double>(X) + x * scale;
     const double py = static_cast<double>(Y) + y * scale;

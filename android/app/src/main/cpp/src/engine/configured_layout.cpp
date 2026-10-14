@@ -21,7 +21,20 @@ ConfiguredLayout::ConfiguredLayout(detect::ContentMode mode, const config::Layou
       profiles_{{"camp", cloneProfile(cfg.Profile("camp"))}, {"duel", cloneProfile(cfg.Profile("duel"))}},
       count_(cfg.BeadsPerSide),
       reference_(Pt(cfg.ReferenceWidth, cfg.ReferenceHeight)),
-      tolerance_(cfg.AutoAspectTolerance) {}
+      tolerance_(cfg.AutoAspectTolerance) {
+    const config::LayoutConfig defaults = config::Default().Layout;
+    auto sameCenters = [](const std::vector<config::NormalizedPoint>& a,
+                          const std::vector<config::NormalizedPoint>& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i].X != b[i].X || a[i].Y != b[i].Y) return false;
+        }
+        return true;
+    };
+    autoAnchor_ = cfg.Profiles.empty() && cfg.BeadsPerSide == defaults.BeadsPerSide &&
+                  sameCenters(cfg.Left.NominalCenters, defaults.Left.NominalCenters) &&
+                  sameCenters(cfg.Right.NominalCenters, defaults.Right.NominalCenters);
+}
 
 std::vector<detect::BeadPosition> ConfiguredLayout::Positions(int w, int h) const {
     std::string name = preferred_;
@@ -38,6 +51,22 @@ std::vector<detect::BeadPosition> ConfiguredLayout::PositionsFor(const std::stri
 // ContentArea is shared with scene matching. A size alone cannot prove bars.
 std::pair<detect::ContentArea, bool> ConfiguredLayout::ContentArea(const RGBA* img) const {
     return detect::ResolveContentArea(img, mode_, reference_.X, reference_.Y, tolerance_);
+}
+
+// Explicit user calibrations remain authoritative. Size-only callers never
+// invent safe-area margins from a resolution or from old frames.
+std::vector<detect::BeadPosition> ConfiguredLayout::PositionsInImage(const std::string& name, const RGBA* img,
+                                                                  const detect::ContentArea& ca) const {
+    auto positions = PositionsIn(name, ca);
+    if (!autoAnchor_) return positions;
+    for (const auto& first : positions) {
+        if (first.Idx != 0) continue;
+        const int dx = detect::HUDRowOffset(img, ca, Pt(first.X, first.Y), first.Side == "right", name);
+        for (auto& p : positions) {
+            if (p.Side == first.Side) p.X += dx;
+        }
+    }
+    return positions;
 }
 
 std::vector<detect::BeadPosition> ConfiguredLayout::PositionsIn(const std::string& name,

@@ -11,6 +11,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
+	"narutotimer/internal/engine"
 	"narutotimer/internal/match"
 	"narutotimer/internal/ocr"
 )
@@ -56,26 +57,20 @@ func nameRegions(img *image.RGBA, cfg config.LayoutConfig, profile string) ([2]i
 	if !ok {
 		return out, false
 	}
-	p := cfg.Profile(profile)
-	// Name geometry is an NGUI HUD element, so both its position and its
-	// 960x540 OCR offsets scale from height. Width-based scaling makes the
-	// right title grow into the center on 21:9/ultrawide captures.
-	scale := float64(ca.H) / 540
-	for i, side := range []config.SideLayout{p.Left, p.Right} {
-		if len(side.NominalCenters) == 0 {
-			return out, false
-		}
-		first := side.NominalCenters[0]
-		sideName := "left"
-		if i == 1 {
-			sideName = "right"
-		}
-		center := ca.MapHUDNormalized(first.X, first.Y, sideName, detect.HUDReferenceWidth, detect.HUDReferenceHeight)
+	positions := engine.NewConfiguredLayout(mode, cfg).PositionsInImage(profile, img, ca)
+	if len(positions) != 2*cfg.BeadsPerSide || cfg.BeadsPerSide < 1 {
+		return out, false
+	}
+	// OCR offsets must use the same fitted HUD scale and safe-area anchors.
+	scale := ca.HUDScale(960, 540)
+	for i := range 2 {
+		first := positions[i*cfg.BeadsPerSide]
+		center := image.Pt(first.X, first.Y)
 		x0, x1 := -4., 330.
 		if i == 1 {
 			x0, x1 = -330., 4.
 		}
-		out[i] = image.Rect(center.X+int(math.Round(x0*scale)), ca.Y+int(math.Round(.020*float64(ca.H))), center.X+int(math.Round(x1*scale)), ca.Y+int(math.Round(.073*float64(ca.H)))).Intersect(img.Bounds())
+		out[i] = image.Rect(center.X+int(math.Round(x0*scale)), ca.Y+int(math.Round(.020*540*scale)), center.X+int(math.Round(x1*scale)), ca.Y+int(math.Round(.073*540*scale))).Intersect(img.Bounds())
 		if out[i].Dx() < 80 || out[i].Dy() < 10 {
 			return out, false
 		}
