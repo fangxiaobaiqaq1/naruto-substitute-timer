@@ -80,7 +80,7 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	prefer := e.prefer
 	positions := func(name string) []detect.BeadPosition {
 		if calibrated != nil {
-			return calibrated.PositionsIn(name, area)
+			return calibrated.PositionsInImage(name, img, area)
 		}
 		if p, ok := e.layout.(engine.ProfiledLayout); ok {
 			return p.PositionsFor(name, w, h)
@@ -192,7 +192,7 @@ func sampleUnverifiedSpecial(img *image.RGBA, p detect.BeadPosition, w, h, guard
 }
 
 func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, identified [2]ninja.Readout) []engine.BeadInfo {
-	scale := float64(area.H) / detect.LogicHeight
+	scale := area.HUDScale(detect.LogicWidth, detect.LogicHeight)
 	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*scale)))
 	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*scale)))
 	var out []engine.BeadInfo
@@ -218,7 +218,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 				// Keep the row topology, but decide each bean from this frame only.
 				// Hints permit current saturated purple bodies; Xiayin also permits
 				// spatially isolated red cores. White flares/gold remain unknown.
-				guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
+				guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*scale*1.2)))
 				hint := identified[index].PaletteHint
 				if xiayin {
 					hint = palette
@@ -240,7 +240,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 			// it on a bounded offset grid and keep the best legal row. Identity
 			// stays independent; all evidence is still this frame's pixels.
 			rowInfos, rowStates := sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], image.Point{})
-			if allUnknownStates(rowStates) && len(row) >= 2 {
+			if identified[index].RowOffsetY != 0 && allUnknownStates(rowStates) && len(row) >= 2 {
 				for _, delta := range []image.Point{{3, 0}, {-3, 0}, {0, -3}, {0, 3}, {6, 0}, {-6, 0}, {0, -6}, {0, 6}} {
 					candidateInfos, candidateStates := sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], delta)
 					if rowInfosScore(candidateInfos) > rowInfosScore(rowInfos) {
@@ -269,7 +269,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 // centers shifted by delta. It is the strict core sampler; the retry grid only
 // re-centers the diamond, every judgment stays at the calibrated thresholds.
 func sampleCalibratedRow(img *image.RGBA, row []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, palette ninja.Palette, xiayin bool, identified ninja.Readout, delta image.Point) ([]engine.BeadInfo, []detect.BeadState) {
-	scale := float64(area.H) / detect.LogicHeight
+	scale := area.HUDScale(detect.LogicWidth, detect.LogicHeight)
 	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*scale)))
 	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*scale)))
 	var infos []engine.BeadInfo
@@ -373,13 +373,13 @@ func sampleCalibratedRow(img *image.RGBA, row []detect.BeadPosition, area detect
 		if st == detect.StateUnknown && darkGlintBody(img, p, w, h, palette) {
 			st, conf = detect.StateDark, 1
 		}
-		guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
-		// A confirmed Xiayin red core is already bounded by the calibrated
-		// sample, confidence/margin, and the wash guard below. Do not require
-		// the optional halo-shape proof for every ordinary red bean: scaling and
-		// HUD blending can make a real core fail that narrow geometry check.
-		// The proof remains an exception for unverified red rows and is still
-		// used by specialWash to reject broad red effects.
+		guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*scale*1.2)))
+		// Xiayin's extra gauge can leave a thin red band inside the wash
+		// guard. An exact name is not evidence of filled diamonds: require
+		// each red core to be distinct from both slot gaps even when verified.
+		if st == detect.StateLight && xiayin && palette == ninja.Red && !isolatedRedHalo(img, p, guard) {
+			st = detect.StateUnknown
+		}
 		if st == detect.StateLight && specialWash(img, p, palette, guard) {
 			if !warmHighlight && (palette != ninja.Purple || identified.Name != ninja.SasukeXiayin || (!purpleHighlight && !isolatedPurpleHalo(img, p, w, h, guard, gap))) {
 				st = detect.StateUnknown

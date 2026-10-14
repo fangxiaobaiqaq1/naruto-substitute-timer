@@ -78,6 +78,7 @@ struct Hit {
     std::string ID;
     std::string Scene;
     double Value = 0;
+    Rect Bounds{};  // Actual matched control, not its search region.
 };
 
 constexpr int coldScanEvery = 3;
@@ -85,15 +86,17 @@ constexpr DurationNs coldScanInterval = 100 * Millisecond;
 // hintRadius bounds the window checked around a remembered peak, in pixels.
 constexpr int hintRadius = 2;
 
-// Catalog 是已加载的模板库。实现 engine::Gate（DecideAt）与 engine::FightSupportGate。
+// Catalog 是已加载的模板库。实现 engine::Gate、FightSupportGate 与 HUDStartGate。
 // Go 的 scorer / scoreAtHint / scoreHinted / scoreOne / matchIn / forEach 由 cpp-scene 在
 // scene.cpp 内自行声明（可加为私有成员）；forEach 用 nt::ParallelFor，hints 的读写按 Go hintMu 加锁。
-class Catalog final : public engine::Gate, public engine::FightSupportGate {
+class Catalog final : public engine::Gate, public engine::FightSupportGate, public engine::HUDStartGate {
 public:
     // DecideAt implements engine.TimedGate.
     engine::GateDecision DecideAt(const RGBA* img, TimeNs at) override;
-    // SupportsFight checks a separate, static battle control.
+    // SupportsFight checks a separate, static battle control for an established match.
     bool SupportsFight(const RGBA* img, const std::string& profile) override;
+    // StartFight needs two independent current controls; Gated must also verify a complete legal HUD.
+    engine::GateDecision StartFight(const RGBA* img, const std::string& profile) override;
     // ScoreAll 返回每条模板的分数，不表决（诊断用，不读写 hint）。
     std::vector<Hit> ScoreAll(const RGBA* img);
     int TemplateCount() const { return static_cast<int>(templates.size()); }

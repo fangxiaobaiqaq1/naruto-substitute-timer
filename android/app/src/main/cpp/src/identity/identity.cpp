@@ -129,7 +129,7 @@ hit bestHit(const RGBA* img, const detect::ContentArea& ca, const config::Normal
         search = RGBA::New(gray.Bounds());  // Query.Gray supplies pixels, Image supplies bounds.
     }
     const Rect sb = search.Bounds();
-    const double hudScale = static_cast<double>(ca.H) / detect::LogicHeight;
+    const double hudScale = ca.HUDScale(detect::LogicWidth, detect::LogicHeight);
     match::NCC ncc;
     for (const auto& n : names) {
         if (!n.Image) continue;

@@ -43,21 +43,23 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			// Stored name strips use the 960-wide HUD reference. Individual
 			// integer-rounded bean centers may alternate 15/16px; their first
 			// interval must not accidentally stretch all of the name lettering.
-			// NGUI scales this reference from screen height, not ultrawide width.
-			scale := float64(area.H) / 540
+			// Use the same fitted HUD scale as the centers and sampling cores.
+			scale := area.HUDScale(960, 540)
 			first := image.Pt(row[0].X, row[0].Y)
 			identified[index] = e.nameTracker[profileIndex][index].ReadWithAvatar(e.names, &e.avatarTracker[profileIndex][index], img, ninja.NameRegion(first, scale, index == 0), ninja.AvatarRegion(first, scale, index == 0), scale, at)
 			// Only a recognized six-slot NAME permits usable slots five and six.
 			// A brief label gap retains six UNKNOWN placeholders, never extra votes.
 			if len(row) == 4 && identified[index].Slots == 6 {
-				dx, dy := 30.0, 0.0
-				if row[1].LX < row[0].LX {
-					dx = -dx
-				}
+				// Extend the calibrated pitch in its own 1600x900 units, not
+				// the old 1920-wide 30px constant (which skips slots 5/6).
+				last := row[len(row)-1]
+				dx := (last.LX - row[0].LX) / float64(len(row)-1)
+				dy := (last.LY - row[0].LY) / float64(len(row)-1)
+				xOffset := row[0].X - area.MapHUDPixel(row[0].LX, row[0].LY, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight).X
 				for i := 4; i < 6; i++ {
 					lx, ly := row[0].LX+float64(i)*dx, row[0].LY+float64(i)*dy
 					mapped := area.MapHUDPixel(lx, ly, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight)
-					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: name, Idx: i, LX: lx, LY: ly}, X: mapped.X, Y: mapped.Y})
+					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: name, Idx: i, LX: lx, LY: ly}, X: mapped.X + xOffset, Y: mapped.Y})
 				}
 			}
 			// Some exact variants have an extra energy bar above their ordinary

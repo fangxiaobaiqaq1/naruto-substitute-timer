@@ -339,7 +339,7 @@ func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, 
 		if n.Image == nil {
 			continue
 		}
-		hudScale := ca.HeightScale(detect.LogicHeight)
+		hudScale := ca.HUDScale(detect.LogicWidth, detect.LogicHeight)
 		tw := int(math.Round(float64(n.Image.Bounds().Dx()) * hudScale * scale))
 		th := int(math.Round(float64(n.Image.Bounds().Dy()) * hudScale * scale))
 		if tw < 8 || th < 8 || tw > gray.Bounds().Dx() || th > gray.Bounds().Dy() {

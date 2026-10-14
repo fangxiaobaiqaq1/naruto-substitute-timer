@@ -31,7 +31,9 @@ Config Default() {
     l.PreferredProfile = "auto";
     l.ReferenceWidth = 1920;
     l.ReferenceHeight = 1080;
-    l.ContentMode = "auto";
+    // Android captures the full emulator surface. Match Go's default so a
+    // 20:9/21:9 device is not mistaken for an unproven 16:9 letterbox.
+    l.ContentMode = "stretch";
     l.AutoAspectTolerance = 0.015;
     l.BeadsPerSide = 4;
     l.Left = SideLayout{NormalizedRect{0.04, 0.05, 0.18, 0.12},

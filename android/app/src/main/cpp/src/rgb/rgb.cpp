@@ -70,7 +70,7 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
     std::string prefer = prefer_;
     auto positions = [&](const std::string& name) -> std::vector<detect::BeadPosition> {
         if (calibrated != nullptr) {
-            return calibrated->PositionsIn(name, area);
+            return calibrated->PositionsInImage(name, img, area);
         }
         if (profiled != nullptr) {
             return profiled->PositionsFor(name, w, h);
@@ -189,7 +189,7 @@ BeadState sampleUnverifiedSpecial(const RGBA* img, const BeadPosition& p, int w,
 std::vector<BeadInfo> sampleCalibratedSpecial(const RGBA* img, const std::vector<BeadPosition>& positions,
                                               const detect::ContentArea& area, const config::VisionConfig& cfg,
                                               const std::array<ninja::Readout, 2>& identified) {
-    const double hudScale = double(area.H) / detect::LogicHeight;
+    const double hudScale = area.HUDScale(detect::LogicWidth, detect::LogicHeight);
     const int w = std::max(
         2, static_cast<int>(std::round(cfg.SampleWidthReferencePX * cfg.CoreScale * hudScale)));
     const int h = std::max(
@@ -220,7 +220,7 @@ std::vector<BeadInfo> sampleCalibratedSpecial(const RGBA* img, const std::vector
                 // Hints permit current saturated purple bodies; Xiayin also permits
                 // spatially isolated red cores. White flares/gold remain unknown.
                 const int guard = std::max(
-                    3, static_cast<int>(std::round(cfg.SampleHeightReferencePX * double(area.H) / detect::LogicHeight * 1.2)));
+                    3, static_cast<int>(std::round(cfg.SampleHeightReferencePX * hudScale * 1.2)));
                 ninja::Palette hint = identified[index].PaletteHint;
                 if (xiayin) {
                     hint = palette;
@@ -251,7 +251,7 @@ std::vector<BeadInfo> sampleCalibratedSpecial(const RGBA* img, const std::vector
             std::vector<BeadInfo> rowInfos;
             std::vector<BeadState> rowStates;
             sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], Point{}, rowInfos, rowStates);
-            if (allUnknownStates(rowStates) && row.size() >= 2) {
+            if (identified[index].RowOffsetY != 0 && allUnknownStates(rowStates) && row.size() >= 2) {
                 static const Point kDeltas[] = {{3, 0}, {-3, 0}, {0, -3}, {0, 3}, {6, 0}, {-6, 0}, {0, -6}, {0, 6}};
                 for (const Point& delta : kDeltas) {
                     std::vector<BeadInfo> candidateInfos;
@@ -289,10 +289,9 @@ void sampleCalibratedRow(const RGBA* img, const std::vector<BeadPosition>& row, 
                          const config::VisionConfig& cfg, ninja::Palette palette, bool xiayin,
                          const ninja::Readout& identified, Point delta, std::vector<BeadInfo>& infos,
                          std::vector<BeadState>& states) {
-    (void)xiayin;  // Go 签名保留该参数但函数体不使用。
     infos.clear();
     states.clear();
-    const double hudScale = double(area.H) / detect::LogicHeight;
+    const double hudScale = area.HUDScale(detect::LogicWidth, detect::LogicHeight);
     const int w = std::max(
         2, static_cast<int>(std::round(cfg.SampleWidthReferencePX * cfg.CoreScale * hudScale)));
     const int h = std::max(
@@ -404,13 +403,13 @@ void sampleCalibratedRow(const RGBA* img, const std::vector<BeadPosition>& row, 
             conf = 1;
         }
         const int guard = std::max(
-            3, static_cast<int>(std::round(cfg.SampleHeightReferencePX * double(area.H) / detect::LogicHeight * 1.2)));
-        // A confirmed Xiayin red core is already bounded by the calibrated
-        // sample, confidence/margin, and the wash guard below. Do not require
-        // the optional halo-shape proof for every ordinary red bean: scaling and
-        // HUD blending can make a real core fail that narrow geometry check.
-        // The proof remains an exception for unverified red rows and is still
-        // used by specialWash to reject broad red effects.
+            3, static_cast<int>(std::round(cfg.SampleHeightReferencePX * hudScale * 1.2)));
+        // Xiayin's extra gauge can leave a thin red band inside the wash
+        // guard. An exact name is not evidence of filled diamonds: require
+        // each red core to be distinct from both slot gaps even when verified.
+        if (st == detect::StateLight && xiayin && palette == ninja::Red && !isolatedRedHalo(img, p, guard)) {
+            st = detect::StateUnknown;
+        }
         if (st == detect::StateLight && specialWash(img, p, palette, guard)) {
             if (!warmHighlight &&
                 (palette != ninja::Purple || identified.Name != ninja::SasukeXiayin ||

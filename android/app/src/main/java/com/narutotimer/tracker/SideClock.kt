@@ -7,13 +7,8 @@ package com.narutotimer.tracker
 // 0L == Go time.Time{}（IsZero）；时长也是纳秒 Long。秒数用 Double（Go float64）。
 // 逐行忠实移植：确认帧数、恢复需两帧、inheritedReturn、maxGap 重同步、ends 过期规则。
 //
-// 相对 Go 的两处有意修正（Android 采集特性导致，见各处注释 "Android 修正"）：
-//  1. 多颗同时掉：Go 只有 lastReady-ready == 1 才开钟。录屏帧率低（或无障碍截屏约 3fps）时，
-//     两次替身可能落在相邻两帧之间，表现为一次掉 2 颗；此时每掉一颗开一个独立的钟。
-//     一次掉光（ready 落到 0 且一次掉 ≥2 颗，即 Go 注释里的 "一次掉光（4 或 6）= 大招"）仍然不计时。
-//  2. 静止画面：MediaProjection 在画面不变时不出新帧（或 native 指纹判为 Duplicate），
-//     Go 的 validAt 只在新像素帧时刷新，静止超过 maxGap 后下一次真实掉豆会被当成重同步吞掉。
-//     [holdObservation] 让"像素确实没变"的心跳/重复帧延长 validAt，但绝不投票、不确认、不开钟。
+// 与 Go 保持一致：仅确认的单豆下降开钟，多豆下降不能推断替身次数。
+// 重新采集到相同像素可维持观察连续性，但不增加确认票；没有新采集的心跳不提供证据。
 
 /**
  * SideClock 跟踪一侧替身冷却。
@@ -153,29 +148,16 @@ class SideClock {
     }
 
     /**
-     * Android 修正 2（静止画面心跳 / 重复像素帧）。
-     *
-     * 像素没变（MediaProjection 不出新帧，或 native 判定 Duplicate）本身证明上一次观测此刻仍然成立。
-     * 这里只把 validAt 推到 [atNanos]，让之后真正变化的那一帧不会因为超过 maxGap 被当成重同步。
-     * 它不是独立的视觉证据：不投票、不增加 pendingHits、不确认、不开钟，也不推进 observedAt
-     * （心跳时间是合成的，不能挡住稍早采集、稍晚送达的真实帧）。
-     *
-     * 只在以下条件都成立时生效：已有基线；[ready] 与当前基线或待确认的计数一致（同一画面）；
-     * validAt 有效且尚未超过 maxGap（已经断开的观测不能被心跳接回来）。
+     * Keep continuity only for a newly acquired identical pixel frame matching
+     * the latest observed count. Never add a vote, bridge an expired gap, or
+     * substitute a heartbeat/replayed timestamp for an actual acquisition.
      */
     fun holdObservation(ready: Int, atNanos: Long): Boolean {
-        if (atNanos == 0L || !hasPrev || validAt == 0L) {
-            return false
-        }
-        if (ready != lastReady && !(pendingHits > 0 && pendingReady == ready)) {
-            return false
-        }
-        if (maxGap > 0 && atNanos - validAt > maxGap) {
-            return false
-        }
-        if (atNanos > validAt) {
-            validAt = atNanos
-        }
+        if (atNanos == 0L || !hasPrev || validAt == 0L || atNanos <= observedAt) return false
+        val expected = if (pendingHits > 0) pendingReady else lastReady
+        if (ready != expected || (maxGap > 0 && atNanos - validAt > maxGap)) return false
+        observedAt = atNanos
+        validAt = atNanos
         return true
     }
 

@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -181,6 +182,53 @@ func TestUnverifiedPurpleNameUsesCurrentPurpleBody(t *testing.T) {
 	beads := sampleCalibratedSpecial(img, positions, detect.ContentArea{W: 960, H: 540}, config.Default().Vision, readouts)
 	if len(beads) != 1 || !beads[0].Lit || beads[0].Unknown {
 		t.Fatalf("current purple body became unknown during name gap: %+v", beads)
+	}
+}
+
+func TestSixSlotExpansionKeepsWideHUDOffset(t *testing.T) {
+	area := detect.ContentArea{W: 1280, H: 540}
+	layout := engine.NewConfiguredLayout(detect.ModeAuto, config.Default().Layout)
+	name := loadRGBA(t, "../../ninja/templates/hashirama.png")
+	for _, side := range []string{"left", "right"} {
+		positions := layout.PositionsIn("duel", area)
+		offset, sideIndex := 60, 0
+		if side == "right" {
+			offset, sideIndex = -55, 1
+		}
+		img := image.NewRGBA(image.Rect(0, 0, area.W, area.H))
+		for i := range positions {
+			p := &positions[i]
+			if p.Side != side {
+				continue
+			}
+			p.X += offset
+			if p.Idx == 0 {
+				roi := ninja.NameRegion(image.Pt(p.X, p.Y), 1, side == "left")
+				at := roi.Min.Add(image.Pt(12, 7))
+				draw.Draw(img, image.Rectangle{Min: at, Max: at.Add(name.Bounds().Size())}, name, name.Bounds().Min, draw.Src)
+			}
+		}
+		e := &Engine{names: ninja.NewReader()}
+		generated, names := e.specialPositionsForAt("duel", img, positions, area, time.Unix(1700000000, 0))
+		if names[sideIndex].Slots != 6 || len(generated) != 10 {
+			t.Fatalf("%s six-slot title missing: %+v", side, names)
+		}
+		baseRow := positions[:4]
+		if side == "right" {
+			baseRow = positions[4:]
+		}
+		for _, p := range generated {
+			if p.Side == side && p.Idx >= 4 {
+				wantX := float64(baseRow[0].X) + float64(p.Idx)*float64(baseRow[3].X-baseRow[0].X)/3
+				if math.Abs(float64(p.X)-wantX) > 1 {
+					t.Fatalf("%s extra slot skipped the calibrated pitch: %+v, want x≈%.1f", side, p, wantX)
+				}
+				base := area.MapHUDPixel(p.LX, p.LY, side, detect.HUDReferenceWidth, detect.HUDReferenceHeight)
+				if p.X != base.X+offset || p.Y != base.Y {
+					t.Fatalf("%s extra slot lost the HUD offset: %+v", side, p)
+				}
+			}
+		}
 	}
 }
 

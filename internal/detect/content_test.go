@@ -57,6 +57,22 @@ func TestResolveContentAreaRespectsReferenceAndTolerance(t *testing.T) {
 	if _, ok := ResolveContentArea(nil, ModeAuto, 1920, 1080, .015); ok {
 		t.Fatal("nil accepted")
 	}
+	if _, ok := ResolveContentArea(near, ContentMode(99), 1920, 1080, .015); ok {
+		t.Fatal("invalid content mode accepted")
+	}
+}
+
+func TestResolveContentAreaKeepsNativeWideSurface(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 2400, 1080))
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			v := uint8((x/16 + y/16) % 2)
+			img.SetRGBA(x, y, color.RGBA{R: 24 + 8*v, G: 20 + 8*v, B: 36 + 8*v, A: 255})
+		}
+	}
+	if got, ok := ResolveContentArea(img, ModeAuto, 1920, 1080, .015); !ok || got != (ContentArea{W: 2400, H: 1080}) {
+		t.Fatalf("20:9 native surface rejected: %+v, %v", got, ok)
+	}
 }
 
 func TestResolveContentAreaDoesNotTreatOneToolbarAsCenteredBars(t *testing.T) {

@@ -1,4 +1,4 @@
-// nt/detect.h — internal/detect（owner: cpp-match-detect；实现 src/detect/{beads,chrome,content,screen}.cpp）
+// nt/detect.h — internal/detect（owner: cpp-match-detect；实现 src/detect/{beads,chrome,content,hud_anchor,screen}.cpp）
 //
 // Package detect 负责把游戏逻辑坐标映射到窗口实际坐标，并定义豆子位置。
 #pragma once
@@ -16,9 +16,9 @@ namespace nt::detect {
 constexpr int LogicWidth = 1920;
 constexpr int LogicHeight = 1080;
 
-// NGUI fixed-height HUD calibration unit. Unlike the scene reference, HUD
-// width is not stretched across an ultrawide surface; its left/right edges are
-// anchored and its physical scale follows the content height.
+// HUD calibration unit: fit the 16:9 reference by height on wide screens and
+// by width on tablets. Widgets stay top/edge anchored, without stretching or
+// vertically centering the HUD.
 constexpr double HUDReferenceWidth = 1600.0;
 constexpr double HUDReferenceHeight = 900.0;
 
@@ -42,8 +42,10 @@ struct ContentArea {
 
     // Map 把 1920×1080 逻辑坐标映射到内容区内的实际坐标（截断取整，与 Go int() 一致）。
     Point Map(double lx, double ly) const;
-    // MapHUDPixel/Normalized implement the NGUI fixed-height + edge-anchor
-    // transform used by configured and legacy HUD layouts.
+    // Fit HUD widgets to the content area; non-positive dimensions return 0.
+    double HUDScale(double referenceWidth, double referenceHeight) const;
+    // MapHUDPixel/Normalized use the fitted HUD scale with top/edge anchors
+    // for configured and legacy HUD layouts.
     Point MapHUDPixel(double x, double y, bool right, double referenceWidth, double referenceHeight) const;
     Point MapHUDNormalized(double x, double y, bool right, double referenceWidth, double referenceHeight) const;
     bool operator==(const ContentArea& o) const { return X == o.X && Y == o.Y && W == o.W && H == o.H; }
@@ -58,6 +60,10 @@ ContentArea ComputeContentArea(int clientW, int clientH, ContentMode mode);
 std::pair<ContentArea, bool> ResolveContentArea(const RGBA* img, ContentMode mode, int referenceWidth,
                                                 int referenceHeight, double aspectTolerance);
 bool blackBar(const RGBA* img, const Rect& r);
+
+// HUDRowOffset measures each wide-screen row's current health-bar outer edge;
+// missing/covered bars leave calibration alone, without searching bean brightness.
+int HUDRowOffset(const RGBA* img, const ContentArea& ca, Point first, bool right, const std::string& profile);
 
 // Bead 是一个替身豆。
 struct Bead {

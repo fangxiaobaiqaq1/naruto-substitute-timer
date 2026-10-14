@@ -193,7 +193,7 @@ func Load(cfg config.Config) (*Catalog, error) {
 		out.holdSet[id] = true
 	}
 	for _, spec := range man.Templates {
-		if spec.Anchor != "" && spec.Anchor != "legacy" && spec.Anchor != "center" && spec.Anchor != "left" && spec.Anchor != "right" {
+		if spec.Anchor != "" && spec.Anchor != "legacy" && spec.Anchor != "screen" && spec.Anchor != "center" && spec.Anchor != "left" && spec.Anchor != "right" {
 			return nil, fmt.Errorf("scene: template %s: unsupported anchor %q", spec.ID, spec.Anchor)
 		}
 		if spec.TemplateScale != 0 && (spec.TemplateScale < 0.5 || spec.TemplateScale > 2) {
@@ -392,9 +392,10 @@ func (c *Catalog) hasOther() bool {
 
 // Hit 是单条模板的分数，供 CLI 打印。
 type Hit struct {
-	ID    string
-	Scene string
-	Value float64
+	ID     string
+	Scene  string
+	Value  float64
+	Bounds image.Rectangle // actual matched control, not its potentially overlapping search area
 }
 
 // ScoreAll 返回每条模板的分数，不表决。
@@ -433,9 +434,9 @@ func (c *Catalog) contentArea(img *image.RGBA) (detect.ContentArea, bool) {
 	return detect.ResolveContentArea(img, c.mode, w, h, c.layoutCfg.AutoAspectTolerance)
 }
 
-// SupportsFight checks a separate, static battle control. This evidence cannot
-// establish a scene on its own; Gated also requires a previously identified
-// profile and fresh readable beads in both HUD corners.
+// SupportsFight checks a separate, static battle control for an established
+// match. A cold start instead needs StartFight's independent pair of controls
+// plus Gated's complete, legal current HUD.
 func (c *Catalog) SupportsFight(img *image.RGBA, profile string) bool {
 	ca, supported := c.contentArea(img)
 	if !supported {
@@ -446,11 +447,57 @@ func (c *Catalog) SupportsFight(img *image.RGBA, profile string) bool {
 		if !t.spec.ContinuationOnly || (t.spec.LayoutProfile != "" && t.spec.LayoutProfile != profile) {
 			continue
 		}
-		if score(t).Value >= t.spec.Threshold {
+		if _, ok := c.scoreAtHint(img, score, t); ok || score(t).Value >= t.spec.Threshold {
 			return true
 		}
 	}
 	return false
+}
+
+// StartFight is an alternative to a covered round/toolbar label, not a relaxed
+// bean-color gate. Both controls must pass their original template thresholds
+// in independent regions. Any accepted other-page or competing-profile marker
+// vetoes entry. Gated must verify both complete bean rows before calling this.
+func (c *Catalog) StartFight(img *image.RGBA, profile string) engine.GateDecision {
+	blocked := engine.GateDecision{Kind: engine.GateUncertain}
+	if profile != "camp" && profile != "duel" {
+		return blocked
+	}
+	ca, ok := c.contentArea(img)
+	if !ok {
+		return blocked
+	}
+	prepared, hits := c.prepare(ca), c.ScoreAll(img)
+	var regions []image.Rectangle
+	id, confidence := "", 1.0
+	for i, t := range prepared {
+		if hits[i].Value < t.spec.Threshold {
+			continue
+		}
+		if !c.fightSet[t.spec.Scene] || (t.spec.LayoutProfile != "" && t.spec.LayoutProfile != profile) {
+			return blocked
+		}
+		if !t.spec.ContinuationOnly {
+			continue
+		}
+		bounds := hits[i].Bounds
+		independent := !bounds.Empty()
+		for _, previous := range regions {
+			overlap := previous.Intersect(bounds)
+			if overlap.Dx()*overlap.Dy()*4 > min(previous.Dx()*previous.Dy(), bounds.Dx()*bounds.Dy()) {
+				independent = false
+			}
+		}
+		if independent {
+			regions = append(regions, bounds)
+			id = t.spec.Scene
+			confidence = min(confidence, hits[i].Value)
+		}
+	}
+	if len(regions) < 2 || confidence < c.cfg.MinFightScore {
+		return blocked
+	}
+	return engine.GateDecision{Kind: engine.GateFight, SceneID: id, Confidence: confidence, LayoutProfile: profile}
 }
 
 func (c *Catalog) prepare(ca detect.ContentArea) []preparedTemplate {
@@ -530,9 +577,9 @@ func prepareOne(ca detect.ContentArea, t template) preparedTemplate {
 	}
 	twScale, thScale := float64(ca.W)/float64(t.refW), float64(ca.H)/float64(t.refH)
 	if t.spec.Anchor != "" && t.spec.Anchor != "legacy" {
-		// NGUI HUD widgets keep their physical size with root height; only
-		// their anchor determines where the extra ultrawide space goes.
-		twScale = thScale
+		// Fit the HUD reference without stretching widgets on 16:10 tablets.
+		twScale = ca.HUDScale(float64(t.refW), float64(t.refH))
+		thScale = twScale
 	}
 	tw := int(math.Round(float64(t.gray.Bounds().Dx()) * twScale * scale))
 	th := int(math.Round(float64(t.gray.Bounds().Dy()) * thScale * scale))
@@ -733,7 +780,7 @@ func (c *Catalog) scoreHinted(img *image.RGBA, gray *image.Gray, t preparedTempl
 	} else if !t.windowed {
 		c.setHint(t.index, image.Point{}, false) // Only a full-ROI miss forgets the peak.
 	}
-	return Hit{ID: t.spec.ID, Scene: t.spec.Scene, Value: s.Value}
+	return Hit{ID: t.spec.ID, Scene: t.spec.Scene, Value: s.Value, Bounds: image.Rectangle{Min: s.Peak, Max: s.Peak.Add(t.gray.Bounds().Size())}}
 }
 
 // scoreOne is the exhaustive form used by diagnostics; it never reads hints.
@@ -745,23 +792,45 @@ func (c *Catalog) scoreOne(img *image.RGBA, gray *image.Gray, t preparedTemplate
 	if err != nil {
 		return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
 	}
-	return Hit{ID: t.spec.ID, Scene: t.spec.Scene, Value: s.Value}
+	return Hit{ID: t.spec.ID, Scene: t.spec.Scene, Value: s.Value, Bounds: image.Rectangle{Min: s.Peak, Max: s.Peak.Add(t.gray.Bounds().Size())}}
 }
 
 func (c *Catalog) matchIn(img *image.RGBA, gray *image.Gray, roi image.Rectangle, t preparedTemplate) (match.Score, error) {
-	return c.matcher.Match(match.Query{
-		Image:    img,
-		Gray:     gray,
-		ROI:      roi,
-		Template: t.gray,
-		Mask:     t.mask,
-		Prepared: t.ncc,
-	})
+	best, err := c.matcher.Match(match.Query{Image: img, Gray: gray, ROI: roi, Template: t.gray, Mask: t.mask, Prepared: t.ncc})
+	if err != nil || !t.spec.ContinuationOnly || t.spec.Anchor != "screen" || best.Value < .65 || best.Value >= t.spec.Threshold || !c.parallelScoring() {
+		return best, err
+	}
+	// Key-size settings and integer resampling need not share the name HUD's
+	// exact scale. Refine an already plausible location, not a global sweep or
+	// a lower threshold. Scale variants of the same control still count once.
+	peak := best.Peak
+	for dw := -2; dw <= 2; dw++ {
+		for dh := -2; dh <= 2; dh++ {
+			w, h := t.gray.Bounds().Dx()+dw, t.gray.Bounds().Dy()+dh
+			if (dw == 0 && dh == 0) || w < 4 || h < 4 {
+				continue
+			}
+			g := match.ScaleGray(t.gray, w, h)
+			var mask *image.Gray
+			if t.mask != nil {
+				mask = match.ScaleGray(t.mask, w, h)
+			}
+			window := (image.Rectangle{Min: peak, Max: peak.Add(image.Pt(w, h))}).Inset(-2).Intersect(roi)
+			candidate, e := c.matcher.Match(match.Query{Image: img, Gray: gray, ROI: window, Template: g, Mask: mask})
+			if e == nil && candidate.Value > best.Value {
+				best = candidate
+			}
+		}
+	}
+	return best, nil
 }
 
 func mapRect(ca detect.ContentArea, r config.NormalizedRect, anchor string, refW, refH int) image.Rectangle {
 	var x0, y0, x1, y1 int
-	if anchor == "" || anchor == "legacy" {
+	// Controls may move within the screen's lower panel on tall tablets or
+	// custom key layouts. Search that screen region, but keep their templates
+	// at the fitted HUD scale (unlike legacy's stretched template geometry).
+	if anchor == "" || anchor == "legacy" || anchor == "screen" {
 		x0, y0 = ca.Map(r.X*detect.LogicWidth, r.Y*detect.LogicHeight)
 		x1, y1 = ca.Map((r.X+r.Width)*detect.LogicWidth, (r.Y+r.Height)*detect.LogicHeight)
 	} else {
@@ -779,7 +848,7 @@ func mapRect(ca detect.ContentArea, r config.NormalizedRect, anchor string, refW
 }
 
 func mapAnchoredPoint(ca detect.ContentArea, x, y float64, refW, refH int, anchor string) image.Point {
-	s := float64(ca.H) / float64(refH)
+	s := ca.HUDScale(float64(refW), float64(refH))
 	logicalX := x * float64(refW)
 	var px float64
 	switch anchor {

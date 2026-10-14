@@ -5,6 +5,8 @@ import (
 	"image"
 	"sync"
 	"time"
+
+	"narutotimer/internal/detect"
 )
 
 // GateKind 是场景门闩的四种结论。场景名本身来自资源，不写死在代码里。
@@ -33,6 +35,13 @@ type Gate interface {
 
 type FightSupportGate interface {
 	SupportsFight(img *image.RGBA, profile string) bool
+}
+
+// HUDStartGate may recover a covered primary marker only with multiple
+// independent current battle controls. Gated additionally requires complete,
+// legal, freshly sampled bean rows; a single continuity control is not enough.
+type HUDStartGate interface {
+	StartFight(img *image.RGBA, profile string) GateDecision
 }
 
 // TimedGate receives the acquisition time so bounded rescans follow frame time
@@ -207,6 +216,17 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 	} else {
 		res = g.analyzeInner(img, at)
 	}
+	if d.Kind == GateUncertain && d.SceneID == "" && g.lastFight.SceneID == "" && !res.Uncertain && hasCompleteHUD(res) {
+		if start, ok := g.Gate.(HUDStartGate); ok {
+			candidate := start.StartFight(img, res.LayoutProfile)
+			if candidate.Kind == GateFight && candidate.LayoutProfile == res.LayoutProfile {
+				d = candidate
+				if p, ok := g.Inner.(LayoutPreferrer); ok {
+					p.Prefer(d.LayoutProfile)
+				}
+			}
+		}
+	}
 	if res.Name == "" {
 		res.Name = g.name
 	}
@@ -285,6 +305,36 @@ func hasBilateralHUD(beads []BeadInfo) bool {
 		}
 	}
 	return known[0] >= 3 && known[1] >= 3
+}
+
+func hasCompleteHUD(res Result) bool {
+	if res.LayoutProfile != "camp" && res.LayoutProfile != "duel" {
+		return false
+	}
+	for _, side := range []byte{'L', 'R'} {
+		var states []detect.BeadState
+		for _, b := range res.Beads {
+			if len(b.Label) == 0 || b.Label[0] != side {
+				continue
+			}
+			if b.Unknown || b.Conf < .6 || len(b.Label) != 2 || b.Label[1] != byte('1'+len(states)) {
+				return false
+			}
+			st := detect.StateDark
+			if b.Lit || b.Gold {
+				st = detect.StateLight
+			}
+			states = append(states, st)
+		}
+		slots := res.LeftSlots
+		if side == 'R' {
+			slots = res.RightSlots
+		}
+		if (slots > 0 && len(states) != slots) || (len(states) != 4 && len(states) != 6) || !detect.IsLegalPrefix(states) {
+			return false
+		}
+	}
+	return true
 }
 
 func readyBeads(beads []BeadInfo) int {

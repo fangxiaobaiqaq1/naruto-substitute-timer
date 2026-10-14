@@ -880,10 +880,6 @@ func (s *session) observeRoundOpening(f frame.Frame) {
 }
 
 func (s *session) observeBeads(f frame.Frame) {
-	// The same pixels may be polled repeatedly, especially at reduced source FPS.
-	if f.Duplicate {
-		return
-	}
 	// The observation gap guards against bridging unrelated states across a
 	// capture blackout. It must therefore scale with the REAL frame cadence:
 	// engine work (recognition scans) can push inter-frame intervals far past
@@ -917,6 +913,17 @@ func (s *session) observeBeads(f frame.Frame) {
 	need := s.cfg.Tracking.MinimumConfirmFrames
 	leftObserved := sideObservable(f.Beads, true) && len(sideBeads(f.Beads, true)) == s.expectedSlots(true)
 	rightObserved := sideObservable(f.Beads, false) && len(sideBeads(f.Beads, false)) == s.expectedSlots(false)
+	if f.Duplicate {
+		// These are newly captured identical pixels, not a timer heartbeat.
+		// Keep continuity without giving pending drops another vote.
+		if !leftObserved || !s.left.HoldObservation(lc, f.CapturedAt) {
+			s.left.InvalidateObservation(f.CapturedAt)
+		}
+		if !rightObserved || !s.right.HoldObservation(rc, f.CapturedAt) {
+			s.right.InvalidateObservation(f.CapturedAt)
+		}
+		return
+	}
 
 	// A round-opening fade can make an empty slot briefly look available. While
 	// the verified 60-second opening marker remains visible, beans are baseline
