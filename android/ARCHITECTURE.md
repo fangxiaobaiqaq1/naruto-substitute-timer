@@ -301,7 +301,7 @@ Gradle 任务 `syncRecognitionAssets`（app/build.gradle.kts）把仓库资源�
 |---|---|
 | `assets/templates/*.png`, `assets/templates/manifest.json` | `templates/…` |
 | `assets/avatars/*.png`, `assets/avatars/index.json` | `avatars/…` |
-| `assets/game/*.json` | `game/…`（当前识别链不用，保留） |
+| `assets/game/*.json` | `game/…`（打包在 APK 里，识别链不读，AssetLoader 不加载） |
 | `internal/ninja/templates/*.png`（排除 `*.source.png`） | `ninja_templates/…` |
 | 用户：`filesDir/identity/**/*.{png,jpg,jpeg}` | `identity/<相对路径>` |
 
