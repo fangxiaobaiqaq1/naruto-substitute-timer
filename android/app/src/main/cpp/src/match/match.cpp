@@ -63,10 +63,18 @@ bool NCC::Match(const Query& q, Score& out) const {
     // ToGray(RGBA) 从零开始，而调用方也可传带原点和 stride 的 Gray 子图。
     // nccAt 使用相对于 Gray.Bounds().Min 的偏移，输出仍是截图坐标。
     const Point origin = ib.Min;
-    // The prefix sums cover exactly the ROI (every template footprint scanned
-    // lies inside it); they are local to this call, hence single-thread.
-    grayPrefix& pre = tlsPrefix;
-    newGrayPrefix(pre, *gray, roi.Min.X - origin.X, roi.Min.Y - origin.Y, roi.Dx(), roi.Dy());
+    // The prefix sums cover the ROI (every template footprint scanned lies
+    // inside it). A caller-shared prefix of the same gray is reused as is; else
+    // they are local to this call, hence single-thread. Exact integers either
+    // way, so the scores do not depend on which covering prefix is used.
+    const int px0 = roi.Min.X - origin.X, py0 = roi.Min.Y - origin.Y;
+    const grayPrefix* pre = nullptr;
+    if (q.Prefix != nullptr && gray == q.Gray && q.Prefix->covers(px0, py0, px0 + roi.Dx(), py0 + roi.Dy())) {
+        pre = q.Prefix;
+    } else if (roi.Dx() <= maxDotRun) {
+        newGrayPrefix(tlsPrefix, *gray, px0, py0, roi.Dx(), roi.Dy());
+        pre = &tlsPrefix;
+    }
     Score best;
     best.Peak = roi.Min;
     auto scan = [&](int x0, int y0, int x1, int y1, int st) {
@@ -77,7 +85,9 @@ bool NCC::Match(const Query& q, Score& out) const {
         if (y1 > roi.Max.Y - th) y1 = roi.Max.Y - th;
         for (int y = y0; y <= y1; y += st) {
             for (int x = x0; x <= x1; x += st) {
-                double v = prepared->at(*gray, pre, x - origin.X, y - origin.Y);
+                // Rows wider than maxDotRun cannot use uint32 prefix sums (never in practice).
+                double v = pre != nullptr ? prepared->at(*gray, *pre, x - origin.X, y - origin.Y)
+                                          : prepared->atDirect(*gray, x - origin.X, y - origin.Y);
                 if (v > best.Value) {
                     best.Value = v;
                     best.Peak = Pt(x, y);
