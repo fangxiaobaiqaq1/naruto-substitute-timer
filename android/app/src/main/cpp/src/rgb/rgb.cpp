@@ -92,7 +92,7 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
                 specialPositionsForAt(name, img, pos, area, at, identified, &sides);
             readout = identified;
             std::vector<BeadInfo> beads = sampleCalibratedSpecial(img, special, area, vision, identified);
-            geometry = completeGeometry(std::move(sides), calibrated, name, img, area, pos, beads);
+            geometry = completeGeometry(std::move(sides), calibrated, name, img, area, pos, special, beads);
             return beads;
         }
         return sampleLayout(img, pos);
@@ -279,7 +279,7 @@ std::vector<BeadInfo> sampleCalibratedSpecial(const RGBA* img, const std::vector
             // default row. Re-read the 13px@540 row; keep it only when complete
             // and legal. Special palettes and offset identities are excluded.
             if (identified[index].RowOffsetY == 0 && palette == ninja::Palette::None && !xiayin && row.size() == 4 &&
-                energyGaugeBand(img, row, area, rowStates)) {
+                energyGaugeBand(img, row, area)) {
                 const int dy = static_cast<int>(
                     std::round(ninja::EnergyGaugeRowOffset * detect::RowHUDScale(row, area, 960, 540)));
                 std::vector<BeadInfo> candidateInfos;

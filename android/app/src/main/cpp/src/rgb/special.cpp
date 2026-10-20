@@ -143,20 +143,25 @@ config::NormalizedRect fraction(double x, double y, double w, double h, const Re
 }
 
 // completeGeometry adds the sampled centres and, on a configured layout, the
-// default bead boxes of the layout rows (before identity offsets).
+// default bead boxes of the layout rows (before identity offsets) that also
+// reproduce the rows derived from them (special: identity drop, slots 5/6).
 std::array<engine::SideGeometry, 2> completeGeometry(std::array<engine::SideGeometry, 2> sides,
                                                      const engine::ConfiguredLayout* layout, const std::string& profile,
                                                      const RGBA* img, const detect::ContentArea& area,
                                                      const std::vector<BeadPosition>& positions,
+                                                     const std::vector<BeadPosition>& special,
                                                      const std::vector<BeadInfo>& beads) {
     static const char* const names[2] = {"left", "right"};
     for (int i = 0; i < 2; ++i) {
         if (layout != nullptr) {
-            std::vector<BeadPosition> row;
+            std::vector<BeadPosition> row, derived;
             for (const BeadPosition& p : positions) {
                 if (p.Side == names[i]) row.push_back(p);
             }
-            layout->DefaultBeadBox(profile, row, img->Bounds(), area, sides[i].BeadBox);
+            for (const BeadPosition& p : special) {
+                if (p.Side == names[i]) derived.push_back(p);
+            }
+            layout->DefaultBeadBox(profile, row, img->Bounds(), area, sides[i].BeadBox, derived);
         }
         for (const BeadInfo& b : beads) {
             if (!b.Label.empty() && b.Label[0] == "LR"[i]) sides[i].Beads.push_back(Pt(b.X, b.Y));
@@ -179,10 +184,12 @@ void applyNames(engine::Result& res, const std::array<ninja::Readout, 2>& readou
 
 // energyGaugeBand is the unidentified energy-gauge signature on the default
 // row: a THIN gold band through every slot center (not gold 4px@540 above and
-// below, unlike real gold diamonds or a broad wash) that blanks all cores or
-// also fills every slot midpoint. It only permits a re-read; never a vote.
-bool energyGaugeBand(const RGBA* img, const std::vector<BeadPosition>& row, const detect::ContentArea& area,
-                     const std::vector<BeadState>& states) {
+// below, unlike real gold diamonds or a broad wash) that runs unbroken from
+// slot to slot (gold at every quarter of each interval). Blank cores alone are
+// no band: gold diamonds sampled near their tips (a box misdrawn by a few
+// pixels) are thin and unreadable there too, but leave a gap of about a third
+// of the pitch between two diamonds. It only permits a re-read; never a vote.
+bool energyGaugeBand(const RGBA* img, const std::vector<BeadPosition>& row, const detect::ContentArea& area) {
     auto gold = [&](int x, int y) {
         if (!Pt(x, y).In(img->Bounds())) {
             return false;
@@ -192,17 +199,23 @@ bool energyGaugeBand(const RGBA* img, const std::vector<BeadPosition>& row, cons
         return r >= 190 && g >= 110 && r - b >= 80 && g - b >= 70;
     };
     const int d = std::max(2, static_cast<int>(std::round(4 * detect::RowHUDScale(row, area, 960, 540))));
-    bool continuous = true;
     for (size_t i = 0; i < row.size(); i++) {
         const BeadPosition& p = row[i];
         if (!gold(p.X, p.Y) || gold(p.X, p.Y - d) || gold(p.X, p.Y + d)) {
             return false;
         }
-        if (i > 0 && !gold((row[i - 1].X + p.X) / 2, (row[i - 1].Y + p.Y) / 2)) {
-            continuous = false;
+        if (i == 0) {
+            continue;
+        }
+        // Go integer division: both truncate toward zero.
+        const BeadPosition& q = row[i - 1];
+        for (int k = 1; k < 4; k++) {
+            if (!gold(q.X + (p.X - q.X) * k / 4, q.Y + (p.Y - q.Y) * k / 4)) {
+                return false;
+            }
         }
     }
-    return !row.empty() && (continuous || allUnknownStates(states));
+    return !row.empty();
 }
 
 BeadState specialPixel(ninja::Palette palette, int r, int g, int b) {

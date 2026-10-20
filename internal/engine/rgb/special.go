@@ -140,17 +140,23 @@ func fraction(x, y, w, h float64, frame image.Rectangle) config.NormalizedRect {
 }
 
 // completeGeometry adds the sampled centres and, on a configured layout, the
-// default bead boxes of the layout rows (before identity offsets).
-func completeGeometry(sides [2]engine.SideGeometry, layout *engine.ConfiguredLayout, profile string, img *image.RGBA, area detect.ContentArea, positions []detect.BeadPosition, beads []engine.BeadInfo) [2]engine.SideGeometry {
+// default bead boxes of the layout rows (before identity offsets) that also
+// reproduce the rows derived from them (special: identity drop, slots 5/6).
+func completeGeometry(sides [2]engine.SideGeometry, layout *engine.ConfiguredLayout, profile string, img *image.RGBA, area detect.ContentArea, positions, special []detect.BeadPosition, beads []engine.BeadInfo) [2]engine.SideGeometry {
 	for i, name := range [2]string{"left", "right"} {
 		if layout != nil {
-			var row []detect.BeadPosition
+			var row, derived []detect.BeadPosition
 			for _, p := range positions {
 				if p.Side == name {
 					row = append(row, p)
 				}
 			}
-			sides[i].BeadBox, _ = layout.DefaultBeadBox(profile, row, img.Bounds(), area)
+			for _, p := range special {
+				if p.Side == name {
+					derived = append(derived, p)
+				}
+			}
+			sides[i].BeadBox, _ = layout.DefaultBeadBox(profile, row, img.Bounds(), area, derived...)
 		}
 		for _, b := range beads {
 			if len(b.Label) > 0 && b.Label[0] == "LR"[i] {
@@ -174,9 +180,12 @@ func applyNames(res *engine.Result, readouts [2]ninja.Readout) {
 
 // energyGaugeBand is the unidentified energy-gauge signature on the default
 // row: a THIN gold band through every slot center (not gold 4px@540 above and
-// below, unlike real gold diamonds or a broad wash) that blanks all cores or
-// also fills every slot midpoint. It only permits a re-read; never a vote.
-func energyGaugeBand(img *image.RGBA, row []detect.BeadPosition, area detect.ContentArea, states []detect.BeadState) bool {
+// below, unlike real gold diamonds or a broad wash) that runs unbroken from
+// slot to slot (gold at every quarter of each interval). Blank cores alone are
+// no band: gold diamonds sampled near their tips (a box misdrawn by a few
+// pixels) are thin and unreadable there too, but leave a gap of about a third
+// of the pitch between two diamonds. It only permits a re-read; never a vote.
+func energyGaugeBand(img *image.RGBA, row []detect.BeadPosition, area detect.ContentArea) bool {
 	gold := func(x, y int) bool {
 		if !image.Pt(x, y).In(img.Bounds()) {
 			return false
@@ -186,16 +195,21 @@ func energyGaugeBand(img *image.RGBA, row []detect.BeadPosition, area detect.Con
 		return r >= 190 && g >= 110 && r-b >= 80 && g-b >= 70
 	}
 	d := max(2, int(math.Round(4*detect.RowHUDScale(row, area, 960, 540))))
-	continuous := true
 	for i, p := range row {
 		if !gold(p.X, p.Y) || gold(p.X, p.Y-d) || gold(p.X, p.Y+d) {
 			return false
 		}
-		if i > 0 && !gold((row[i-1].X+p.X)/2, (row[i-1].Y+p.Y)/2) {
-			continuous = false
+		if i == 0 {
+			continue
+		}
+		q := row[i-1]
+		for k := 1; k < 4; k++ {
+			if !gold(q.X+(p.X-q.X)*k/4, q.Y+(p.Y-q.Y)*k/4) {
+				return false
+			}
 		}
 	}
-	return len(row) > 0 && (continuous || allUnknownStates(states))
+	return len(row) > 0
 }
 
 func specialPixel(palette ninja.Palette, r, g, b int) detect.BeadState {

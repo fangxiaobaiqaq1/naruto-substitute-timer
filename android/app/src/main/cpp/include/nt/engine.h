@@ -108,9 +108,12 @@ public:
     // DefaultBeadBox is the bead box (fractions of frame) that, saved as this
     // profile's calibration, reproduces row and its scale (docs/区域校准.md 每帧
     // 几何). row is one side of PositionsInImage, before identity offsets.
+    // derived are the rows this frame derived from it (an identity's row drop,
+    // slots 5/6): their centres round back too wherever the row's still do.
     // false (out zero) without four centres.
     bool DefaultBeadBox(const std::string& name, const std::vector<detect::BeadPosition>& row, const Rect& frame,
-                        const detect::ContentArea& ca, config::NormalizedRect& out) const;
+                        const detect::ContentArea& ca, config::NormalizedRect& out,
+                        const std::vector<detect::BeadPosition>& derived = {}) const;
 
 private:
     // Each side's calibrated geometry for one frame and profile (null = automatic).
