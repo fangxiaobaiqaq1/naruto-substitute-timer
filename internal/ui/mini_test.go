@@ -67,7 +67,9 @@ func TestBothSideClocksShowAndUpdateInFullAndMini(t *testing.T) {
 			if !s.bothSideBox.Visible() || s.singleClockRow.Visible() {
 				t.Fatalf("%s: both-side box visible=%v single=%v", mode, s.bothSideBox.Visible(), s.singleClockRow.Visible())
 			}
-			at := time.Now()
+			// nextTenthWait reads the real clock and adds a 3 ms margin; start the
+			// events 50 ms ago so the next tenth is never a full 100 ms away.
+			at := time.Now().Add(-50 * time.Millisecond)
 			observeBothSides(s, at)
 			s.refreshClockAt(at.Add(5 * time.Second))
 			if s.leftBothCD.Text != "10.0" || s.rightBothCD.Text != "10.0" {
@@ -247,7 +249,7 @@ func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
 		}
 		file.Close()
 	}
-	buttons := s.miniWindowControls.Objects[1].(*fyne.Container)
+	buttons := s.miniWindowControls.Objects[1].(*fyne.Container).Objects[0].(*fyne.Container)
 	buttons.Objects[0].(*scaledMiniButton).OnTapped()
 	if s.settings == nil || s.settings.Title() != "替身设置" {
 		t.Fatal("mini settings action did not open the main settings window")
@@ -324,7 +326,7 @@ func TestDetachedMiniUsesStoredFontScale(t *testing.T) {
 	cfg.UI.FontScale = 1.6
 	cfg.UI.MiniAutoScale = true
 	s := newDetachedMiniTestSession(t, cfg)
-	if got, want := s.miniStatus.TextSize, overlayTextSize(13, cfg.UI.FontScale); got != want {
+	if got, want := s.miniStatus.TextSize, overlayTextSize(miniClockText, cfg.UI.FontScale); got != want {
 		t.Fatalf("detached mini font scale = %v, want %v", got, want)
 	}
 }

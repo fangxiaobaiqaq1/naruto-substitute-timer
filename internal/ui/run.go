@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -136,9 +137,14 @@ type session struct {
 	miniWin            fyne.Window
 	settings           fyne.Window
 	settingsSide       *widget.RadioGroup
+	settingsMini       *widget.RadioGroup
+	settingsBoth       *widget.Check
 	cd                 *canvas.Text
 	leftBothCD         *canvas.Text
 	rightBothCD        *canvas.Text
+	leftBothLabel      *canvas.Text
+	rightBothLabel     *canvas.Text
+	accent             *canvas.Rectangle
 	bothSideBox        *fyne.Container
 	singleClockRow     *fyne.Container
 	altCD              *canvas.Text
@@ -175,6 +181,7 @@ type session struct {
 	miniWindowButtons  []*scaledMiniButton
 	miniWindowBoth     *scaledMiniButton
 	miniWindowExpanded bool
+	miniCollapsedSize  fyne.Size
 	miniAdaptiveScale  float32
 }
 
@@ -215,6 +222,11 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 		option(s)
 	}
 	w.SetOnClosed(s.stop)
+	// Record the position while the HWND still exists; OnClosed is too late.
+	w.SetCloseIntercept(func() {
+		s.rememberWindowPosition()
+		w.Close()
+	})
 	defer func() { s.stop(); s.diagnosticWriters.Wait() }()
 	if len(cfg.UI.PlayerNames) > 0 {
 		s.myName = cfg.UI.PlayerNames[0]
@@ -222,10 +234,9 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	s.restoreSide()
 	w.SetContent(s.overlayContent())
 	s.setupDetachedMiniWindow(a)
-	toggleMiniShortcut := func(fyne.Shortcut) { s.toggleMini() }
-	w.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyM, Modifier: fyne.KeyModifierControl}, toggleMiniShortcut)
+	addToggleMiniShortcut(w, s)
 	if s.miniWin != nil {
-		s.miniWin.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyM, Modifier: fyne.KeyModifierControl}, toggleMiniShortcut)
+		addToggleMiniShortcut(s.miniWin, s)
 	}
 	s.installDrawTrace()
 	if cfg.DebugOn() {
@@ -322,14 +333,24 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	s.leftBothCD.TextSize, s.leftBothCD.TextStyle = overlayTextSize(36, scale), fyne.TextStyle{Bold: true}
 	s.rightBothCD = canvas.NewText("—", clockIdle)
 	s.rightBothCD.TextSize, s.rightBothCD.TextStyle = overlayTextSize(36, scale), fyne.TextStyle{Bold: true}
-	leftBoth := container.NewVBox(container.NewCenter(canvas.NewText("左", tagIdle)), container.NewCenter(s.leftBothCD))
-	rightBoth := container.NewVBox(container.NewCenter(canvas.NewText("右", tagIdle)), container.NewCenter(s.rightBothCD))
-	s.bothSideBox = container.NewHBox(leftBoth, canvas.NewText("  ", tagIdle), rightBoth)
+	s.leftBothLabel = canvas.NewText("左", tagIdle)
+	s.rightBothLabel = canvas.NewText("右", tagIdle)
+	s.leftBothLabel.TextSize = overlayTextSize(12, scale)
+	s.rightBothLabel.TextSize = overlayTextSize(12, scale)
+	leftBoth := container.NewVBox(container.NewCenter(s.leftBothLabel), container.NewCenter(s.leftBothCD))
+	rightBoth := container.NewVBox(container.NewCenter(s.rightBothLabel), container.NewCenter(s.rightBothCD))
+	divider := canvas.NewRectangle(panelBorder)
+	divider.SetMinSize(fyne.NewSize(1, 0))
+	s.bothSideBox = container.NewHBox(leftBoth, container.NewPadded(divider), rightBoth)
 	s.bothSideBox.Hide()
 	primaryBox := container.NewVBox(s.primaryLabel, s.cd)
 	s.eventTag = canvas.NewText("第 0 次", tagIdle)
 	s.eventTag.TextSize = overlayTextSize(13, scale)
 	s.eventTag.TextStyle = fyne.TextStyle{Bold: true}
+	// The event count is a small chip beside the clock, not loose text.
+	chip := canvas.NewRectangle(panelBtn)
+	chip.CornerRadius = 9
+	eventChip := container.NewStack(chip, container.New(layout.NewCustomPaddedLayout(2, 2, 8, 8), s.eventTag))
 	s.tag = canvas.NewText("对面·待认边", tagIdle)
 	s.tag.TextSize = overlayTextSize(13, scale)
 	s.tag.Alignment = fyne.TextAlignCenter
@@ -337,6 +358,7 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	s.info.TextSize = overlayTextSize(11, scale)
 	s.info.Alignment = fyne.TextAlignCenter
 
+	// Text-only: four icon buttons would not fit the 280 px compact width.
 	set := widget.NewButton("设置", s.openSettings)
 	swap := widget.NewButton("换边", s.swapSide)
 	diag := widget.NewButton("诊断", s.openDiagnostics)
@@ -344,14 +366,14 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	s.updateButton = widget.NewButtonWithIcon("发现新版本", theme.DownloadIcon(), s.openAbout)
 	s.updateButton.Importance = widget.HighImportance
 	s.updateButton.Hide()
-	about.Importance = widget.LowImportance
-	set.Importance = widget.LowImportance
-	swap.Importance = widget.LowImportance
-	diag.Importance = widget.LowImportance
 	glass := canvas.NewRectangle(glassBG)
+	// State stripe: cyan while the opponent's substitute cools down, amber in
+	// the last three seconds, neutral otherwise (same as the Android card).
+	s.accent = canvas.NewRectangle(panelBorder)
+	s.accent.SetMinSize(fyne.NewSize(3, 0))
 	s.footer = container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about))
-	s.singleClockRow = container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(s.eventTag))
-	body := container.NewBorder(nil, s.footer, nil, nil,
+	s.singleClockRow = container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(eventChip))
+	body := container.NewBorder(nil, container.NewPadded(s.footer), s.accent, nil,
 		container.NewVBox(
 			container.NewCenter(s.tag),
 			container.NewCenter(s.singleClockRow),
@@ -435,7 +457,7 @@ func (s *session) applyMiniVisibility() {
 }
 
 func (s *session) toggleMini() {
-	showSettingsError(s.setMiniMode(!s.isMini()), s.win)
+	showSettingsError(s.setMiniMode(!s.isMini()), s.dialogWindow())
 }
 
 // The current policy is user-confirmed: all primary clocks are 15 seconds.
@@ -1288,6 +1310,13 @@ func (s *session) applyPendingClock() {
 		s.cd.Color = u.col
 		refreshUI(s.cd)
 	}
+	if s.accent != nil {
+		both := s.bothSideBox != nil && s.bothSideBox.Visible()
+		if accent := stripeColor(u, both); s.accent.FillColor != accent {
+			s.accent.FillColor = accent
+			refreshUI(s.accent)
+		}
+	}
 	if s.eventTag != nil && s.eventTag.Text != u.eventText {
 		s.eventTag.Text = u.eventText
 		refreshUI(s.eventTag)
@@ -1305,6 +1334,24 @@ func (s *session) applyPendingClock() {
 		trace.recorder.CarryEvents(trace.id, u.leftEvent, u.rightEvent)
 	}
 	s.traceApplied(trace, false)
+}
+
+// stripeColor is the state stripe beside the clock: the running countdown's
+// colour (cyan, or amber in the last 3 s), otherwise the neutral border.
+func stripeColor(u *clockUpdate, both bool) color.NRGBA {
+	if both {
+		if u.leftColor == clockWarn || u.rightColor == clockWarn {
+			return clockWarn
+		}
+		if u.leftColor == clockLive || u.rightColor == clockLive {
+			return clockLive
+		}
+		return panelBorder
+	}
+	if u.col == clockIdle {
+		return panelBorder
+	}
+	return u.col
 }
 
 // applyClockText stores a clock label's text and colour and refreshes it only
@@ -1604,6 +1651,11 @@ func (s *session) setUpdateSource(source updates.Source) error {
 	if oldService != nil {
 		oldService.Close()
 	}
+	// The old source's "发现新版本" notice no longer applies.
+	if s.updateButton != nil {
+		s.updateButton.Hide()
+		s.fitOverlayWindow()
+	}
 	if err == nil {
 		s.startAutomaticUpdateChecks()
 	}
@@ -1685,13 +1737,24 @@ func (s *session) handleAutomaticUpdateResult(result updates.MonitorResult) {
 	})
 }
 
+// addToggleMiniShortcut binds Ctrl+M on one window; the settings promise it
+// works from every timer window, including the settings window.
+func addToggleMiniShortcut(w fyne.Window, s *session) {
+	w.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyM, Modifier: fyne.KeyModifierControl},
+		func(fyne.Shortcut) { s.toggleMini() })
+}
+
 func (s *session) applyInitialWindowAppearance() {
 	s.mu.Lock()
 	opacity, top, mini := s.effectiveOpacityLocked(), s.topmost, s.miniMode
 	s.mu.Unlock()
 	if mini {
+		s.restoreMiniPosition()
 		s.applyMiniWindowState()
-	} else if opacity < 1 {
+		return
+	}
+	s.restoreWindowPosition()
+	if opacity < 1 {
 		if err := s.nativeOverlayOpacity(opacity); err != nil {
 			s.mu.Lock()
 			s.appearanceError = "窗口透明度未应用：" + err.Error()
@@ -1700,7 +1763,7 @@ func (s *session) applyInitialWindowAppearance() {
 		}
 	}
 	if top {
-		applyTopmost(overlayTitle, true)
+		s.applyFullTopmost()
 	}
 }
 

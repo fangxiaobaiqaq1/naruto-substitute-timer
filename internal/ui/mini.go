@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
 	"narutotimer/internal/win32"
@@ -22,6 +23,8 @@ const (
 	maximumMiniOpacity      = 1.00
 	minimumMiniWindowWidth  = 96
 	minimumMiniWindowHeight = 28
+	// miniClockText is the timer-only window's clock size at 100 %.
+	miniClockText = 22
 	// Moving from the timer surface onto a hover button fires MouseOut before
 	// the button's MouseIn; the hide check runs after that hand-over.
 	miniHoverSettle = 80 * time.Millisecond
@@ -71,7 +74,10 @@ func (m *miniSurface) Dragged(ev *fyne.DragEvent) {
 }
 func (m *miniSurface) DragEnd() {
 	m.s.dragAnchor = nil
-	m.s.detachedDragAnchor = nil
+	if m.s.detachedDragAnchor != nil {
+		m.s.detachedDragAnchor = nil
+		m.s.rememberMiniPosition()
+	}
 }
 
 // miniButton keeps the controls up while the pointer rests on a button, even
@@ -96,7 +102,7 @@ type scaledMiniButton struct {
 
 func newScaledMiniButton(s *session, label string, tapped func(), high bool) *scaledMiniButton {
 	b := &scaledMiniButton{s: s, Text: label, OnTapped: tapped, high: high, scale: 1}
-	b.label = canvas.NewText(label, clockLive)
+	b.label = canvas.NewText(label, tagMine)
 	b.label.Alignment = fyne.TextAlignCenter
 	b.background = canvas.NewRectangle(panelBtn)
 	b.ExtendBaseWidget(b)
@@ -115,19 +121,26 @@ func (b *scaledMiniButton) setScale(scale float32) {
 	b.scale = scale
 	b.label.TextSize = b.s.miniTextSize(13 * scale)
 	b.label.Refresh()
+	// A real hit target: the label plus padding, never just the glyphs.
+	text := fyne.MeasureText(b.Text, b.label.TextSize, b.label.TextStyle)
+	b.background.SetMinSize(fyne.NewSize(text.Width+20*scale, text.Height+12*scale))
+	b.background.CornerRadius = 8 * scale
 	b.refreshColors()
 }
 
+// Colours never use glassBG: that is the mini window's transparency key and
+// would punch holes (and click-through spots) into the controls.
 func (b *scaledMiniButton) refreshColors() {
-	if b.high {
-		b.background.FillColor = clockLive
-		b.label.Color = glassBG
-	} else if b.hovered {
+	switch {
+	case b.hovered:
 		b.background.FillColor = panelHover
-		b.label.Color = clockLive
-	} else {
+		b.label.Color = tagMine
+	case b.high:
+		b.background.FillColor = exitBG
+		b.label.Color = exitText
+	default:
 		b.background.FillColor = panelBtn
-		b.label.Color = clockLive
+		b.label.Color = tagMine
 	}
 	b.background.Refresh()
 	b.label.Refresh()
@@ -152,7 +165,7 @@ func (b *scaledMiniButton) Tapped(*fyne.PointEvent) {
 func (b *scaledMiniButton) SetText(text string) {
 	b.Text = text
 	b.label.Text = text
-	b.label.Refresh()
+	b.setScale(b.scale)
 	b.Refresh()
 }
 
@@ -197,6 +210,8 @@ func (s *session) setupDetachedMiniWindow(a fyne.App) {
 	}
 	if driver, ok := a.Driver().(desktop.Driver); ok {
 		s.miniWin = driver.CreateSplashWindow()
+		// Splash windows are untitled ("Fyne Application" in Alt-Tab).
+		s.miniWin.SetTitle(overlayTitle + " · 迷你")
 	} else {
 		s.miniWin = a.NewWindow(overlayTitle + " · 迷你")
 	}
@@ -222,7 +237,8 @@ func (s *session) buildDetachedMiniContent() fyne.CanvasObject {
 	scale := s.cfg.UI.FontScale
 	s.mu.Unlock()
 	s.miniStatus = canvas.NewText("待机", tagIdle)
-	s.miniStatus.TextSize = overlayTextSize(13, scale)
+	s.miniStatus.TextSize = overlayTextSize(miniClockText, scale)
+	s.miniStatus.TextStyle = fyne.TextStyle{Bold: true}
 	s.miniStatus.Alignment = fyne.TextAlignCenter
 
 	settings := newScaledMiniButton(s, "设置", s.openSettings, false)
@@ -231,11 +247,20 @@ func (s *session) buildDetachedMiniContent() fyne.CanvasObject {
 	exit := newScaledMiniButton(s, "退出", s.toggleMini, true)
 	s.miniWindowButtons = []*scaledMiniButton{settings, swap, s.miniWindowBoth, exit}
 	buttons := container.NewGridWithColumns(4, settings, swap, s.miniWindowBoth, exit)
-	s.miniWindowControls = container.NewStack(canvas.NewRectangle(miniControlsBG), buttons)
+	controlsBG := canvas.NewRectangle(panelBG)
+	controlsBG.CornerRadius = 10
+	s.miniWindowControls = container.NewStack(controlsBG, container.NewPadded(buttons))
 	s.miniWindowControls.Hide()
 
+	// An opaque pill (not the key colour) behind the clock: readable over any
+	// game background, and the whole pill is clickable/draggable, not only the
+	// glyph strokes. Everything outside it stays keyed out and click-through.
+	pill := canvas.NewRectangle(panelBG)
+	pill.CornerRadius = 12
+	pill.StrokeColor = panelBorder
+	pill.StrokeWidth = 1
 	s.miniWindowSurface = newMiniSurface(s)
-	status := container.NewStack(canvas.NewRectangle(transparentColor), container.NewCenter(s.miniStatus), s.miniWindowSurface)
+	status := container.NewStack(pill, container.New(layout.NewCustomPaddedLayout(3, 3, 14, 14), s.miniStatus), s.miniWindowSurface)
 	s.miniRoot = container.NewVBox(status, s.miniWindowControls)
 	// The mini window is a timer-only surface. Its native color key removes the
 	// Fyne canvas clear color around the text; controls still get their own panel.
@@ -246,13 +271,25 @@ func (s *session) toggleDetachedMiniControls() {
 	if s.miniWindowControls == nil {
 		return
 	}
-	s.miniWindowExpanded = !s.miniWindowExpanded
-	if s.miniWindowExpanded {
+	s.setDetachedMiniExpanded(!s.miniWindowExpanded)
+}
+
+func (s *session) setDetachedMiniExpanded(on bool) {
+	if s.miniWindowControls == nil || s.miniWindowExpanded == on {
+		return
+	}
+	s.miniWindowExpanded = on
+	if on {
+		// Remember the collapsed size so closing the row puts the clock back.
+		s.miniCollapsedSize = s.miniWin.Canvas().Size()
 		s.miniWindowControls.Show()
 	} else {
 		s.miniWindowControls.Hide()
 	}
 	s.miniWindowControls.Refresh()
+	if !on && s.miniCollapsedSize.Width > 1 {
+		s.miniWin.Resize(s.miniCollapsedSize)
+	}
 	s.fitDetachedMiniWindow()
 }
 
@@ -276,6 +313,9 @@ func (s *session) applyMiniContentScale() {
 	if s.miniWin == nil || s.miniRoot == nil {
 		return
 	}
+	// Font-size previews must reach the mini at once, even when its adaptive
+	// scale itself did not change.
+	s.setMiniContentScale(s.miniAdaptiveScale)
 	s.fitDetachedMiniWindow()
 }
 
@@ -285,7 +325,7 @@ func (s *session) setMiniContentScale(scale float32) {
 	}
 	s.miniAdaptiveScale = scale
 	if s.miniStatus != nil {
-		s.miniStatus.TextSize = s.miniTextSize(13 * scale)
+		s.miniStatus.TextSize = s.miniTextSize(miniClockText * scale)
 		s.miniStatus.Refresh()
 	}
 	for _, button := range s.miniWindowButtons {
@@ -355,7 +395,7 @@ func (s *session) buildMiniControls() fyne.CanvasObject {
 	exit := newMiniButton(s, "退出迷你", s.toggleMini)
 	exit.Importance = widget.HighImportance
 	grid := container.NewGridWithColumns(2, settings, swap, s.miniBothButton, exit)
-	s.miniControls = container.NewStack(canvas.NewRectangle(miniControlsBG), grid)
+	s.miniControls = container.NewStack(canvas.NewRectangle(panelBG), grid)
 	s.miniControls.Hide()
 	// Reserve the controls' size so showing them never resizes the window.
 	spacer := canvas.NewRectangle(transparentColor)
@@ -421,7 +461,7 @@ func (s *session) toggleBothSides() {
 	s.mu.Lock()
 	on := !s.cfg.UI.ShowBothSides
 	s.mu.Unlock()
-	showSettingsError(s.setShowBothSides(on), s.win)
+	showSettingsError(s.setShowBothSides(on), s.dialogWindow())
 }
 
 func (s *session) setShowBothSides(on bool) error {
@@ -432,6 +472,7 @@ func (s *session) setShowBothSides(on bool) error {
 	s.applyBothSideVisibility()
 	s.syncMiniControls()
 	s.syncDetachedMiniControls()
+	s.syncSettingsControls()
 	s.refreshClock()
 	return err
 }
@@ -451,18 +492,27 @@ func (s *session) setMiniMode(on bool) error {
 	s.applyBothSideVisibility()
 	if s.miniWin != nil {
 		if on {
+			s.rememberWindowPosition()
+			s.setDetachedMiniExpanded(false)
 			s.win.Hide()
-			s.applyMiniWindowState()
+			// Show first: an never-shown window has no HWND for the native
+			// colour key, opacity, frame and topmost styles.
 			s.miniWin.Show()
+			s.restoreMiniPosition()
+			s.applyMiniWindowState()
 		} else {
+			s.rememberMiniPosition()
 			s.miniWin.Hide()
 			s.win.Show()
+			s.restoreWindowPosition()
 			s.applyMiniWindowState()
+			s.applyFullTopmost()
 		}
 	} else {
 		s.applyMiniWindowState()
 	}
 	s.syncDetachedMiniControls()
+	s.syncSettingsControls()
 	s.refreshClock()
 	return err
 }
@@ -572,12 +622,10 @@ func (s *session) fitDetachedMiniWindow() {
 		if s.miniAdaptiveScale != 1 || s.miniAdaptiveScale == 0 {
 			s.setMiniContentScale(1)
 		}
-	} else {
-		baseHeight := float32(48)
-		if s.miniWindowExpanded {
-			baseHeight = 100
-		}
-		scale := float32(math.Min(float64(current.Width/280), float64(current.Height/baseHeight)))
+	} else if !s.miniWindowExpanded {
+		// The user's window size sets the scale; opening the action row only
+		// grows the window and must not shrink the clock.
+		scale := float32(math.Min(float64(current.Width/280), float64(current.Height/48)))
 		if scale < 0.75 {
 			scale = 0.75
 		}

@@ -2,15 +2,12 @@ package com.narutotimer.overlay
 
 import android.content.Context
 import android.content.res.Configuration
-import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -22,15 +19,16 @@ import android.widget.TextView
 import com.narutotimer.Settings
 import com.narutotimer.capture.ProjectionCaptureService
 import com.narutotimer.tracker.Session
-import com.narutotimer.tracker.TimerColors
+import com.narutotimer.ui.MainActivity
+import com.narutotimer.ui.Ui
 import java.util.Locale
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Settings card rendered inside the accessibility overlay window.
- *
- * This view deliberately uses framework widgets only so it can be attached to
- * the controller's TYPE_ACCESSIBILITY_OVERLAY window without an Activity.
+ * Settings dialog rendered inside the accessibility overlay window. It uses
+ * framework widgets only (no Activity). The caller must pass a context themed
+ * with R.style.Theme_NarutoTimer so the widgets are drawn for a dark surface.
  */
 class OverlaySettingsView(
     context: Context,
@@ -42,21 +40,23 @@ class OverlaySettingsView(
     interface Callbacks {
         fun onClose() {}
         fun onSaved() {}
-        fun onSavedAndClose() {}
         fun onEditPosition() {}
         fun onResetPosition() {}
         fun onRequestProjection() {}
         fun onStopProjection() {}
     }
 
-    private val density = resources.displayMetrics.density
     private var syncing = false
     private var initialized = false
     var onConfigChanged: (() -> Unit)? = null
-    private val body = LinearLayout(context)
-    private val panelHost = FramePanel(context)
-    private val category = LinearLayout(context)
-    private val statusText = TextView(context)
+    private var maxW = Int.MAX_VALUE
+    private var maxH = Int.MAX_VALUE
+
+    private val tabs = LinearLayout(context)
+    private val content = LinearLayout(context)
+    private val contentScroll = ScrollView(context)
+    private val panels = ArrayList<View>()
+    private val statusText = Ui.text(context, "悬浮窗：运行中", 14f)
 
     private val sideGroup = RadioGroup(context)
     private val remember = CheckBox(context)
@@ -67,19 +67,19 @@ class OverlaySettingsView(
     private val fullOpacity = SeekBar(context)
     private val miniOpacity = SeekBar(context)
     private val sizeBar = SeekBar(context)
-    private val fullOpacityText = TextView(context)
-    private val miniOpacityText = TextView(context)
-    private val sizeText = TextView(context)
+    private val fullOpacityText = Ui.text(context, "", 13f, Ui.TEXT_2)
+    private val miniOpacityText = Ui.text(context, "", 13f, Ui.TEXT_2)
+    private val sizeText = Ui.text(context, "", 13f, Ui.TEXT_2)
+    private val positionText = Ui.note(context, "")
     private val projection = CheckBox(context)
     private val debug = CheckBox(context)
-    private val projectionState = TextView(context)
-    private val panels = ArrayList<View>()
+    private val projectionState = Ui.text(context, "", 13f, Ui.TEXT_2)
 
     init {
         orientation = VERTICAL
-        setPadding(dp(12), dp(10), dp(12), dp(12))
-        background = rounded(TimerColors.PANEL_BG, 18f)
-        minimumWidth = dp(320)
+        setPadding(dp(14f), dp(10f), dp(14f), dp(14f))
+        background = Ui.rounded(context, Ui.SURFACE, 20f, Ui.OUTLINE)
+        elevation = dp(8f).toFloat()
         buildHeader()
         buildBody()
         refresh()
@@ -95,40 +95,42 @@ class OverlaySettingsView(
             if ((!initialized || key == Settings.KEY_NINJA_QUERY) && !ninja.hasFocus()) {
                 ninja.setText(settings.ninjaQuery)
             }
-            sideGroup.check(sideId(settings.playerSide))
+            sideGroup.check(sideGroup.getChildAt(SIDES.indexOf(settings.playerSide).coerceAtLeast(0)).id)
             remember.isChecked = settings.rememberSide
             both.isChecked = settings.showBothSides
-            modeGroup.check(if (settings.overlayMode == "mini") modeGroup.getChildAt(1).id else modeGroup.getChildAt(0).id)
-            setBar(fullOpacity, settings.windowOpacity, 0.40f, 1f)
-            setBar(miniOpacity, settings.miniOpacity, 0.20f, 1f)
-            setBar(sizeBar, settings.fontScale, Settings.FONT_SCALE_MIN, Settings.FONT_SCALE_MAX)
+            modeGroup.check(modeGroup.getChildAt(if (settings.overlayMode == "mini") 1 else 0).id)
+            setBar(fullOpacity, settings.windowOpacity, FULL_OPACITY_MIN, OPACITY_STEP)
+            setBar(miniOpacity, settings.miniOpacity, MINI_OPACITY_MIN, OPACITY_STEP)
+            setBar(sizeBar, settings.fontScale, Settings.FONT_SCALE_MIN, Settings.FONT_SCALE_STEP)
             projection.isChecked = settings.preferProjection
             debug.isChecked = settings.debug
-            updateSliderLabels()
-            updateProjectionState()
+            updateLabels()
         } finally {
             syncing = false
             initialized = true
         }
     }
 
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        onConfigChanged?.invoke()
+    /** Caps the dialog to the safe display area supplied by the controller. */
+    fun setMaxSize(width: Int, height: Int) {
+        maxW = width - dp(24f)
+        maxH = height - dp(16f)
+        requestLayout()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        if (View.MeasureSpec.getMode(heightMeasureSpec) == View.MeasureSpec.AT_MOST) {
-            super.onMeasure(
-                widthMeasureSpec,
-                View.MeasureSpec.makeMeasureSpec(
-                    View.MeasureSpec.getSize(heightMeasureSpec),
-                    View.MeasureSpec.EXACTLY,
-                ),
-            )
-        } else {
-            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
-        }
+        // A fixed-size dialog: switching tabs never makes it jump.
+        val w = min(min(maxW, MeasureSpec.getSize(widthMeasureSpec)), dp(MAX_WIDTH_DP))
+        val h = min(min(maxH, MeasureSpec.getSize(heightMeasureSpec)), dp(MAX_HEIGHT_DP))
+        super.onMeasure(
+            MeasureSpec.makeMeasureSpec(w.coerceAtLeast(dp(260f)), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(h.coerceAtLeast(dp(200f)), MeasureSpec.EXACTLY),
+        )
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        onConfigChanged?.invoke()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -139,57 +141,47 @@ class OverlaySettingsView(
         return super.dispatchKeyEvent(event)
     }
 
-    /** Controller may provide a richer health summary than this view can infer. */
-    fun setStatus(text: CharSequence) { statusText.text = text }
+    /** Controller supplies the live health summary. */
+    fun setStatus(text: CharSequence) {
+        if (statusText.text.toString() != text.toString()) statusText.text = text
+        updateProjectionState()
+    }
 
     private fun buildHeader() {
-        val header = LinearLayout(context).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), 0, dp(4), 0)
-            background = rounded(0xFF2F78BE.toInt(), 14f)
-        }
-        val title = label("计时器设置", 17f, true).apply { setTextColor(Color.WHITE) }
-        header.addView(title, LinearLayout.LayoutParams(0, dp(44), 1f))
+        val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+        header.addView(Ui.text(context, "计时器设置", 17f, Ui.TEXT, bold = true), LayoutParams(0, WRAP, 1f))
+        header.addView(Ui.button(context, "关闭", Ui.Kind.TONAL) { callbacks.onClose() }, LayoutParams(WRAP, WRAP))
         header.addView(
-            button("保存") { save() }.apply { textSize = 12f; setPadding(0, 0, 0, 0) },
-            LinearLayout.LayoutParams(dp(56), dp(42)),
+            Ui.button(context, "保存", Ui.Kind.PRIMARY) { save() },
+            LayoutParams(WRAP, WRAP).apply { marginStart = dp(8f) },
         )
-        header.addView(
-            button("保存并退出") { saveAndClose() }.apply { textSize = 12f; setPadding(0, 0, 0, 0) },
-            LinearLayout.LayoutParams(dp(78), dp(42)).apply { leftMargin = dp(4) },
-        )
-        header.addView(
-            button("关闭") { callbacks.onClose() }.apply { textSize = 12f; setPadding(0, 0, 0, 0) },
-            LinearLayout.LayoutParams(dp(56), dp(42)).apply { leftMargin = dp(4) },
-        )
-        addView(header, LinearLayout.LayoutParams(MATCH, WRAP))
+        addView(header, LayoutParams(MATCH, WRAP))
     }
 
     private fun buildBody() {
-        body.orientation = HORIZONTAL
-        body.gravity = Gravity.TOP
-        category.orientation = VERTICAL
-        category.background = rounded(0xFF102B3B.toInt(), 14f)
-        val labels = listOf("对局", "外观", "位置", "录屏", "状态")
-        labels.forEachIndexed { i, text ->
-            val item = label(text, 14f, i == 0).apply {
+        val body = LinearLayout(context).apply { orientation = HORIZONTAL }
+        tabs.orientation = VERTICAL
+        TAB_LABELS.forEachIndexed { i, text ->
+            val item = Ui.text(context, text, 14f).apply {
                 gravity = Gravity.CENTER
-                minHeight = dp(48)
+                minHeight = dp(44f)
                 isClickable = true
+                isFocusable = true
                 setOnClickListener { showPanel(i) }
             }
-            category.addView(item, LinearLayout.LayoutParams(dp(78), dp(52)))
+            tabs.addView(item, LayoutParams(MATCH, WRAP).apply { if (i > 0) topMargin = dp(4f) })
         }
-        body.addView(category, LinearLayout.LayoutParams(dp(82), MATCH))
-        panelHost.orientation = VERTICAL
-        panelHost.background = rounded(0xFF123044.toInt(), 16f)
+        // The rail scrolls too: five tabs do not fit a short landscape screen.
         body.addView(ScrollView(context).apply {
-            isFillViewport = true
-            isVerticalScrollBarEnabled = true
-            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-            addView(panelHost, ViewGroup.LayoutParams(MATCH, WRAP))
-        }, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = dp(8) })
-        addView(body, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(8) })
+            isVerticalScrollBarEnabled = false
+            addView(tabs, ViewGroup.LayoutParams(MATCH, WRAP))
+        }, LayoutParams(dp(76f), MATCH))
+        content.orientation = VERTICAL
+        content.setPadding(dp(14f), dp(4f), dp(4f), dp(12f))
+        contentScroll.isFillViewport = true
+        contentScroll.addView(content, ViewGroup.LayoutParams(MATCH, WRAP))
+        body.addView(contentScroll, LayoutParams(0, MATCH, 1f).apply { marginStart = dp(8f) })
+        addView(body, LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(10f) })
         panels += buildGamePanel()
         panels += buildAppearancePanel()
         panels += buildPositionPanel()
@@ -198,218 +190,180 @@ class OverlaySettingsView(
         showPanel(0)
     }
 
+    private fun radio(group: RadioGroup, labels: List<String>) {
+        group.orientation = RadioGroup.HORIZONTAL
+        labels.forEach { text ->
+            val rb = RadioButton(context).apply {
+                id = View.generateViewId()
+                this.text = text
+                minHeight = dp(44f)
+                setTextColor(Ui.TEXT)
+            }
+            group.addView(rb, RadioGroup.LayoutParams(0, WRAP, 1f))
+        }
+    }
+
     private fun buildGamePanel(): View {
         val p = panel()
-        add(p, label("我方所在边", 15f, true))
-        sideGroup.orientation = RadioGroup.HORIZONTAL
-        listOf("自动识别我方", "我方在左", "我方在右").forEachIndexed { i, text ->
-            val rb = RadioButton(context).apply { id = View.generateViewId(); this.text = text; minHeight = dp(46); setTextColor(Color.WHITE) }
-            sideGroup.addView(rb, RadioGroup.LayoutParams(0, WRAP, 1f))
-        }
-        sideGroup.setOnCheckedChangeListener { _, id ->
+        Ui.add(p, Ui.title(context, "我方位置"), 0f)
+        radio(sideGroup, listOf("自动", "左边", "右边"))
+        sideGroup.setOnCheckedChangeListener { group, id ->
             if (syncing) return@setOnCheckedChangeListener
-            session.selectSideMode(when (id) { sideGroup.getChildAt(1).id -> "left"; sideGroup.getChildAt(2).id -> "right"; else -> "auto" })
+            session.selectSideMode(SIDES[group.indexOfChild(group.findViewById(id)).coerceAtLeast(0)])
         }
-        add(p, sideGroup, 2)
+        Ui.add(p, sideGroup, 2f)
         remember.text = "记住认边方式"
-        remember.setTextColor(Color.WHITE)
         remember.setOnCheckedChangeListener { _, checked -> if (!syncing) session.setRememberSide(checked) }
-        add(p, remember, 0)
+        Ui.add(p, remember, 0f)
         both.text = "同时显示两边计时"
-        both.setTextColor(Color.WHITE)
         both.setOnCheckedChangeListener { _, checked -> if (!syncing) session.setShowBothSides(checked) }
-        add(p, both, 0)
-        add(p, label("我的名字", 14f, true), 10)
-        names.hint = "账号名（多个用逗号分隔）"
-        names.setTextColor(Color.WHITE)
-        names.setHintTextColor(TimerColors.TAG_IDLE)
-        names.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        names.minLines = 1
-        add(p, names, 2)
-        add(p, label("对手忍者（可选）", 14f, true), 8)
+        Ui.add(p, both, 0f)
+        Ui.add(p, Ui.title(context, "我的名字"), 12f)
+        names.hint = "账号名，多个用逗号分隔"
+        names.inputType = InputType.TYPE_CLASS_TEXT
+        names.isSingleLine = true
+        Ui.add(p, names, 2f)
+        Ui.add(p, Ui.title(context, "对面忍者（可选）"), 10f)
         ninja.hint = "留空自动识别"
-        ninja.setTextColor(Color.WHITE)
-        ninja.setHintTextColor(TimerColors.TAG_IDLE)
         ninja.inputType = InputType.TYPE_CLASS_TEXT
         ninja.isSingleLine = true
-        add(p, ninja, 2)
-        add(p, note("左/右均指我方，对手位置自动取另一侧；边与两边计时立即生效。"), 8)
+        Ui.add(p, ninja, 2f)
+        Ui.add(p, Ui.note(context, "名字和忍者点「保存」生效；其余选项立即生效。左/右指我方，计时的是对面。"), 8f)
         return p
     }
 
     private fun buildAppearancePanel(): View {
         val p = panel()
-        add(p, label("显示模式", 15f, true))
-        modeGroup.orientation = RadioGroup.HORIZONTAL
-        listOf("完整", "迷你").forEach { text ->
-            val rb = RadioButton(context).apply { id = View.generateViewId(); this.text = text; minHeight = dp(46); setTextColor(Color.WHITE) }
-            modeGroup.addView(rb, RadioGroup.LayoutParams(0, WRAP, 1f))
+        Ui.add(p, Ui.title(context, "显示模式"), 0f)
+        radio(modeGroup, listOf("完整卡片", "迷你"))
+        modeGroup.setOnCheckedChangeListener { group, id ->
+            if (!syncing) session.setMiniMode(group.indexOfChild(group.findViewById(id)) == 1)
         }
-        modeGroup.setOnCheckedChangeListener { _, id -> if (!syncing) session.setMiniMode(id == modeGroup.getChildAt(1).id) }
-        add(p, modeGroup, 2)
-        add(p, fullOpacityText, 8); add(p, fullOpacity, 0)
-        add(p, miniOpacityText, 8); add(p, miniOpacity, 0)
-        add(p, sizeText, 8); add(p, sizeBar, 0)
-        configureBar(fullOpacity, 0.40f, 1f) { settings.windowOpacity = it }
-        configureBar(miniOpacity, 0.20f, 1f) { settings.miniOpacity = it }
-        configureBar(sizeBar, Settings.FONT_SCALE_MIN, Settings.FONT_SCALE_MAX) { settings.fontScale = it }
+        Ui.add(p, modeGroup, 2f)
+        Ui.add(p, fullOpacityText, 10f); Ui.add(p, fullOpacity, 0f)
+        Ui.add(p, miniOpacityText, 8f); Ui.add(p, miniOpacity, 0f)
+        Ui.add(p, sizeText, 8f); Ui.add(p, sizeBar, 0f)
+        configureBar(fullOpacity, FULL_OPACITY_MIN, 1f, OPACITY_STEP) { settings.windowOpacity = it }
+        configureBar(miniOpacity, MINI_OPACITY_MIN, 1f, OPACITY_STEP) { settings.miniOpacity = it }
+        configureBar(sizeBar, Settings.FONT_SCALE_MIN, Settings.FONT_SCALE_MAX, Settings.FONT_SCALE_STEP) { settings.fontScale = it }
+        Ui.add(p, Ui.button(context, "恢复默认外观") {
+            settings.windowOpacity = 1f
+            settings.miniOpacity = DEFAULT_MINI_OPACITY
+            settings.fontScale = Settings.DEFAULT_FONT_SCALE
+            refresh()
+        }, 12f)
         return p
     }
 
     private fun buildPositionPanel(): View {
         val p = panel()
-        add(p, label("悬浮窗位置", 15f, true))
-        add(p, note("拖动计时卡片即可移动；编辑时面板会暂时收起。"), 6)
-        add(p, button("编辑当前位置") { callbacks.onEditPosition() }, 12)
-        add(p, button("恢复默认位置") {
-            settings.overlayX = Int.MIN_VALUE
-            settings.overlayY = Int.MIN_VALUE
-            callbacks.onResetPosition()
-        }, 6)
-        add(p, note("当前位置：" + if (settings.overlayX == Int.MIN_VALUE) "默认" else "${settings.overlayX}, ${settings.overlayY}"), 10)
+        Ui.add(p, Ui.title(context, "悬浮窗位置"), 0f)
+        Ui.add(p, Ui.note(context, "点「调整位置」后直接拖动计时卡片，点击卡片完成。平时需先点开卡片才能拖动，避免对局中误触移动。"), 4f)
+        Ui.add(p, Ui.row(
+            context,
+            Ui.button(context, "调整位置", Ui.Kind.PRIMARY) { callbacks.onEditPosition() },
+            Ui.button(context, "恢复默认位置") {
+                settings.overlayX = Int.MIN_VALUE
+                settings.overlayY = Int.MIN_VALUE
+                callbacks.onResetPosition()
+                updateLabels()
+            },
+        ), 12f)
+        Ui.add(p, positionText, 10f)
         return p
     }
 
     private fun buildCapturePanel(): View {
         val p = panel()
+        Ui.add(p, Ui.title(context, "录屏采集"), 0f)
+        Ui.add(p, projectionState, 4f)
+        Ui.add(p, Ui.row(
+            context,
+            Ui.button(context, "授权录屏", Ui.Kind.PRIMARY) { callbacks.onRequestProjection() },
+            Ui.button(context, "停止录屏") { callbacks.onStopProjection(); updateProjectionState() },
+        ), 10f)
         projection.text = "优先使用录屏采集（MediaProjection）"
-        projection.setTextColor(Color.WHITE)
         projection.setOnCheckedChangeListener { _, checked -> if (!syncing) settings.preferProjection = checked }
-        add(p, projection)
-        projectionState.setTextColor(TimerColors.TAG_IDLE)
-        add(p, projectionState, 2)
-        add(p, button("授权录屏") { callbacks.onRequestProjection() }, 8)
-        add(p, button("停止录屏") { callbacks.onStopProjection(); updateProjectionState() }, 4)
-        debug.text = "开启调试日志"
-        debug.setTextColor(Color.WHITE)
+        Ui.add(p, projection, 10f)
+        debug.text = "输出调试日志"
         debug.setOnCheckedChangeListener { _, checked -> if (!syncing) settings.debug = checked }
-        add(p, debug, 12)
-        add(p, note("录屏由系统授权对话框确认；关闭后可继续使用无障碍截屏。"), 4)
+        Ui.add(p, debug, 0f)
+        Ui.add(p, Ui.note(context, "录屏约 60 帧/秒，需在系统对话框确认；关闭后自动改用无障碍截屏（约 3 帧/秒）。"), 6f)
         return p
     }
 
     private fun buildStatusPanel(): View {
         val p = panel()
-        add(p, label("运行状态", 15f, true))
-        statusText.setTextColor(Color.WHITE)
-        statusText.text = "悬浮窗运行中"
-        statusText.minHeight = dp(100)
-        statusText.gravity = Gravity.TOP
-        add(p, statusText, 10)
-        add(p, button("刷新状态") { updateProjectionState() }, 8)
+        Ui.add(p, Ui.title(context, "运行状态"), 0f)
+        Ui.add(p, statusText, 8f)
         return p
     }
 
     private fun save() {
-        applySettings()
+        val side = SIDES[sideGroup.indexOfChild(sideGroup.findViewById(sideGroup.checkedRadioButtonId)).coerceAtLeast(0)]
+        // Same parsing as the main screen: commas, 顿号, spaces, normalized and de-duplicated.
+        session.applySettings(MainActivity.splitNames(names.text.toString()), ninja.text.toString(), side, remember.isChecked)
         callbacks.onSaved()
-    }
-
-    private fun saveAndClose() {
-        applySettings()
-        callbacks.onSavedAndClose()
-    }
-
-    private fun applySettings() {
-        val values = names.text.toString().split(',', '，', '\n').map { it.trim() }.filter { it.isNotEmpty() }
-        val side = when (sideGroup.checkedRadioButtonId) {
-            sideGroup.getChildAt(1).id -> "left"
-            sideGroup.getChildAt(2).id -> "right"
-            else -> "auto"
-        }
-        session.applySettings(values, ninja.text.toString(), side, remember.isChecked)
+        callbacks.onClose()
     }
 
     private fun showPanel(index: Int) {
-        panelHost.removeAllViews()
-        panelHost.addView(panels[index], LayoutParams(MATCH, WRAP))
-        for (i in 0 until category.childCount) {
-            val v = category.getChildAt(i) as TextView
-            v.setTextColor(if (i == index) TimerColors.CLOCK_LIVE else Color.WHITE)
-            v.setTypeface(null, if (i == index) Typeface.BOLD else Typeface.NORMAL)
-            v.background = rounded(
-                if (i == index) TimerColors.PANEL_HOVER else 0x00102030,
-                10f,
-            )
+        content.removeAllViews()
+        content.addView(panels[index], LayoutParams(MATCH, WRAP))
+        contentScroll.scrollTo(0, 0)
+        for (i in 0 until tabs.childCount) {
+            val v = tabs.getChildAt(i) as TextView
+            val selected = i == index
+            v.setTextColor(if (selected) Ui.ON_ACCENT else Ui.TEXT_2)
+            v.typeface = Typeface.create(Typeface.DEFAULT, if (selected) 600 else 400, false)
+            v.background = if (selected) Ui.rounded(context, Ui.ACCENT, 12f) else null
         }
-        if (index == 2) invalidate()
+        if (index == 2) updateLabels()
     }
 
     private fun updateProjectionState() {
-        projectionState.text = if (ProjectionCaptureService.running) "录屏状态：运行中" else "录屏状态：未运行"
+        projectionState.text = if (ProjectionCaptureService.running) "状态：录屏运行中" else "状态：未运行（使用无障碍截屏）"
     }
 
-    private fun updateSliderLabels() {
-        fullOpacityText.text = String.format(Locale.ROOT, "完整窗口透明度：%.0f%%", settings.windowOpacity * 100)
-        miniOpacityText.text = String.format(Locale.ROOT, "迷你窗口透明度：%.0f%%", settings.miniOpacity * 100)
+    private fun updateLabels() {
+        fullOpacityText.text = String.format(Locale.ROOT, "完整卡片不透明度：%.0f%%", settings.windowOpacity * 100)
+        miniOpacityText.text = String.format(Locale.ROOT, "迷你卡片不透明度：%.0f%%", settings.miniOpacity * 100)
         sizeText.text = String.format(Locale.ROOT, "悬浮窗大小：%.0f%%", settings.fontScale * 100)
+        positionText.text = "当前位置：" + if (settings.overlayX == Int.MIN_VALUE) "默认（屏幕上方居中）" else "${settings.overlayX}, ${settings.overlayY}"
+        updateProjectionState()
     }
 
-    private fun configureBar(bar: SeekBar, min: Float, max: Float, onChange: (Float) -> Unit) {
-        bar.max = ((max - min) * 100f).roundToInt().coerceAtLeast(1)
+    private fun configureBar(bar: SeekBar, min: Float, max: Float, step: Float, onChange: (Float) -> Unit) {
+        bar.max = ((max - min) / step).roundToInt().coerceAtLeast(1)
         bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(b: SeekBar, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                val value = min + (max - min) * progress / b.max.toFloat()
-                onChange(value)
-                updateSliderLabels()
+                if (syncing || !fromUser) return
+                onChange(min + progress * step)
+                updateLabels()
             }
             override fun onStartTrackingTouch(b: SeekBar) {}
             override fun onStopTrackingTouch(b: SeekBar) {}
         })
     }
 
-    private fun setBar(bar: SeekBar, value: Float, min: Float, max: Float) {
-        bar.progress = (((value.coerceIn(min, max) - min) / (max - min)) * bar.max).roundToInt()
+    private fun setBar(bar: SeekBar, value: Float, min: Float, step: Float) {
+        bar.progress = ((value - min) / step).roundToInt().coerceIn(0, bar.max)
     }
 
-    private fun sideId(side: String): Int = when (side) {
-        "left" -> sideGroup.getChildAt(1).id
-        "right" -> sideGroup.getChildAt(2).id
-        else -> sideGroup.getChildAt(0).id
-    }
+    private fun panel() = LinearLayout(context).apply { orientation = VERTICAL }
 
-    private fun panel() = LinearLayout(context).apply {
-        orientation = VERTICAL
-        setPadding(dp(14), dp(14), dp(14), dp(18))
-    }
-
-    private fun add(parent: ViewGroup, child: View, top: Int = 6) {
-        parent.addView(child, LayoutParams(MATCH, WRAP).apply { topMargin = dp(top) })
-    }
-
-    private fun label(text: String, size: Float, bold: Boolean = false) = TextView(context).apply {
-        this.text = text
-        textSize = size
-        setTextColor(Color.WHITE)
-        if (bold) setTypeface(typeface, Typeface.BOLD)
-        gravity = Gravity.CENTER_VERTICAL
-    }
-
-    private fun note(text: String) = label(text, 12f).apply { alpha = 0.72f }
-
-    private fun button(text: String, click: () -> Unit) = Button(context).apply {
-        this.text = text
-        setTextColor(Color.WHITE)
-        setAllCaps(false)
-        background = rounded(0xFF2F78BE.toInt(), 8f)
-        minHeight = dp(42)
-        setOnClickListener { click() }
-    }
-
-    private fun rounded(color: Int, radiusDp: Float) = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = dp(radiusDp).toFloat()
-        setStroke(dp(1), TimerColors.PANEL_BORDER)
-    }
-
-    private fun dp(value: Float): Int = (value * density + 0.5f).toInt()
-    private fun dp(value: Int): Int = (value * density + 0.5f).toInt()
-
-    private class FramePanel(context: Context) : LinearLayout(context)
+    private fun dp(value: Float): Int = Ui.dp(context, value)
 
     private companion object {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+        const val MAX_WIDTH_DP = 600f
+        const val MAX_HEIGHT_DP = 460f
+        const val FULL_OPACITY_MIN = 0.40f
+        const val MINI_OPACITY_MIN = 0.20f
+        const val OPACITY_STEP = 0.05f
+        const val DEFAULT_MINI_OPACITY = 0.85f
+        val SIDES = listOf("auto", "left", "right")
+        val TAB_LABELS = listOf("对局", "外观", "位置", "录屏", "状态")
     }
 }

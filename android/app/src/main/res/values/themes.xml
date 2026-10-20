@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- One explicit dark theme: vendor DeviceDefault themes may be light and
+         would leave default-coloured text on the app's dark surfaces. -->
+    <style name="Theme.NarutoTimer" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/nt_bg</item>
+        <item name="android:colorBackground">@color/nt_bg</item>
+        <item name="android:statusBarColor">@color/nt_bg</item>
+        <item name="android:navigationBarColor">@color/nt_bg</item>
+        <item name="android:colorPrimary">@color/nt_surface</item>
+        <item name="android:colorPrimaryDark">@color/nt_bg</item>
+        <item name="android:colorAccent">@color/nt_accent</item>
+        <item name="android:colorControlNormal">@color/nt_text_2</item>
+        <item name="android:colorControlActivated">@color/nt_accent</item>
+        <item name="android:colorControlHighlight">#33FFFFFF</item>
+        <item name="android:textColorPrimary">@color/nt_text</item>
+        <item name="android:textColorSecondary">@color/nt_text_2</item>
+        <item name="android:textColorHint">#6F8E99</item>
+        <item name="android:textColorHighlight">#665CE1FF</item>
+        <item name="android:alertDialogTheme">@style/Theme.NarutoTimer.Dialog</item>
+    </style>
+
+    <style name="Theme.NarutoTimer.Dialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/nt_accent</item>
+        <item name="android:colorBackground">@color/nt_surface</item>
+        <item name="android:textColorPrimary">@color/nt_text</item>
+        <item name="android:textColorSecondary">@color/nt_text_2</item>
+    </style>
+
+    <color name="nt_bg">#071219</color>
+    <color name="nt_surface">#0D1E29</color>
+    <color name="nt_accent">#5CE1FF</color>
+    <color name="nt_text">#E6F4F8</color>
+    <color name="nt_text_2">#95B2BE</color>
+</resources>

@@ -555,6 +555,39 @@ func MoveWindowTo(hwnd uintptr, x, y int32) error {
 	return nil
 }
 
+var (
+	procMonitorFromRect = User32.NewProc("MonitorFromRect")
+	procGetMonitorInfoW = User32.NewProc("GetMonitorInfoW")
+)
+
+// MoveWindowOnScreen restores a saved top-left corner, clamped into the work
+// area of the nearest monitor: a position saved on a display that is now
+// disconnected or rearranged must never leave the window off-screen.
+func MoveWindowOnScreen(hwnd uintptr, x, y int32) error {
+	if hwnd == 0 {
+		return fmt.Errorf("window handle is unavailable")
+	}
+	var r Rect
+	if ok, _, callErr := ProcGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+		return fmt.Errorf("read window position: %v", callErr)
+	}
+	w, h := r.Width(), r.Height()
+	target := Rect{Left: x, Top: y, Right: x + w, Bottom: y + h}
+	const monitorDefaultToNearest = 2
+	if monitor, _, _ := procMonitorFromRect.Call(uintptr(unsafe.Pointer(&target)), monitorDefaultToNearest); monitor != 0 {
+		info := struct {
+			size          uint32
+			monitor, work Rect
+			flags         uint32
+		}{size: 40}
+		if ok, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); ok != 0 {
+			x = min(max(x, info.work.Left), max(info.work.Left, info.work.Right-w))
+			y = min(max(y, info.work.Top), max(info.work.Top, info.work.Bottom-h))
+		}
+	}
+	return MoveWindowTo(hwnd, x, y)
+}
+
 // ApplyWindowAlpha remains for the older Win32 callers. New Fyne code must use
 // SetWindowOpacity with its actual HWND rather than a globally searchable title.
 func ApplyWindowAlpha(title string, alpha byte) {

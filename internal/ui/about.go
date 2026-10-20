@@ -31,9 +31,15 @@ func openProjectURL(raw string, w fyne.Window) {
 	}
 }
 func sectionCard(title string, body fyne.CanvasObject) fyne.CanvasObject {
-	heading := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	bg := canvas.NewRectangle(color.NRGBA{R: 14, G: 35, B: 47, A: 255})
+	// Accent colour, not bold: Fyne's CJK fallback font has no bold face.
+	text := canvas.NewText(title, clockLive)
+	text.TextSize = 15
+	text.TextStyle.Bold = true
+	heading := container.NewPadded(text)
+	bg := canvas.NewRectangle(color.NRGBA{R: 16, G: 36, B: 48, A: 255})
 	bg.CornerRadius = 12
+	bg.StrokeColor = panelBorder
+	bg.StrokeWidth = 1
 	return container.NewStack(bg, container.NewPadded(container.NewVBox(heading, body)))
 }
 func changelogText(body string) *widget.RichText {
@@ -66,8 +72,34 @@ func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 	updatesService := s.updateFeeds()
 	s.mu.Lock()
 	source := updates.Source(s.cfg.UI.UpdateSource)
+	autoUpdates := s.cfg.UI.AutoCheckUpdates
 	s.mu.Unlock()
 	client := updates.NewClientForSource(source)
+	autoUpdateCheck := widget.NewCheck("自动检查软件更新（只提醒，不自动下载或重启）", nil)
+	autoUpdateCheck.SetChecked(autoUpdates)
+	autoUpdateCheck.OnChanged = func(on bool) { showSettingsError(s.setAutoCheckUpdates(on), w) }
+	sourceSelect := widget.NewRadioGroup([]string{updates.Gitee.Label(), updates.GitHub.Label()}, nil)
+	sourceSelect.Horizontal, sourceSelect.Required = true, true
+	if source == updates.GitHub {
+		sourceSelect.SetSelected(updates.GitHub.Label())
+	} else {
+		sourceSelect.SetSelected(updates.Gitee.Label())
+	}
+	sourceSelect.OnChanged = func(label string) {
+		next := updates.Gitee
+		if label == updates.GitHub.Label() {
+			next = updates.GitHub
+		}
+		if next == source {
+			return
+		}
+		if err := s.setUpdateSource(next); err != nil {
+			showSettingsError(err, w)
+			return
+		}
+		// Rebuild so checks/downloads use the new client and its own cached feed.
+		s.rebuildSettings()
+	}
 	title := canvas.NewText("替身计时器", clockIdle)
 	title.TextSize = 28
 	title.TextStyle.Bold = true
@@ -205,6 +237,9 @@ func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 						check.Enable()
 						return
 					}
+					// Stop while the windowing backend is still alive; the deferred
+					// stop in Run would otherwise touch a window after shutdown.
+					s.stop()
 					fyne.CurrentApp().Quit()
 				})
 			}()
@@ -260,7 +295,8 @@ func (s *session) aboutControls(w fyne.Window) fyne.CanvasObject {
 		widget.NewLabel("遇到 MuMu SDK、截图或多开实例问题时，请导出支持诊断包后在群内反馈。"),
 		container.NewHBox(copyQQ, openDiagnostics),
 	))
-	updateCard := sectionCard("软件更新", container.NewVBox(status, detail, progress, container.NewHBox(check, action, cancelButton)))
+	updateCard := sectionCard("软件更新", container.NewVBox(status, detail, progress, container.NewHBox(check, action, cancelButton),
+		widget.NewSeparator(), autoUpdateCheck, widget.NewLabel("更新源"), sourceSelect))
 	history := sectionCard("更新日志", container.NewVBox(picker, date, notes))
 	return container.NewVScroll(container.NewVBox(container.NewPadded(container.NewVBox(title, subtitle, version)), feedback, updateCard, history, sectionCard("关于项目", container.NewVBox(widget.NewLabel("原创代码采用 MIT 许可；第三方组件保留各自许可。"), links))))
 }
