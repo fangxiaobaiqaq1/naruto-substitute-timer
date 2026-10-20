@@ -87,6 +87,14 @@ class Settings(context: Context) {
         @Synchronized get() = prefs.getFloat(KEY_FONT_SCALE, DEFAULT_FONT_SCALE).coerceIn(FONT_SCALE_MIN, FONT_SCALE_MAX)
         set(value) = put(KEY_FONT_SCALE) { putFloat(KEY_FONT_SCALE, value.coerceIn(FONT_SCALE_MIN, FONT_SCALE_MAX)) }
 
+    /** Card width / height as a multiple of its content ∈ [1, 3]; text keeps [fontScale]. */
+    var cardWidth: Float
+        @Synchronized get() = prefs.getFloat(KEY_CARD_WIDTH, 1f).coerceIn(1f, CARD_STRETCH_MAX)
+        set(value) = put(KEY_CARD_WIDTH) { putFloat(KEY_CARD_WIDTH, value.coerceIn(1f, CARD_STRETCH_MAX)) }
+    var cardHeight: Float
+        @Synchronized get() = prefs.getFloat(KEY_CARD_HEIGHT, 1f).coerceIn(1f, CARD_STRETCH_MAX)
+        set(value) = put(KEY_CARD_HEIGHT) { putFloat(KEY_CARD_HEIGHT, value.coerceIn(1f, CARD_STRETCH_MAX)) }
+
     /** 悬浮窗位置（px，相对屏幕左上；Int.MIN_VALUE = 未设置，用默认位置）。 */
     var overlayX: Int
         @Synchronized get() = prefs.getInt(KEY_OVERLAY_X, Int.MIN_VALUE)
@@ -133,6 +141,8 @@ class Settings(context: Context) {
         const val KEY_WINDOW_OPACITY = "windowOpacity"
         const val KEY_MINI_OPACITY = "miniOpacity"
         const val KEY_FONT_SCALE = "fontScale"
+        const val KEY_CARD_WIDTH = "cardWidth"
+        const val KEY_CARD_HEIGHT = "cardHeight"
         const val KEY_OVERLAY_X = "overlayX"
         const val KEY_OVERLAY_Y = "overlayY"
         const val KEY_PREFER_PROJECTION = "preferProjection"
@@ -144,5 +154,7 @@ class Settings(context: Context) {
         const val FONT_SCALE_MIN = 0.25f
         const val FONT_SCALE_MAX = 3.00f
         const val FONT_SCALE_STEP = 0.01f
+        const val CARD_STRETCH_MAX = 3.00f
+        const val CARD_STRETCH_STEP = 0.05f
     }
 }

@@ -1,9 +1,8 @@
 package com.narutotimer.overlay
 
 // Owner: kt-overlay-ui
-// Android-native floating timer controller. The card is passive until tapped:
-// a tap opens its action row, and only then (or in position-edit mode) can it
-// be dragged, so a stray swipe during a fight never moves it.
+// Android-native floating timer controller. The card can be dragged directly;
+// a tap opens its action row.
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
@@ -140,7 +139,7 @@ class OverlayController(
 
     val isShowing: Boolean get() = showing
 
-    /** Temporarily makes the card draggable (from the settings screens). */
+    /** Highlights the card so it is easy to find and drag (from the settings screens). */
     fun startPositionEdit() {
         if (!showing) return
         setControls(false)
@@ -220,7 +219,6 @@ class OverlayController(
         if (controlsVisible == on) return
         controlsVisible = on
         view?.controlsVisible = on
-        updateDraggable()
         view?.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
     }
 
@@ -228,11 +226,6 @@ class OverlayController(
         if (positionEditing == on) return
         positionEditing = on
         view?.editing = on
-        updateDraggable()
-    }
-
-    private fun updateDraggable() {
-        view?.draggable = controlsVisible || positionEditing
     }
 
     private fun touchActivity() {

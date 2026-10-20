@@ -9,8 +9,8 @@ package com.narutotimer.overlay
 //        │          12.3             │         │   12.3    │
 //        │ 我方·自动·左 · 决·对局 豆2/3│         └──────────┘
 //        └───────────────────────────┘
-// Tapping the card opens an action row below it; dragging moves the card only
-// while that row is open or the controller's position-edit mode is active.
+// Dragging moves the card at any time; tapping opens an action row below it.
+// The card can be stretched wider/taller than its content (text stays centred).
 
 import android.content.Context
 import android.content.res.Configuration
@@ -43,7 +43,7 @@ class MiniTimerView(context: Context) : View(context) {
         fun onToggleMini()
         /** Explicitly stop and hide the game overlay. */
         fun onExit()
-        /** Dragging delta in screen pixels (only while [draggable]). */
+        /** Dragging delta in screen pixels. */
         fun onDrag(dx: Int, dy: Int)
         /** Dragging ended; controller persists the position. */
         fun onDragEnd()
@@ -69,9 +69,6 @@ class MiniTimerView(context: Context) : View(context) {
             updateAccessibilityDescription()
             relayout()
         }
-
-    /** Drags move the card only when the controller allows it. */
-    var draggable: Boolean = false
 
     /** Position-edit mode: highlighted border and a drag hint instead of the caption. */
     var editing: Boolean = false
@@ -104,8 +101,10 @@ class MiniTimerView(context: Context) : View(context) {
     private var layoutW = 0f
     private var layoutH = 0f
     private var grownW = 0f
-    private var structureKey = Long.MIN_VALUE
+    private var structureKey: Any? = null
     private var bodyH = 0f
+    /** Extra top space that centres the content in a card stretched taller. */
+    private var bodyOffsetY = 0f
     private var controlsH = 0f
     private var controlsMinW = 0f
 
@@ -122,7 +121,6 @@ class MiniTimerView(context: Context) : View(context) {
     private var lastRawX = 0f
     private var lastRawY = 0f
     private var dragging = false
-    private var movedAway = false
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -166,17 +164,11 @@ class MiniTimerView(context: Context) : View(context) {
             a.leftText == b.leftText && a.leftColor == b.leftColor &&
             a.rightText == b.rightText && a.rightColor == b.rightColor &&
             a.infoText == b.infoText && a.showBothSides == b.showBothSides &&
-            a.mini == b.mini && a.fontScale == b.fontScale
+            a.mini == b.mini && a.fontScale == b.fontScale &&
+            a.cardWidth == b.cardWidth && a.cardHeight == b.cardHeight
 
-    private fun structure(s: OverlayState): Long {
-        var key = java.lang.Float.floatToIntBits(s.fontScale).toLong() shl 8
-        if (s.mini) key = key or 1
-        if (s.showBothSides) key = key or 2
-        if (s.dual) key = key or 4
-        if (controlsVisible) key = key or 8
-        if (editing) key = key or 16
-        return key
-    }
+    private fun structure(s: OverlayState): Any =
+        listOf(s.fontScale, s.cardWidth, s.cardHeight, s.mini, s.showBothSides, s.dual, controlsVisible, editing)
 
     // ---- Metrics ----------------------------------------------------------
 
@@ -317,7 +309,9 @@ class MiniTimerView(context: Context) : View(context) {
             contentW = max(contentW, textW(info, FULL_INFO, regular))
             contentH += gap + lineH(FULL_INFO, regular)
         }
-        bodyH = contentH + 2 * padY
+        val naturalH = contentH + 2 * padY
+        bodyH = naturalH * s.cardHeight
+        bodyOffsetY = (bodyH - naturalH) / 2f
 
         controlsH = if (controlsVisible) u(BUTTON_HIT_DP) + 2 * u(CONTROLS_PAD_DP) else 0f
         controlsMinW = if (controlsVisible) {
@@ -326,7 +320,7 @@ class MiniTimerView(context: Context) : View(context) {
             } + u(BUTTON_GAP_DP) * (buttonCount - 1) + 2 * u(CONTROLS_PAD_DP)
         } else 0f
 
-        val desired = min(maxW, max(contentW + 2 * padX, controlsMinW))
+        val desired = min(maxW, max((contentW + 2 * padX) * s.cardWidth, controlsMinW))
         grownW = min(maxW, max(grownW, desired))
         layoutW = grownW
         layoutH = bodyH + controlsH
@@ -392,7 +386,7 @@ class MiniTimerView(context: Context) : View(context) {
         val gap = u(GAP_DP)
         val innerW = w - padX - u(PAD_X_DP)
         val cx = u(ACCENT_DP) + (w - u(ACCENT_DP)) / 2f
-        var y = u(PAD_Y_DP)
+        var y = u(PAD_Y_DP) + bodyOffsetY
 
         if (s.mini) {
             drawText(canvas, caption(s), MINI_CAPTION, medium, TimerColors.TAG_IDLE, cx, y, Paint.Align.CENTER, innerW)
@@ -519,16 +513,15 @@ class MiniTimerView(context: Context) : View(context) {
                 lastRawX = downRawX
                 lastRawY = downRawY
                 dragging = false
-                movedAway = false
                 pressed = hit(event.x, event.y)
                 if (pressed >= 0) invalidate()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (!dragging && !movedAway &&
+                if (!dragging &&
                     (abs(event.rawX - downRawX) > touchSlop || abs(event.rawY - downRawY) > touchSlop)
                 ) {
-                    if (draggable) dragging = true else movedAway = true
+                    dragging = true
                     if (pressed >= 0) {
                         pressed = -1
                         invalidate()
@@ -555,7 +548,6 @@ class MiniTimerView(context: Context) : View(context) {
                 }
                 val actionIndex = pressed
                 pressed = -1
-                if (movedAway) return true
                 if (actionIndex >= 0) {
                     invalidate()
                     if (hit(event.x, event.y) == actionIndex) {
