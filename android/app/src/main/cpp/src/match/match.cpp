@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <vector>
 
 namespace nt::match {
@@ -17,7 +19,32 @@ namespace {
 // Go 的 sync.Pool 复用 grayPrefix；Android 上 Match 只在调用线程上同步使用前缀和，
 // 用 thread_local 缓冲等价复用（ParallelFor 的每个工作线程各自一份）。
 thread_local grayPrefix tlsPrefix;
-constexpr size_t kKeepPrefixBytes = static_cast<size_t>(1) << 20;
+// Prefix sums above kKeepPrefixBytes (wide screen regions: ~2 MiB at 1080p,
+// ~5 MiB at 2880x1800) do not stay resident on every pool thread: they come
+// from a process-wide pool that keeps ONE such buffer for the next large scan.
+constexpr size_t kKeepPrefixBytes = static_cast<size_t>(512) << 10;
+
+class largePrefixPool {
+public:
+    std::unique_ptr<grayPrefix> take() {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (spare_) return std::move(spare_);
+        return std::make_unique<grayPrefix>();
+    }
+    void give(std::unique_ptr<grayPrefix> p) {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!spare_ || spare_->sum.capacity() < p->sum.capacity()) spare_ = std::move(p);
+    }
+
+private:
+    std::mutex mu_;
+    std::unique_ptr<grayPrefix> spare_;
+};
+
+largePrefixPool& largePrefixes() {
+    static largePrefixPool* pool = new largePrefixPool();  // process lifetime, like the thread pool
+    return *pool;
+}
 // kParallelScanWork (positions x template pixels) splits one scan over the
 // pool: ~1 ms of single-thread NCC work. Smaller scans (every avatar job,
 // name strips, hint windows) stay on their caller, which is already parallel.
@@ -76,11 +103,19 @@ bool NCC::Match(const Query& q, Score& out) const {
     // way, so the scores do not depend on which covering prefix is used.
     const int px0 = roi.Min.X - origin.X, py0 = roi.Min.Y - origin.Y;
     const grayPrefix* pre = nullptr;
+    std::unique_ptr<grayPrefix> large;
     if (q.Prefix != nullptr && gray == q.Gray && q.Prefix->covers(px0, py0, px0 + roi.Dx(), py0 + roi.Dy())) {
         pre = q.Prefix;
     } else if (roi.Dx() <= maxDotRun) {
-        newGrayPrefix(tlsPrefix, *gray, px0, py0, roi.Dx(), roi.Dy());
-        pre = &tlsPrefix;
+        const size_t bytes = static_cast<size_t>(roi.Dx() + 1) * static_cast<size_t>(roi.Dy()) * 2 * sizeof(uint32_t);
+        if (bytes > kKeepPrefixBytes) {
+            large = largePrefixes().take();
+            newGrayPrefix(*large, *gray, px0, py0, roi.Dx(), roi.Dy());
+            pre = large.get();
+        } else {
+            newGrayPrefix(tlsPrefix, *gray, px0, py0, roi.Dx(), roi.Dy());
+            pre = &tlsPrefix;
+        }
     }
     Score best;
     best.Peak = roi.Min;
@@ -171,12 +206,7 @@ bool NCC::Match(const Query& q, Score& out) const {
             scan(best.Peak.X - step, best.Peak.Y - step, best.Peak.X + step, best.Peak.Y + step, 1);
         }
     }
-    // A per-thread buffer sized for the largest search area would stay resident
-    // on every pool thread (a 0.45x0.28 screen ROI is ~5 MiB at 2880x1800).
-    // Keep only buffers up to kKeepPrefixBytes between calls.
-    if (pre == &tlsPrefix && tlsPrefix.sum.capacity() * 2 * sizeof(uint32_t) > kKeepPrefixBytes) {
-        tlsPrefix = grayPrefix{};
-    }
+    if (large) largePrefixes().give(std::move(large));
     out = std::move(best);
     return true;
 }
