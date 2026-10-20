@@ -189,15 +189,23 @@ BeadState sampleUnverifiedSpecial(const RGBA* img, const BeadPosition& p, int w,
 std::vector<BeadInfo> sampleCalibratedSpecial(const RGBA* img, const std::vector<BeadPosition>& positions,
                                               const detect::ContentArea& area, const config::VisionConfig& cfg,
                                               const std::array<ninja::Readout, 2>& identified) {
-    const double hudScale = area.HUDScale(detect::LogicWidth, detect::LogicHeight);
-    const int w = std::max(
-        2, static_cast<int>(std::round(cfg.SampleWidthReferencePX * cfg.CoreScale * hudScale)));
-    const int h = std::max(
-        2, static_cast<int>(std::round(cfg.SampleHeightReferencePX * cfg.CoreScale * hudScale)));
     std::vector<BeadInfo> out;
     for (int index = 0; index < 2; index++) {
         const engine::Side side = kSides[index];
         const std::string sideName = engine::SideString(side);
+        std::vector<BeadPosition> row;
+        const size_t start = out.size();
+        for (const BeadPosition& p : positions) {
+            if (p.Side == sideName) {
+                row.push_back(p);
+            }
+        }
+        // A calibrated side has its own scale.
+        const double hudScale = detect::RowHUDScale(row, area, detect::LogicWidth, detect::LogicHeight);
+        const int w = std::max(
+            2, static_cast<int>(std::round(cfg.SampleWidthReferencePX * cfg.CoreScale * hudScale)));
+        const int h = std::max(
+            2, static_cast<int>(std::round(cfg.SampleHeightReferencePX * cfg.CoreScale * hudScale)));
         ninja::Palette palette = identified[index].Palette_;
         if (identified[index].Unverified) {
             palette = identified[index].PaletteHint;
@@ -205,13 +213,6 @@ std::vector<BeadInfo> sampleCalibratedSpecial(const RGBA* img, const std::vector
         const bool xiayin = palette == ninja::Xiayin;
         if (xiayin) {
             palette = xiayinPalette(img, positions, sideName, w, h);
-        }
-        std::vector<BeadPosition> row;
-        const size_t start = out.size();
-        for (const BeadPosition& p : positions) {
-            if (p.Side == sideName) {
-                row.push_back(p);
-            }
         }
         std::vector<BeadState> states;
         if (identified[index].Unverified) {
@@ -272,7 +273,8 @@ std::vector<BeadInfo> sampleCalibratedSpecial(const RGBA* img, const std::vector
             // and legal. Special palettes and offset identities are excluded.
             if (identified[index].RowOffsetY == 0 && palette == ninja::Palette::None && !xiayin && row.size() == 4 &&
                 energyGaugeBand(img, row, area, rowStates)) {
-                const int dy = static_cast<int>(std::round(ninja::EnergyGaugeRowOffset * area.HUDScale(960, 540)));
+                const int dy = static_cast<int>(
+                    std::round(ninja::EnergyGaugeRowOffset * detect::RowHUDScale(row, area, 960, 540)));
                 std::vector<BeadInfo> candidateInfos;
                 std::vector<BeadState> candidateStates;
                 sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], Pt(0, dy), candidateInfos,
@@ -308,7 +310,7 @@ void sampleCalibratedRow(const RGBA* img, const std::vector<BeadPosition>& row, 
                          std::vector<BeadState>& states) {
     infos.clear();
     states.clear();
-    const double hudScale = area.HUDScale(detect::LogicWidth, detect::LogicHeight);
+    const double hudScale = detect::RowHUDScale(row, area, detect::LogicWidth, detect::LogicHeight);
     const int w = std::max(
         2, static_cast<int>(std::round(cfg.SampleWidthReferencePX * cfg.CoreScale * hudScale)));
     const int h = std::max(

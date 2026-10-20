@@ -44,9 +44,20 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			// integer-rounded bean centers may alternate 15/16px; their first
 			// interval must not accidentally stretch all of the name lettering.
 			// Use the same fitted HUD scale as the centers and sampling cores.
-			scale := area.HUDScale(960, 540)
+			scale := detect.RowHUDScale(row, area, 960, 540)
 			first := image.Pt(row[0].X, row[0].Y)
-			identified[index] = e.nameTracker[profileIndex][index].ReadWithAvatar(e.names, &e.avatarTracker[profileIndex][index], img, ninja.NameRegion(first, scale, index == 0), ninja.AvatarRegion(first, scale, index == 0), scale, at)
+			cal := row[0].Cal
+			nameROI, avatarROI, avatarScale := ninja.NameRegion(first, scale, index == 0), ninja.AvatarRegion(first, scale, index == 0), scale
+			tracker, avatar := &e.nameTracker[profileIndex][index], &e.avatarTracker[profileIndex][index]
+			if cal != nil {
+				// A drawn portrait box wins over the bead-derived window.
+				if cal.Portrait() {
+					avatarROI, avatarScale = ninja.AvatarRegionFromBox(cal.Avatar.X, cal.Avatar.Y, cal.Avatar.W, cal.Avatar.H, index == 0)
+				}
+				identified[index] = tracker.ReadCalibrated(e.names, avatar, img, nameROI, avatarROI, scale, avatarScale, index == 1, at)
+			} else {
+				identified[index] = tracker.ReadWithAvatar(e.names, avatar, img, nameROI, avatarROI, scale, at)
+			}
 			// Only a recognized six-slot NAME permits usable slots five and six.
 			// A brief label gap retains six UNKNOWN placeholders, never extra votes.
 			if len(row) == 4 && identified[index].Slots == 6 {
@@ -55,11 +66,21 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 				last := row[len(row)-1]
 				dx := (last.LX - row[0].LX) / float64(len(row)-1)
 				dy := (last.LY - row[0].LY) / float64(len(row)-1)
-				xOffset := row[0].X - area.MapHUDPixel(row[0].LX, row[0].LY, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight).X
+				xOffset := 0
+				if !cal.Beads() {
+					xOffset = row[0].X - area.MapHUDPixel(row[0].LX, row[0].LY, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight).X
+				}
 				for i := 4; i < 6; i++ {
 					lx, ly := row[0].LX+float64(i)*dx, row[0].LY+float64(i)*dy
-					mapped := area.MapHUDPixel(lx, ly, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight)
-					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: name, Idx: i, LX: lx, LY: ly}, X: mapped.X + xOffset, Y: mapped.Y})
+					var mapped image.Point
+					if cal.Beads() {
+						// Calibrated rows extrapolate their own pixel pitch.
+						mapped = cal.Map(lx, ly)
+					} else {
+						mapped = area.MapHUDPixel(lx, ly, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight)
+						mapped.X += xOffset
+					}
+					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: name, Idx: i, LX: lx, LY: ly}, X: mapped.X, Y: mapped.Y, Cal: cal})
 				}
 			}
 			// Some exact variants have an extra energy bar above their ordinary
@@ -69,7 +90,11 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			if offset := identified[index].RowOffsetY; offset != 0 {
 				for i := range row {
 					row[i].LY += offset * detect.HUDReferenceHeight / 540
-					row[i].Y = area.MapHUDPixel(row[i].LX, row[i].LY, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight).Y
+					if cal.Beads() {
+						row[i].Y = cal.Map(row[i].LX, row[i].LY).Y
+					} else {
+						row[i].Y = area.MapHUDPixel(row[i].LX, row[i].LY, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight).Y
+					}
 				}
 			}
 		}
@@ -111,7 +136,7 @@ func energyGaugeBand(img *image.RGBA, row []detect.BeadPosition, area detect.Con
 		r, g, b := int(c.R), int(c.G), int(c.B)
 		return r >= 190 && g >= 110 && r-b >= 80 && g-b >= 70
 	}
-	d := max(2, int(math.Round(4*area.HUDScale(960, 540))))
+	d := max(2, int(math.Round(4*detect.RowHUDScale(row, area, 960, 540))))
 	continuous := true
 	for i, p := range row {
 		if !gold(p.X, p.Y) || gold(p.X, p.Y-d) || gold(p.X, p.Y+d) {

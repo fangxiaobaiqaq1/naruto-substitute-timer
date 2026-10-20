@@ -217,7 +217,7 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 				}
 				f = analyzed.analyze(img, eng, mode, started, captured, client.Source())
 			} else if method == capture.MethodPrintWindow {
-				f = withFingerprint(snapshot(eng, mode))
+				f = snapshotFingerprinted(eng, mode)
 			} else {
 				f = Frame{Hold: true, Err: fmt.Errorf("unsupported capture method %q", method), CaptureStarted: started, CaptureMethod: method}
 			}
@@ -458,6 +458,38 @@ func withFingerprint(f Frame) Frame {
 	return f
 }
 
+// calibrationRevision is the engine's region-calibration revision (0 = never
+// replaced). Fingerprints include it: after a live replacement identical
+// pixels are a new observation, analysed again and not a duplicate.
+func calibrationRevision(eng engine.Engine) uint64 {
+	if c, ok := eng.(engine.Calibrator); ok {
+		return c.CalibrationRevision()
+	}
+	return 0
+}
+
+func withRevision(sum, revision uint64) uint64 {
+	if revision != 0 {
+		sum = mixHash(sum, revision)
+	}
+	return sum
+}
+
+func engineFingerprint(img *image.RGBA, method string, eng engine.Engine) uint64 {
+	return withRevision(frameFingerprint(img, method), calibrationRevision(eng))
+}
+
+// snapshotFingerprinted reads the revision before analysing, so a replacement
+// during the analysis is never attributed to this frame.
+func snapshotFingerprinted(eng engine.Engine, mode detect.ContentMode) Frame {
+	revision := calibrationRevision(eng)
+	f := snapshot(eng, mode)
+	if f.Img != nil && !f.fingerprinted {
+		f.fingerprint, f.fingerprinted = withRevision(frameFingerprint(f.Img, f.CaptureMethod), revision), true
+	}
+	return f
+}
+
 // dedupedAnalysis skips the recognition chain for a capture whose pixels are
 // identical to the previously analyzed capture. The emulator does not present a
 // new frame for every poll; re-analyzing the same pixels would only burn CPU and
@@ -471,7 +503,7 @@ type dedupedAnalysis struct {
 }
 
 func (d *dedupedAnalysis) analyze(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
-	fingerprint := frameFingerprint(img, source)
+	fingerprint := engineFingerprint(img, source, eng)
 	if d.valid && img != nil && fingerprint == d.fingerprint && d.last.Err == nil {
 		f := d.last
 		f.Img = img

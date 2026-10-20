@@ -309,6 +309,21 @@ class Session(
 
     fun setShowBothSides(on: Boolean) { synchronized(lock) { settings.showBothSides = on; bump() } }
     fun setMiniMode(on: Boolean) { synchronized(lock) { settings.overlayMode = if (on) "mini" else "full"; bump() } }
+    /**
+     * A new region calibration reads the same screen with new geometry. Like a
+     * frame-source change, only the visual baseline is invalidated; confirmed
+     * cooldowns continue.
+     */
+    fun resyncGeometry() {
+        synchronized(lock) {
+            leftClock.resyncObservation()
+            rightClock.resyncObservation()
+            syncLeft = false
+            syncRight = false
+            bump()
+        }
+    }
+
     fun resyncObservation() {
         synchronized(lock) {
             leftClock.resyncObservation()

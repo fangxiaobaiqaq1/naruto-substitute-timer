@@ -19,25 +19,30 @@ type Tracker struct {
 	hint        evidence
 	bounds, roi image.Rectangle
 	scale       float64
+	anchor      portraitAnchor
 	retryAfter  time.Time
 	lastAt      time.Time
 	verifiedAt  time.Time
 }
 
 func (t *Tracker) Read(reader *Reader, img *image.RGBA, roi image.Rectangle, scale float64, now time.Time) Readout {
+	return t.read(reader, img, roi, scale, portraitAnchor{}, now)
+}
+
+func (t *Tracker) read(reader *Reader, img *image.RGBA, roi image.Rectangle, scale float64, anchor portraitAnchor, now time.Time) Readout {
 	if reader == nil || img == nil {
 		return Readout{}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	changed := t.reader != reader || t.bounds != img.Bounds() || t.roi != roi || t.scale != scale || (!t.lastAt.IsZero() && now.Before(t.lastAt))
+	changed := t.reader != reader || t.bounds != img.Bounds() || t.roi != roi || t.scale != scale || t.anchor != anchor || (!t.lastAt.IsZero() && now.Before(t.lastAt))
 	t.lastAt = now
 	if changed {
 		t.hint = evidence{}
 		t.retryAfter = time.Time{}
 		t.verifiedAt = time.Time{}
 	}
-	t.reader, t.bounds, t.roi, t.scale = reader, img.Bounds(), roi, scale
+	t.reader, t.bounds, t.roi, t.scale, t.anchor = reader, img.Bounds(), roi, scale, anchor
 	unavailable := func() Readout {
 		if t.hint.Name != "" && t.hint.Slots > 0 && now.Sub(t.verifiedAt) <= time.Second {
 			return Readout{Slots: t.hint.Slots, RowOffsetY: t.hint.RowOffsetY, Unverified: true, PaletteHint: t.hint.Palette}
@@ -53,7 +58,7 @@ func (t *Tracker) Read(reader *Reader, img *image.RGBA, roi image.Rectangle, sca
 				// A special template stays double-gated: the stored pixels AND
 				// the fixed portrait must both be current. A kept title alone
 				// may never keep an energy-gauge geometry alive.
-				if t.hint.portrait == nil || itachiPortraitEvidence(img, scale, t.hint.portrait, t.hint.portraitSize) {
+				if t.hint.portrait == nil || itachiPortraitEvidenceAt(img, scale, t.hint.portrait, t.hint.portraitSize, anchor) {
 					t.hint.rect = t.hint.rect.Add(score.Peak.Sub(t.hint.rect.Min))
 					t.hint.Score = score.Value
 					t.verifiedAt = now
@@ -80,7 +85,7 @@ func (t *Tracker) Read(reader *Reader, img *image.RGBA, roi image.Rectangle, sca
 	// frame. A failed search starts the backoff; later failed rechecks cannot
 	// turn rapid occlusion/effect flicker into repeated scans.
 	t.retryAfter = now.Add(500 * time.Millisecond)
-	found := reader.read(img, roi, scale)
+	found := reader.readAnchored(img, roi, scale, anchor)
 	if found.Name != "" {
 		t.hint = found
 		t.verifiedAt = now
@@ -98,4 +103,16 @@ func (t *Tracker) Read(reader *Reader, img *image.RGBA, roi image.Rectangle, sca
 func (t *Tracker) ReadWithAvatar(reader *Reader, avatar *AvatarTracker, img *image.RGBA, titleROI, avatarROI image.Rectangle, scale float64, now time.Time) Readout {
 	title := t.Read(reader, img, titleROI, scale, now)
 	return reader.ResolveEvidence(img, titleROI, avatarROI, scale, title, avatar, now)
+}
+
+// ReadCalibrated is ReadWithAvatar for a player-calibrated side: the portrait
+// window has its own scale, and on the right side 百战鼬's fixed portrait
+// check follows that window instead of the 16:9 frame origin.
+func (t *Tracker) ReadCalibrated(reader *Reader, avatar *AvatarTracker, img *image.RGBA, titleROI, avatarROI image.Rectangle, scale, avatarScale float64, right bool, now time.Time) Readout {
+	var anchor portraitAnchor
+	if right {
+		anchor = portraitAnchor{window: avatarROI, scale: avatarScale}
+	}
+	title := t.read(reader, img, titleROI, scale, anchor, now)
+	return reader.ResolveEvidence(img, titleROI, avatarROI, avatarScale, title, avatar, now)
 }

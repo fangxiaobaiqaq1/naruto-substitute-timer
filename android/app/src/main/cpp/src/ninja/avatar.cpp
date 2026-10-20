@@ -713,6 +713,27 @@ Rect AvatarRegion(Point first, double scale, bool left) {
                     first.Y + static_cast<int>(std::round(38 * scale)));
 }
 
+// Player-drawn portrait box (docs/区域校准.md): the bounding box of the
+// visible diamond portrait, frame included. Measured on 13 native portraits
+// (1280x720..2880x1800, camp and duel): its side is 68.5 reference units
+// (960-wide) and its centre sits at (42, 49.5) / (36, 49.5) inside the
+// automatic left / right AvatarRegion window.
+namespace {
+constexpr double avatarBoxSide = 68.5;
+constexpr double avatarBoxLeftX = 42.0;
+constexpr double avatarBoxRightX = 36.0;
+constexpr double avatarBoxCentreY = 49.5;
+}  // namespace
+
+Rect AvatarRegionFromBox(double x, double y, double w, double h, bool left, double& outScale) {
+    const double scale = (w + h) / 2 / avatarBoxSide;
+    const double cx = left ? avatarBoxLeftX : avatarBoxRightX;
+    const double x0 = x + w / 2 - cx * scale, y0 = y + h / 2 - avatarBoxCentreY * scale;
+    outScale = scale;
+    return MakeRect(static_cast<int>(std::round(x0)), static_cast<int>(std::round(y0)),
+                    static_cast<int>(std::round(x0 + 70 * scale)), static_cast<int>(std::round(y0 + 100 * scale)));
+}
+
 // canonicalAvatarName maps only documented historical spellings onto a current
 // canonical catalog title. It deliberately does not collapse distinct forms.
 std::string canonicalAvatarName(const std::string& s) {

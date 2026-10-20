@@ -49,6 +49,8 @@ object NativeCore {
     @JvmStatic external fun nativeFinishAssets(): Boolean
     @JvmStatic external fun nativeLastError(): String?
     @JvmStatic external fun nativeSetPlayerNames(names: Array<String>)
+    /** 区域校准：rects = 16 个比例（[Settings.KEY_CALIB_RECTS] 顺序，各 x,y,w,h），NaN = 自动。 */
+    @JvmStatic external fun nativeSetCalibration(profile: String, rects: FloatArray): Boolean
     @JvmStatic external fun nativeAnalyzeHardwareBuffer(hb: HardwareBuffer, capturedAtNanos: Long, method: Int, out: ByteBuffer): Int
     @JvmStatic external fun nativeAnalyzeBuffer(
         pixels: ByteBuffer, width: Int, height: Int, rowStride: Int, capturedAtNanos: Long, method: Int, out: ByteBuffer,
@@ -64,6 +66,16 @@ object NativeCore {
     fun lastError(): String = nativeLastError() ?: ""
 
     fun setPlayerNames(names: List<String>) = nativeSetPlayerNames(names.toTypedArray())
+
+    /**
+     * 把 [Settings] 里的区域校准（docs/区域校准.md）交给 native。引擎已建好时立即重建，
+     * 下一帧（即使画面没变）就用新框；否则在 nativeFinishAssets 时生效。失败返回 false（见 [lastError]）。
+     */
+    fun setCalibration(settings: Settings): Boolean {
+        val rects = FloatArray(16) { Float.NaN }
+        Settings.KEY_CALIB_RECTS.forEachIndexed { i, key -> settings.calibRect(key)?.copyInto(rects, i * 4) }
+        return nativeSetCalibration(settings.calibProfile, rects)
+    }
 
     /**
      * 分析一帧 HardwareBuffer（MediaProjection ImageReader / takeScreenshot）。

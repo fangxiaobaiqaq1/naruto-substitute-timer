@@ -6,7 +6,7 @@
 //    Pipeline::Analyze → 编码进调用方预分配的 direct ByteBuffer（格式见 ARCHITECTURE.md §JNI）。
 //  * 捕获所有 C++ 异常：JNI 边界之外绝不抛出。
 //
-// 线程：所有 nativeAnalyze* / nativeFinishAssets / nativeSetPlayerNames 共用一把全局锁，
+// 线程：所有 nativeAnalyze* / nativeFinishAssets / nativeSetPlayerNames / nativeSetCalibration 共用一把全局锁，
 // 识别核心因此只会在一个线程上运行（Go 里的 sync.Mutex 在 C++ 中可省略）。
 // 方法通过 RegisterNatives 注册，库本身 -fvisibility=hidden，只导出 JNI_OnLoad。
 
@@ -15,11 +15,13 @@
 #include <android/log.h>
 #include <jni.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -172,9 +174,11 @@ jint encodeFrame(const nt::frame::Frame& f, uint8_t* out, size_t cap) {
 // ---------------------------------------------------------------------------
 // 全局状态
 // ---------------------------------------------------------------------------
-std::mutex g_mu;  // 保护 g_pipeline / g_playerNames / g_lastError
+std::mutex g_mu;  // 保护 g_pipeline / g_playerNames / g_calibration / g_lastError
 std::unique_ptr<nt::frame::Pipeline> g_pipeline;
 std::vector<std::string> g_playerNames;
+// 区域校准（docs/区域校准.md）：nullopt = 全部自动。与 g_playerNames 一样跨 nativeInit 保留。
+std::optional<nt::config::RegionCalibration> g_calibration;
 std::string g_lastError;
 
 void setError(const std::string& e) {
@@ -329,13 +333,19 @@ jboolean nativeAddText(JNIEnv* env, jclass, jstring jpath, jstring jtext) {
     return JNI_FALSE;
 }
 
+// 引擎配置：当前账号名与区域校准。调用方持有 g_mu。
+nt::config::Config configLocked() {
+    nt::config::Config cfg = nt::config::Default();
+    cfg.UI.PlayerNames = g_playerNames;
+    cfg.Layout.Calibration = g_calibration;
+    return cfg;
+}
+
 jboolean nativeFinishAssets(JNIEnv*, jclass) {
     try {
         std::lock_guard<std::mutex> lock(g_mu);
-        nt::config::Config cfg = nt::config::Default();
-        cfg.UI.PlayerNames = g_playerNames;
         nt::identity::SetMineNames(g_playerNames);
-        auto p = std::make_unique<nt::frame::Pipeline>(cfg);
+        auto p = std::make_unique<nt::frame::Pipeline>(configLocked());
         if (!p->Ok()) {
             setError("engine build failed: " + p->Error());
             g_pipeline.reset();
@@ -388,6 +398,49 @@ void nativeSetPlayerNames(JNIEnv* env, jclass, jobjectArray names) {
         std::lock_guard<std::mutex> lock(g_mu);
         setError("nativeSetPlayerNames: unknown exception");
     }
+}
+
+// 区域校准：profile "camp"/"duel"，rects = 16 个比例（左豆、右豆、左头像、右头像各 x,y,w,h），
+// 任一分量为 NaN 的框 = 自动。引擎已建好时立即重建并清空去重缓存/交付状态（Pipeline::Rebuild，
+// 同一画面下一帧就按新框重新识别）；否则留给 nativeFinishAssets。重建失败保留旧引擎。
+jboolean nativeSetCalibration(JNIEnv* env, jclass, jstring jprofile, jfloatArray jrects) {
+    try {
+        if (jrects == nullptr || env->GetArrayLength(jrects) != 16) {
+            std::lock_guard<std::mutex> lock(g_mu);
+            setError("nativeSetCalibration: rects must hold 16 floats");
+            return JNI_FALSE;
+        }
+        jfloat v[16];
+        env->GetFloatArrayRegion(jrects, 0, 16, v);
+        nt::config::RegionCalibration c;
+        c.Profile = jstr(env, jprofile);
+        std::optional<nt::config::NormalizedRect>* rects[4] = {&c.LeftBeads, &c.RightBeads, &c.LeftAvatar,
+                                                               &c.RightAvatar};
+        bool any = false;
+        for (int i = 0; i < 4; ++i) {
+            const jfloat* r = v + 4 * i;
+            if (std::isnan(r[0]) || std::isnan(r[1]) || std::isnan(r[2]) || std::isnan(r[3])) continue;
+            *rects[i] = nt::config::NormalizedRect{r[0], r[1], r[2], r[3]};
+            any = true;
+        }
+        std::lock_guard<std::mutex> lock(g_mu);
+        g_calibration = any ? std::optional<nt::config::RegionCalibration>(c) : std::nullopt;
+        if (!g_pipeline || !g_pipeline->Ok()) return JNI_TRUE;
+        std::string err;
+        if (!g_pipeline->Rebuild(configLocked(), &err)) {
+            setError("calibration rebuild failed: " + err);
+            return JNI_FALSE;
+        }
+        NT_LOGI("pipeline rebuilt for region calibration");
+        return JNI_TRUE;
+    } catch (const std::exception& e) {
+        std::lock_guard<std::mutex> lock(g_mu);
+        setError(std::string("nativeSetCalibration: ") + e.what());
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(g_mu);
+        setError("nativeSetCalibration: unknown exception");
+    }
+    return JNI_FALSE;
 }
 
 jint nativeAnalyzeHardwareBuffer(JNIEnv* env, jclass, jobject hardwareBuffer, jlong capturedAtNanos, jint method,
@@ -544,6 +597,8 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(nativeLastError)},
     {const_cast<char*>("nativeSetPlayerNames"), const_cast<char*>("([Ljava/lang/String;)V"),
      reinterpret_cast<void*>(nativeSetPlayerNames)},
+    {const_cast<char*>("nativeSetCalibration"), const_cast<char*>("(Ljava/lang/String;[F)Z"),
+     reinterpret_cast<void*>(nativeSetCalibration)},
     {const_cast<char*>("nativeAnalyzeHardwareBuffer"),
      const_cast<char*>("(Landroid/hardware/HardwareBuffer;JILjava/nio/ByteBuffer;)I"),
      reinterpret_cast<void*>(nativeAnalyzeHardwareBuffer)},

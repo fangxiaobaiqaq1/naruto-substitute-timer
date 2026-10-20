@@ -60,7 +60,7 @@ var (
 func (t calibTarget) beads() bool { return t == calibLeftBeads || t == calibRightBeads }
 func (t calibTarget) left() bool  { return t == calibLeftBeads || t == calibLeftAvatar }
 
-const calibrationHint = "选好目标后在画面上按住左键拖出方框：豆框紧贴 4 颗普通豆（柱间第 5、6 颗不框），小点应落在每颗豆中间；头像框只框头像，不含名字和血条。"
+const calibrationHint = "选好目标后在画面上按住左键拖出方框：豆框紧贴 4 颗普通豆（柱间第 5、6 颗不框），小点应落在每颗豆中间；头像框只框头像，不含名字和血条。豆请在普通忍者身上框：九喇嘛水门、侠隐佐助、百战鼬的豆比平时低。"
 
 var (
 	errCalibrationProfile = errors.New("请在对局或训练场画面上校准")

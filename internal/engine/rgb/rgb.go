@@ -36,6 +36,20 @@ func NewConfigured(layout engine.LayoutProvider, vision config.VisionConfig) *En
 	return &Engine{layout: layout, vision: vision, names: ninja.NewReader()}
 }
 
+// SetCalibration replaces the player's region calibration (engine.Calibrator).
+func (e *Engine) SetCalibration(c *config.RegionCalibration) {
+	if l, ok := e.layout.(engine.Calibrator); ok {
+		l.SetCalibration(c)
+	}
+}
+
+func (e *Engine) CalibrationRevision() uint64 {
+	if l, ok := e.layout.(engine.Calibrator); ok {
+		return l.CalibrationRevision()
+	}
+	return 0
+}
+
 // Prefer receives a template's explicit layout binding, or clears it at an end scene.
 func (e *Engine) Prefer(kind string) {
 	e.mu.Lock()
@@ -63,7 +77,8 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	var calibrated *engine.ConfiguredLayout
 	vision := e.vision
 	if p, ok := e.layout.(*engine.ConfiguredLayout); ok {
-		calibrated = p
+		// One region calibration for the whole frame.
+		calibrated = p.Pinned()
 		var supported bool
 		area, supported = p.ContentArea(img)
 		if !supported {
@@ -193,11 +208,19 @@ func sampleUnverifiedSpecial(img *image.RGBA, p detect.BeadPosition, w, h, guard
 }
 
 func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, identified [2]ninja.Readout) []engine.BeadInfo {
-	scale := area.HUDScale(detect.LogicWidth, detect.LogicHeight)
-	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*scale)))
-	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*scale)))
 	var out []engine.BeadInfo
 	for index, side := range []engine.Side{engine.Left, engine.Right} {
+		var row []detect.BeadPosition
+		start := len(out)
+		for _, p := range positions {
+			if p.Side == side.String() {
+				row = append(row, p)
+			}
+		}
+		// A calibrated side has its own scale.
+		scale := detect.RowHUDScale(row, area, detect.LogicWidth, detect.LogicHeight)
+		w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*scale)))
+		h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*scale)))
 		palette := identified[index].Palette
 		if identified[index].Unverified {
 			palette = identified[index].PaletteHint
@@ -205,13 +228,6 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 		xiayin := palette == ninja.Xiayin
 		if xiayin {
 			palette = xiayinPalette(img, positions, side.String(), w, h)
-		}
-		var row []detect.BeadPosition
-		start := len(out)
-		for _, p := range positions {
-			if p.Side == side.String() {
-				row = append(row, p)
-			}
 		}
 		var states []detect.BeadState
 		if identified[index].Unverified {
@@ -256,7 +272,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 			// default row. Re-read the 13px@540 row; keep it only when complete
 			// and legal. Special palettes and offset identities are excluded.
 			if identified[index].RowOffsetY == 0 && palette == "" && !xiayin && len(row) == 4 && energyGaugeBand(img, row, area, rowStates) {
-				dy := int(math.Round(ninja.EnergyGaugeRowOffset * area.HUDScale(960, 540)))
+				dy := int(math.Round(ninja.EnergyGaugeRowOffset * detect.RowHUDScale(row, area, 960, 540)))
 				candidateInfos, candidateStates := sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], image.Pt(0, dy))
 				if detect.IsLegalPrefix(candidateStates) && !slices.Contains(candidateStates, detect.StateUnknown) {
 					rowInfos, rowStates = candidateInfos, candidateStates
@@ -280,7 +296,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 // centers shifted by delta. It is the strict core sampler; the retry grid only
 // re-centers the diamond, every judgment stays at the calibrated thresholds.
 func sampleCalibratedRow(img *image.RGBA, row []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, palette ninja.Palette, xiayin bool, identified ninja.Readout, delta image.Point) ([]engine.BeadInfo, []detect.BeadState) {
-	scale := area.HUDScale(detect.LogicWidth, detect.LogicHeight)
+	scale := detect.RowHUDScale(row, area, detect.LogicWidth, detect.LogicHeight)
 	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*scale)))
 	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*scale)))
 	var infos []engine.BeadInfo

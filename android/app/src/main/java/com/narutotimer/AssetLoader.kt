@@ -21,7 +21,7 @@ import java.util.Locale
  *   BitmapFactory 解码为 *非预乘* ARGB_8888 → 以 RGBA 字节注册。
  * - 每个 .json 以 UTF-8 文本注册。
  * - 用户账号名图鉴：filesDir/identity/（含 seen/、fight/）下 png/jpg/jpeg，key 为 "identity/<相对路径>"。
- * - 最后设置我方账号名并 nativeFinishAssets() 构建引擎。
+ * - 最后设置我方账号名与区域校准，并 nativeFinishAssets() 构建引擎。
  */
 object AssetLoader {
     private const val TAG = "AssetLoader"
@@ -42,7 +42,7 @@ object AssetLoader {
 
     /** 完整加载并构建引擎。耗时（数百毫秒），必须在后台线程调用。 */
     @Synchronized
-    fun loadAll(context: Context, playerNames: List<String>): Report {
+    fun loadAll(context: Context, playerNames: List<String>, settings: Settings? = null): Report {
         val started = System.nanoTime()
         val errors = ArrayList<String>()
         var images = 0
@@ -71,6 +71,7 @@ object AssetLoader {
         }
         images += registerUserIdentity(context, errors)
         NativeCore.setPlayerNames(playerNames)
+        if (settings != null && !NativeCore.setCalibration(settings)) errors += "calibration: ${NativeCore.lastError()}"
         val ready = NativeCore.nativeFinishAssets()
         val nativeError = if (ready) "" else NativeCore.lastError()
         val millis = (System.nanoTime() - started) / 1_000_000

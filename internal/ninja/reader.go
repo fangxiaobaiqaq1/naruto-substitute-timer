@@ -145,7 +145,19 @@ type evidence struct {
 	portraitSize image.Point
 }
 
+// portraitAnchor places 百战鼬's fixed right-HUD portrait check on a
+// calibrated right side: relative to its avatar window instead of the 16:9
+// frame origin. The zero value keeps the built-in frame-origin rect.
+type portraitAnchor struct {
+	window image.Rectangle
+	scale  float64
+}
+
 func (r *Reader) read(img *image.RGBA, roi image.Rectangle, scale float64) evidence {
+	return r.readAnchored(img, roi, scale, portraitAnchor{})
+}
+
+func (r *Reader) readAnchored(img *image.RGBA, roi image.Rectangle, scale float64, anchor portraitAnchor) evidence {
 	if r == nil || img == nil || scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
 		return evidence{}
 	}
@@ -241,7 +253,7 @@ func (r *Reader) read(img *image.RGBA, roi image.Rectangle, scale float64) evide
 	// the evidence so the Tracker's fast path can re-check it on later frames.
 	if best.Name == ItachiHyakusen {
 		t := scaledNameForEvidence(prepared, best)
-		if !itachiPortraitEvidence(img, scale, t.portrait, t.portraitSize) {
+		if !itachiPortraitEvidenceAt(img, scale, t.portrait, t.portraitSize, anchor) {
 			return evidence{}
 		}
 		best.portrait, best.portraitSize = t.portrait, t.portraitSize
@@ -330,10 +342,25 @@ func avatarReadout(m AvatarMatch) Readout {
 }
 
 func itachiPortraitEvidence(img *image.RGBA, scale float64, portrait *match.PreparedNCC, size image.Point) bool {
+	return itachiPortraitEvidenceAt(img, scale, portrait, size, portraitAnchor{})
+}
+
+func itachiPortraitEvidenceAt(img *image.RGBA, scale float64, portrait *match.PreparedNCC, size image.Point, anchor portraitAnchor) bool {
 	if portrait == nil || size.X <= 0 || size.Y <= 0 {
 		return false
 	}
 	bounds := img.Bounds()
+	if anchor.scale > 0 {
+		// The fixed rect below is (8, 9) units inside the camp right window;
+		// a hand-drawn calibration may be off by up to 2 units.
+		at := anchor.window.Min.Add(image.Pt(int(math.Round(8*anchor.scale)), int(math.Round(9*anchor.scale))))
+		rect := image.Rectangle{Min: at, Max: at.Add(size)}.Inset(-max(1, int(math.Round(2*anchor.scale)))).Intersect(bounds)
+		if rect.Dx() < size.X || rect.Dy() < size.Y {
+			return false
+		}
+		score, ok := itachiPortraitScore(img, rect, portrait)
+		return ok && score >= .78
+	}
 	// The supplied portrait is a right-HUD visual anchor. Do not mirror it to
 	// the left: insufficient evidence must remain unknown, never a guessed
 	// special offset. Coordinates are normalized to the 960-wide HUD reference.

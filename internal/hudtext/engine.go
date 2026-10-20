@@ -198,6 +198,36 @@ func (e *Engine) SetEnabled(enabled bool) {
 	}
 }
 
+// SetCalibration applies a live region calibration (docs/区域校准.md) to
+// the OCR name strips and the wrapped engine; text read with the old strips
+// is discarded.
+func (e *Engine) SetCalibration(c *config.RegionCalibration) {
+	if c != nil {
+		clone := *c
+		for _, r := range []**config.NormalizedRect{&clone.LeftBeads, &clone.RightBeads, &clone.LeftAvatar, &clone.RightAvatar} {
+			if *r != nil {
+				v := **r
+				*r = &v
+			}
+		}
+		c = &clone
+	}
+	e.mu.Lock()
+	e.cfg.Layout.Calibration = c
+	e.invalidate()
+	e.mu.Unlock()
+	if inner, ok := e.inner.(engine.Calibrator); ok {
+		inner.SetCalibration(c)
+	}
+}
+
+func (e *Engine) CalibrationRevision() uint64 {
+	if inner, ok := e.inner.(engine.Calibrator); ok {
+		return inner.CalibrationRevision()
+	}
+	return 0
+}
+
 func (e *Engine) Analyze(img *image.RGBA) engine.Result { return e.AnalyzeAt(img, time.Now()) }
 func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	var res engine.Result

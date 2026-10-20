@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "nt/engine.h"
+#include "nt/ninja.h"
 #include "nt/rgb.h"
 #include "nt/scene.h"
 
@@ -409,10 +410,94 @@ void testEnergyGaugeRow() {
         }
     }
 }
+// Region calibration (docs/区域校准.md), mirrors internal/engine and
+// internal/engine/rgb calibration tests: box transform for both profiles,
+// unset = automatic, beads read on a HUD the automatic layout misses.
+void testRegionCalibration() {
+    config::Config cfg = config::Default();
+    const int w = 2388, h = 1668;
+    RGBA img = RGBA::New(MakeRect(0, 0, w, h));
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) img.SetRGBA(x, y, Color{32, 32, 32, 255});
+    ConfiguredLayout automatic(detect::ModeAuto, cfg.Layout);
+    const detect::ContentArea area = automatic.ContentArea(&img).first;
+    config::RegionCalibration lobby;
+    lobby.Profile = "lobby";
+    lobby.LeftBeads = config::NormalizedRect{.1, .1, .1, .1};
+    cfg.Layout.Calibration = lobby;
+    ConfiguredLayout ignored(detect::ModeAuto, cfg.Layout);
+    for (const char* profile : {"camp", "duel"}) {
+        const auto a = automatic.PositionsInImage(profile, &img, area), b = ignored.PositionsInImage(profile, &img, area);
+        check(a.size() == b.size(), "unset calibration size");
+        for (size_t i = 0; i < a.size(); ++i)
+            check(a[i].X == b[i].X && a[i].Y == b[i].Y && a[i].Cal == nullptr && b[i].Cal == nullptr,
+                  "unset calibration keeps automatic positions");
+    }
+    // Boxes around a device HUD drawn at 1.7 px per reference unit.
+    config::RegionCalibration c;
+    c.Profile = "duel";
+    const double s = 1.7, pl = 77.0 / 3 * s, pr = 25 * s;
+    c.LeftBeads = config::NormalizedRect{(330 - pl / 2) / w, (250 - 11.0) / h, 4 * pl / w, 22.0 / h};
+    c.RightBeads = config::NormalizedRect{(2041 + pr / 2 - 4 * pr) / w, (250 - 11.0) / h, 4 * pr / w, 22.0 / h};
+    cfg.Layout.Calibration = c;
+    auto layout = std::make_shared<ConfiguredLayout>(detect::ModeAuto, cfg.Layout);
+    const Color blue{40, 200, 255, 255}, dark{28, 54, 98, 255};
+    const int rx = static_cast<int>(std::round(4.8 * s * 1600 / 960)), ry = static_cast<int>(std::round(6.5 * s * 1600 / 960));
+    for (const char* profile : {"duel", "camp"}) {
+        const config::LayoutProfile ref = cfg.Layout.Profile(profile);
+        const auto positions = layout->PositionsInImage(profile, &img, area);
+        check(positions.size() == 8, "calibrated slot count");
+        for (const auto& p : positions) {
+            const bool right = p.Side == "right";
+            const config::NormalizedPoint n = (right ? ref.Right : ref.Left).NominalCenters[p.Idx];
+            const double x = (right ? 2041.0 : 330.0) + s * (n.X * 1600 - (right ? 1423 : 172));
+            const double y = 250.0 + s * (n.Y * 900 - 103);
+            check(p.Cal != nullptr && std::abs(p.Cal->Scale - s) < 1e-9 &&
+                      p.X == static_cast<int>(std::round(x)) && p.Y == static_cast<int>(std::round(y)),
+                  std::string("calibrated transform ") + profile + " " + p.Side + std::to_string(p.Idx));
+        }
+    }
+    // Draw duel beans (L: 2 lit, R: 3 lit) where the calibration says.
+    int lit = 0;
+    for (const auto& p : layout->PositionsInImage("duel", &img, area)) {
+        const bool on = p.Idx < (p.Side == "right" ? 3 : 2);
+        lit += on;
+        for (int dy = -ry; dy <= ry; ++dy)
+            for (int dx = -rx; dx <= rx; ++dx)
+                if (detect::InBeadDiamond(0, 0, 2 * rx, 2 * ry, dx, dy)) img.SetRGBA(p.X + dx, p.Y + dy, on ? blue : dark);
+    }
+    rgb::Engine calibrated(layout, cfg.Vision);
+    calibrated.Prefer("duel");
+    const Result res = calibrated.AnalyzeAt(&img, 1700000000LL * Second);
+    int read = 0, known = 0;
+    for (const auto& b : res.Beads) {
+        read += b.Lit && !b.Unknown;
+        known += !b.Unknown;
+    }
+    check(res.Beads.size() == 8 && known == 8 && read == lit, "calibrated beans read");
+    rgb::Engine plain(std::make_shared<ConfiguredLayout>(detect::ModeAuto, config::Default().Layout), cfg.Vision);
+    plain.Prefer("duel");
+    known = 0;
+    for (const auto& b : plain.AnalyzeAt(&img, 1700000000LL * Second).Beads) known += !b.Unknown;
+    check(known == 0, "automatic layout misses the device HUD");
+    // A box drawn exactly around the implied portrait inverts AvatarRegion.
+    for (double scale : {1280.0 / 960, 1.5, 2.0, 3.0}) {
+        for (bool left : {true, false}) {
+            const Rect want = ninja::AvatarRegion(Pt(int(400 * scale), int(62 * scale)), scale, left);
+            const double side = 68.5 * scale;
+            double got = 0;
+            const Rect r = ninja::AvatarRegionFromBox(want.Min.X + (left ? 42 : 36) * scale - side / 2,
+                                                      want.Min.Y + 49.5 * scale - side / 2, side, side, left, got);
+            check(std::abs(got - scale) < 1e-9 && std::abs(r.Min.X - want.Min.X) <= 1 && std::abs(r.Min.Y - want.Min.Y) <= 1,
+                  "avatar box inverts AvatarRegion");
+        }
+    }
+}
 } // namespace
 
 int main() {
     testEnergyGaugeRow();  // first: independent of the scene/gate checks below
+    testRegionCalibration();
     testCompleteHUDAndGated();
     testStartFight();
     testSupportHints();

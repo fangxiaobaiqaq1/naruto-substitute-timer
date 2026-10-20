@@ -28,9 +28,14 @@ DurationNs sinceNs(TimeNs now, TimeNs t) {
 }  // namespace
 
 Readout Tracker::Read(Reader* reader, const RGBA* img, Rect roi, double scale, TimeNs now) {
+    return read(reader, img, roi, scale, portraitAnchor{}, now);
+}
+
+Readout Tracker::read(Reader* reader, const RGBA* img, Rect roi, double scale, const portraitAnchor& anchor,
+                      TimeNs now) {
     if (reader == nullptr || img == nullptr) return Readout{};
     bool changed = reader_ != reader || bounds_ != img->Bounds() || roi_ != roi || scale_ != scale ||
-                   (lastAt_ != 0 && now < lastAt_);
+                   anchor_ != anchor || (lastAt_ != 0 && now < lastAt_);
     lastAt_ = now;
     if (changed) {
         hint_ = evidence{};
@@ -41,6 +46,7 @@ Readout Tracker::Read(Reader* reader, const RGBA* img, Rect roi, double scale, T
     bounds_ = img->Bounds();
     roi_ = roi;
     scale_ = scale;
+    anchor_ = anchor;
     auto unavailable = [&]() -> Readout {
         if (!hint_.Name.empty() && hint_.Slots > 0 && sinceNs(now, verifiedAt_) <= Second) {
             Readout out;
@@ -67,7 +73,7 @@ Readout Tracker::Read(Reader* reader, const RGBA* img, Rect roi, double scale, T
                 // the fixed portrait must both be current. A kept title alone
                 // may never keep an energy-gauge geometry alive.
                 if (hint_.portrait == nullptr ||
-                    itachiPortraitEvidence(img, scale, hint_.portrait.get(), hint_.portraitSize)) {
+                    itachiPortraitEvidenceAt(img, scale, hint_.portrait.get(), hint_.portraitSize, anchor)) {
                     hint_.rect = hint_.rect.Add(score.Peak.Sub(hint_.rect.Min));
                     hint_.Score = score.Value;
                     verifiedAt_ = now;
@@ -90,7 +96,7 @@ Readout Tracker::Read(Reader* reader, const RGBA* img, Rect roi, double scale, T
     // frame. A failed search starts the backoff; later failed rechecks cannot
     // turn rapid occlusion/effect flicker into repeated scans.
     retryAfter_ = now + 500 * Millisecond;
-    evidence found = reader->read(img, roi, scale);
+    evidence found = reader->readAnchored(img, roi, scale, anchor);
     if (!found.Name.empty()) {
         hint_ = found;
         verifiedAt_ = now;
@@ -115,6 +121,22 @@ Readout Tracker::ReadWithAvatar(Reader* reader, AvatarTracker* avatar, const RGB
         return out;
     }
     return reader->ResolveEvidence(img, titleROI, avatarROI, scale, title, avatar, now);
+}
+
+Readout Tracker::ReadCalibrated(Reader* reader, AvatarTracker* avatar, const RGBA* img, Rect titleROI, Rect avatarROI,
+                                double scale, double avatarScale, bool right, TimeNs now) {
+    portraitAnchor anchor;
+    if (right) {
+        anchor.window = avatarROI;
+        anchor.scale = avatarScale;
+    }
+    Readout title = read(reader, img, titleROI, scale, anchor, now);
+    if (reader == nullptr) {
+        Readout out = title;
+        out.TitleName = title.Name;
+        return out;
+    }
+    return reader->ResolveEvidence(img, titleROI, avatarROI, avatarScale, title, avatar, now);
 }
 
 }  // namespace nt::ninja

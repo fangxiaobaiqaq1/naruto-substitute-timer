@@ -1,10 +1,12 @@
 // nt/config.h — internal/config 的默认值部分（architect 所有，实现在 src/config/config.cpp）。
 // 只保留识别核心用得到的字段；桌面/采集/更新/调试相关配置已移除。
 // Android 端没有 config.json：nt::config::Default() 就是唯一配置，
-// 只有 UI.PlayerNames 由 Kotlin 设置页通过 JNI（nativeSetPlayerNames）覆盖。
+// 只有 UI.PlayerNames（nativeSetPlayerNames）与 Layout.Calibration（nativeSetCalibration）
+// 由 Kotlin 设置页通过 JNI 覆盖。
 #pragma once
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +34,15 @@ struct LayoutProfile {
     SideLayout Right;
 };
 
+// RegionCalibration is drawn by the player on one captured frame (see
+// docs/区域校准.md). Rects are fractions of the whole frame; each one is
+// independent and nullopt (Go nil) means automatic for that region and side.
+struct RegionCalibration {
+    // Profile is the layout (camp/duel) of the frame the boxes were drawn on.
+    std::string Profile;
+    std::optional<NormalizedRect> LeftBeads, RightBeads, LeftAvatar, RightAvatar;
+};
+
 struct LayoutConfig {
     std::string PreferredProfile;
     std::map<std::string, LayoutProfile> Profiles;
@@ -47,6 +58,8 @@ struct LayoutConfig {
     double SpacingTolerance = 0;
     double MirrorTolerance = 0;
     int RelocalizeAfterLowConfidenceFrames = 0;
+    // Calibration holds the player's own boxes; nullopt keeps the automatic layout.
+    std::optional<RegionCalibration> Calibration;
 
     // Profile resolves legacy left/right as camp when an explicit camp is absent.
     // The built-in duel profile has four verified slots; six require explicit data.

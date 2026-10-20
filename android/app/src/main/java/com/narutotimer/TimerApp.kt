@@ -6,6 +6,7 @@ import android.os.Looper
 import android.util.Log
 import com.narutotimer.tracker.Session
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 
 /**
  * 进程级对象图（architect 所有）。
@@ -35,6 +36,15 @@ class TimerApp : Application() {
 
     private val nativeListeners = CopyOnWriteArrayList<() -> Unit>()
     private val main = Handler(Looper.getMainLooper())
+    /** Serial: each run reads the newest calibration, so the last one always wins. */
+    private val calibrationWorker = Executors.newSingleThreadExecutor { r -> Thread(r, "nt-calibration").apply { isDaemon = true } }
+    private val applyCalibration = Runnable {
+        calibrationWorker.execute {
+            if (!NativeCore.setCalibration(settings)) Log.w(TAG, "calibration: ${NativeCore.lastError()}")
+            // 同一画面换了读法：像换采集源一样只作废视觉基线。
+            session.resyncGeometry()
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -43,6 +53,14 @@ class TimerApp : Application() {
         // 设置页改我方名字后立刻用于认边（Go identity.SetMineNames）。
         session = Session(settings) { names ->
             if (nativeStatus == NativeStatus.READY) NativeCore.setPlayerNames(names)
+        }
+        // 区域校准保存后立即生效（docs/区域校准.md）。一次保存会连写几个键，合并成一次重建；
+        // 引擎尚未建好时 native 只记下，由 nativeFinishAssets 应用。
+        settings.addListener { key ->
+            if (key == Settings.KEY_CALIB_PROFILE || key in Settings.KEY_CALIB_RECTS) {
+                main.removeCallbacks(applyCalibration)
+                main.postDelayed(applyCalibration, CALIBRATION_DEBOUNCE_MS)
+            }
         }
         Thread({ loadNative() }, "nt-assets").start()
     }
@@ -56,7 +74,7 @@ class TimerApp : Application() {
 
     private fun loadNative() {
         try {
-            val report = AssetLoader.loadAll(this, settings.playerNames)
+            val report = AssetLoader.loadAll(this, settings.playerNames, settings)
             assetReport = report
             nativeMessage = if (report.ready) "" else report.nativeError.ifEmpty { report.errors.firstOrNull() ?: "unknown" }
             nativeStatus = if (report.ready) NativeStatus.READY else NativeStatus.FAILED
@@ -80,6 +98,7 @@ class TimerApp : Application() {
 
     companion object {
         private const val TAG = "TimerApp"
+        private const val CALIBRATION_DEBOUNCE_MS = 100L
         lateinit var instance: TimerApp
             private set
     }

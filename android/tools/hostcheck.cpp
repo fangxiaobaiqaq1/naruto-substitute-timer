@@ -4,9 +4,11 @@
 // BitmapFactory 非预乘输出 + "<path>.sha256"），构建与 jni.cpp 相同的引擎，然后对给定的
 // PNG 截图逐张分析并打印 scene / fighting / beads / ninjas。
 //
-//   hostcheck [--seq] <png 或目录>...
+//   hostcheck [--seq] [--calibration PROFILE:LB/RB/LA/RA] <png 或目录>...
 //     默认：每张图用全新引擎跑一次 AnalyzeAt（与 tools/gocheck 的 Go 驱动输出逐行可比）。
 //     --seq：所有图共享一个 frame::Pipeline，按 100ms 间隔依次分析（覆盖去重/交付层）。
+//     --calibration：区域校准（docs/区域校准.md），框依次为左豆/右豆/左头像/右头像，
+//       每个 "x,y,w,h"（整帧比例）或 "-"（自动），例如 duel:0.08,0.1,0.05,0.02/-/-/-。
 //
 // 构建见 tools/hostcheck.sh。
 #define STB_IMAGE_IMPLEMENTATION
@@ -16,8 +18,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <dirent.h>
+#include <sstream>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -198,16 +202,50 @@ void printResult(const std::string& name, const nt::engine::Result& r) {
                 r.PlayerSide.c_str(), r.OppName.c_str(), r.Name.c_str(), beadsString(r.Beads).c_str());
 }
 
+// parseCalibration reads "PROFILE:LB/RB/LA/RA" (gocheck uses the same form).
+bool parseCalibration(const std::string& arg, nt::config::RegionCalibration& out) {
+    const size_t colon = arg.find(':');
+    if (colon == std::string::npos) return false;
+    out.Profile = arg.substr(0, colon);
+    std::optional<nt::config::NormalizedRect>* rects[4] = {&out.LeftBeads, &out.RightBeads, &out.LeftAvatar,
+                                                           &out.RightAvatar};
+    std::stringstream boxes(arg.substr(colon + 1));
+    std::string box;
+    for (int i = 0; i < 4; ++i) {
+        if (!std::getline(boxes, box, '/')) return false;
+        if (box == "-") continue;
+        double v[4];
+        std::stringstream fields(box);
+        std::string field;
+        for (int k = 0; k < 4; ++k) {
+            if (!std::getline(fields, field, ',')) return false;
+            char* end = nullptr;
+            v[k] = std::strtod(field.c_str(), &end);
+            if (end == field.c_str() || *end != '\0') return false;
+        }
+        *rects[i] = nt::config::NormalizedRect{v[0], v[1], v[2], v[3]};
+    }
+    return !std::getline(boxes, box, '/');
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     std::string repo = "/ssd/work/naruto-substitute-timer-v0.2.8";
     bool seq = false;
     std::vector<std::string> inputs;
+    std::optional<nt::config::RegionCalibration> calibration;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--seq") {
             seq = true;
+        } else if (a == "--calibration" && i + 1 < argc) {
+            nt::config::RegionCalibration c;
+            if (!parseCalibration(argv[++i], c)) {
+                std::fprintf(stderr, "bad --calibration %s\n", argv[i]);
+                return 2;
+            }
+            calibration = c;
         } else if (a == "--repo" && i + 1 < argc) {
             repo = argv[++i];
         } else {
@@ -218,6 +256,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "assets: %d images, %d texts\n", g_images, g_texts);
 
     nt::config::Config cfg = nt::config::Default();
+    cfg.Layout.Calibration = calibration;
     nt::identity::SetMineNames(cfg.UI.PlayerNames);
 
     std::string err;

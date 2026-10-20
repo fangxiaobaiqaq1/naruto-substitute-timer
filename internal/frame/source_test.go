@@ -376,3 +376,61 @@ func BenchmarkFrameFingerprint(b *testing.B) {
 		frameFingerprint(img, "sdk")
 	}
 }
+
+// calibratingEngine counts analyses and exposes a calibration revision.
+type calibratingEngine struct {
+	countingEngine
+	revision uint64
+}
+
+func (e *calibratingEngine) SetCalibration(*config.RegionCalibration) { e.revision++ }
+func (e *calibratingEngine) CalibrationRevision() uint64              { return e.revision }
+
+// After a live calibration replacement the same screen is analysed again and
+// delivered as a new observation, on both capture paths.
+func TestCalibrationReplacementReanalysesIdenticalScreen(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 400, 250))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{90, 120, 140, 255}), image.Point{}, draw.Src)
+	eng := &calibratingEngine{}
+	var d dedupedAnalysis
+	sdk := func() Frame {
+		at := time.Now()
+		return d.analyze(img, eng, detect.ModeStretch, at, at, "sdk")
+	}
+	printWindow := func() Frame {
+		revision := calibrationRevision(eng)
+		eng.Analyze(img)
+		f := Frame{Img: img, CaptureMethod: "printwindow-fullcontent", CapturedAt: time.Now()}
+		f.fingerprint, f.fingerprinted = withRevision(frameFingerprint(img, f.CaptureMethod), revision), true
+		return f
+	}
+	for _, tc := range []struct {
+		name  string
+		inner Provider
+	}{{"sdk", sdk}, {"printwindow", printWindow}} {
+		eng.calls, eng.revision = 0, 0
+		p, closeProvider := boundedProvider(tc.inner, nil, time.Second)
+		var dups []bool
+		for i := range 4 {
+			if i == 2 {
+				eng.SetCalibration(&config.RegionCalibration{Profile: "duel"})
+			}
+			f := p()
+			if f.Err != nil {
+				t.Fatal(f.Err)
+			}
+			dups = append(dups, f.Duplicate)
+		}
+		closeProvider()
+		if want := []bool{false, true, false, true}; fmt.Sprint(dups) != fmt.Sprint(want) {
+			t.Fatalf("%s: duplicates %v, want %v", tc.name, dups, want)
+		}
+		if tc.name == "sdk" && eng.calls != 2 {
+			t.Fatalf("sdk: %d analyses, want 2 (one per calibration)", eng.calls)
+		}
+	}
+	// Without a replacement the fingerprint is exactly the pixel fingerprint.
+	if engineFingerprint(img, "sdk", &calibratingEngine{}) != frameFingerprint(img, "sdk") {
+		t.Fatal("revision 0 changed the fingerprint")
+	}
+}
