@@ -78,6 +78,18 @@ bool NCC::Match(const Query& q, Score& out) const {
     }
     Score best;
     best.Peak = roi.Min;
+    // grids already scanned by this call. A refinement window overlaps the
+    // coarser grids (the peak itself, and coarse points at +/-step); scoring
+    // such a position again yields the same value, which can never pass the
+    // strict '>' against a best that only grew since, so it is skipped.
+    struct grid {
+        int x0, y0, x1, y1, st;
+        bool has(int x, int y) const {
+            return x >= x0 && x <= x1 && y >= y0 && y <= y1 && (x - x0) % st == 0 && (y - y0) % st == 0;
+        }
+    };
+    grid done[2];
+    int doneCount = 0;
     auto scan = [&](int x0, int y0, int x1, int y1, int st) {
         if (st < 1) st = 1;
         if (x0 < roi.Min.X) x0 = roi.Min.X;
@@ -86,6 +98,7 @@ bool NCC::Match(const Query& q, Score& out) const {
         if (y1 > roi.Max.Y - th) y1 = roi.Max.Y - th;
         for (int y = y0; y <= y1; y += st) {
             for (int x = x0; x <= x1; x += st) {
+                if ((doneCount > 0 && done[0].has(x, y)) || (doneCount > 1 && done[1].has(x, y))) continue;
                 // Rows wider than maxDotRun cannot use uint32 prefix sums (never in practice).
                 double v = pre != nullptr ? prepared->at(*gray, *pre, x - origin.X, y - origin.Y)
                                           : prepared->atDirect(*gray, x - origin.X, y - origin.Y);
@@ -95,6 +108,7 @@ bool NCC::Match(const Query& q, Score& out) const {
                 }
             }
         }
+        if (doneCount < 2 && x0 <= x1 && y0 <= y1) done[doneCount++] = grid{x0, y0, x1, y1, st};
     };
     scan(roi.Min.X, roi.Min.Y, roi.Max.X - tw, roi.Max.Y - th, step);
     if (step > 1) {
