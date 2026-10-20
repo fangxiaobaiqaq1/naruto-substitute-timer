@@ -87,20 +87,10 @@ func legacyMatchEntries(c *avatarCatalog, view *image.RGBA, gray *image.Gray, sc
 	// portrait (best=.90, same-ID runner-up=.85).
 	bestByID, nameByID, baseByID := map[string]float64{}, map[string]string{}, map[string]string{}
 	bounds := view.Bounds()
-	c.evictTemplates(scale)
+	// The legacy lazy decode from the retained PNG: loaded entries now always
+	// carry the decoded planes (TestAvatarGrayMaskFastPathEqualsGenericAt).
 	decode := func(entry *avatarEntry) bool {
-		if entry == nil {
-			return false
-		}
-		if entry.gray == nil {
-			img, _, err := image.Decode(bytes.NewReader(entry.data))
-			if err != nil {
-				return false
-			}
-			entry.gray, entry.mask = avatarGrayMask(img)
-			entry.mask = avatarFaceMask(entry.gray.Bounds(), entry.mask)
-		}
-		return true
+		return entry != nil && entry.gray != nil
 	}
 	scoreAt := func(entry *avatarEntry, factor float64) float64 {
 		w, h := avatarFactorSize(entry, scale, factor)
@@ -239,9 +229,12 @@ func legacyLoadAvatarCatalog(data []byte, readFile func(string) ([]byte, error))
 		// pixels vary in the live HUD, while the face inside the diamond is
 		// stable. Recognition uses alpha ∩ inner-diamond only.
 		mask := avatarFaceMask(gray.Bounds(), alphaMask)
-		thumbGray, thumbMask := match.ScaleGray(gray, 16, 16), match.ScaleGray(mask, 16, 16)
-		entry := &avatarEntry{id: item.ID, name: avatarName(item), baseName: avatarBaseName(item), data: png, thumb: match.PrepareNCC(thumbGray, thumbMask), thumbGray: thumbGray, thumbMask: thumbMask, coarseGray: match.ScaleGray(gray, 36, 36), coarseMask: match.ScaleGray(mask, 36, 36)}
+		// The legacy loader kept the PNG and unused 16x16 thumbnails and
+		// decoded gray/mask lazily on first match; the planes it produced are
+		// these (legacy At() conversion), retained here directly.
+		entry := &avatarEntry{id: item.ID, name: avatarName(item), baseName: avatarBaseName(item), coarseGray: match.ScaleGray(gray, 36, 36), coarseMask: match.ScaleGray(mask, 36, 36), gray: gray, mask: mask}
 		catalog.entries, catalog.byID[item.ID] = append(catalog.entries, entry), entry
+		catalog.pngBytes += len(png)
 	}
 	return catalog, nil
 }
@@ -265,10 +258,11 @@ func legacyRead(r *Reader, img *image.RGBA, roi image.Rectangle, scale float64) 
 	if r == nil || img == nil || scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
 		return evidence{}
 	}
+	// The legacy single-scale cache is irrelevant to the result; the reference
+	// rebuilds its templates on every call.
 	r.mu.Lock()
-	if r.prepared == nil || r.scale != scale {
-		r.prepared = nil
-		r.scale = scale
+	var prepared []scaledName
+	{
 		for _, t := range r.source {
 			w, h := int(math.Round(float64(t.gray.Bounds().Dx())*scale)), int(math.Round(float64(t.gray.Bounds().Dy())*scale))
 			if w < 8 || h < 8 {
@@ -277,18 +271,17 @@ func legacyRead(r *Reader, img *image.RGBA, roi image.Rectangle, scale float64) 
 			gray := match.ScaleGray(t.gray, w, h)
 			coarseScale := min(scale, .5)
 			small := match.ScaleGray(t.gray, int(math.Round(float64(t.gray.Bounds().Dx())*coarseScale)), int(math.Round(float64(t.gray.Bounds().Dy())*coarseScale)))
-			prepared := scaledName{readout: t.readout, ncc: match.PrepareNCC(gray, nil), size: gray.Bounds().Size(), coarse: match.PrepareNCC(small, nil), requirePortrait: t.requirePortrait}
+			p := scaledName{readout: t.readout, ncc: match.PrepareNCC(gray, nil), size: gray.Bounds().Size(), coarse: match.PrepareNCC(small, nil), requirePortrait: t.requirePortrait}
 			if t.portrait != nil {
 				pw := int(math.Round(float64(t.portrait.Bounds().Dx()) * scale))
 				ph := int(math.Round(float64(t.portrait.Bounds().Dy()) * scale))
 				portrait := match.ScaleGray(t.portrait, pw, ph)
-				prepared.portrait = match.PrepareNCC(portrait, nil)
-				prepared.portraitSize = portrait.Bounds().Size()
+				p.portrait = match.PrepareNCC(portrait, nil)
+				p.portraitSize = portrait.Bounds().Size()
 			}
-			r.prepared = append(r.prepared, prepared)
+			prepared = append(prepared, p)
 		}
 	}
-	prepared := r.prepared
 	r.mu.Unlock()
 	// 百战鼬 requires two independent, current-frame signals: its complete title
 	// and its fixed right-HUD portrait. The portrait alone cannot move the bean

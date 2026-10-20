@@ -21,7 +21,7 @@ func perfPortraitFrame(tb testing.TB, c *avatarCatalog, id string, scale float64
 	if entry == nil {
 		tb.Fatalf("missing avatar %s", id)
 	}
-	portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+	portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(tb, entry.id)))
 	if err != nil {
 		tb.Fatal(err)
 	}
