@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	imagedraw "image/draw"
+	"image/png"
 	"math"
 	"os"
 	"path/filepath"
@@ -24,6 +26,7 @@ import (
 	"narutotimer/internal/engine"
 	"narutotimer/internal/engine/rgb"
 	"narutotimer/internal/frame"
+	"narutotimer/internal/match"
 )
 
 func newCalibrationTestSession(t *testing.T) *session {
@@ -577,6 +580,24 @@ func ptr[T any](v T) *T { return &v }
 // beads (the last one of each row dark). It returns the frame and the
 // geometry the engine reports on it with calibration cal.
 func calibrationPreviewHUD(size image.Point, cal *config.RegionCalibration) (*image.RGBA, [2]frame.SideGeometry) {
+	img, res := calibrationPreviewFrame(size, cal, nil)
+	return img, res.Geometry
+}
+
+// previewSpecial paints the left side of calibrationPreviewFrame as a
+// special ninja: its title template (internal/ninja/templates), an energy
+// gauge on the standard row and its beads offset 960×540 units lower.
+type previewSpecial struct {
+	template  string
+	offset    float64
+	lit, dark color.RGBA
+}
+
+var previewXiayin = &previewSpecial{"sasuke_xiayin", 9, color.RGBA{R: 220, G: 60, B: 250, A: 255}, color.RGBA{R: 40, G: 15, B: 80, A: 255}}
+
+// calibrationPreviewFrame is calibrationPreviewHUD with an optional special
+// left ninja, returning the engine's whole result (geometry and names).
+func calibrationPreviewFrame(size image.Point, cal *config.RegionCalibration, special *previewSpecial) (*image.RGBA, engine.Result) {
 	w, h := size.X, size.Y
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	for y := 0; y < h; y++ {
@@ -616,14 +637,35 @@ func calibrationPreviewHUD(size image.Point, cal *config.RegionCalibration) (*im
 			name = image.Rect(first.X-w/10, name.Min.Y, first.X, name.Max.Y)
 		}
 		fill(bar, color.RGBA{R: 240, G: 200, B: 40, A: 255})
-		fill(name, color.RGBA{R: 235, G: 235, B: 225, A: 255})
-		for i, p := range g.Beads {
-			col := color.RGBA{R: 90, G: 230, B: 255, A: 255}
-			if i == len(g.Beads)-1 {
-				col = color.RGBA{R: 30, G: 70, B: 90, A: 255}
+		lit, dark, drop := color.RGBA{R: 90, G: 230, B: 255, A: 255}, color.RGBA{R: 30, G: 70, B: 90, A: 255}, 0
+		if side == 0 && special != nil {
+			// The title where the engine reads it, at the HUD's 960-wide scale.
+			units := g.BeadBox.Width * W / 4 / 15.4
+			data, err := os.ReadFile("../ninja/templates/" + special.template + ".png")
+			if err != nil {
+				panic(err)
 			}
-			draw.FillDiamond(img, p.X, p.Y, pitch*7/10, pitch*9/10, col)
+			title, err := png.Decode(bytes.NewReader(data))
+			if err != nil {
+				panic(err)
+			}
+			gray := match.ToGray(title)
+			gray = match.ScaleGray(gray, int(math.Round(float64(gray.Bounds().Dx())*units)), int(math.Round(float64(gray.Bounds().Dy())*units)))
+			at := image.Pt(first.X+int(8*units), first.Y-int(math.Round(54*units)))
+			imagedraw.Draw(img, gray.Bounds().Add(at), gray, image.Point{}, imagedraw.Src)
+			// The energy gauge takes the standard row; the beads sit below it.
+			fill(image.Rect(first.X-pitch/2, first.Y-pitch/8, first.X+pitch*7/2, first.Y+pitch/8), color.RGBA{R: 250, G: 190, B: 70, A: 255})
+			lit, dark, drop = special.lit, special.dark, int(math.Round(special.offset*units))
+		} else {
+			fill(name, color.RGBA{R: 235, G: 235, B: 225, A: 255})
+		}
+		for i, p := range g.Beads {
+			col := lit
+			if i == len(g.Beads)-1 {
+				col = dark
+			}
+			draw.FillDiamond(img, p.X, p.Y+drop, pitch*7/10, pitch*9/10, col)
 		}
 	}
-	return img, analyse(cal).Geometry
+	return img, analyse(cal)
 }

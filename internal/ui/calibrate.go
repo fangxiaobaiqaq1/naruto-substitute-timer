@@ -23,12 +23,16 @@ import (
 	"narutotimer/internal/config"
 	"narutotimer/internal/draw"
 	"narutotimer/internal/frame"
+	"narutotimer/internal/ninja"
 )
 
 // 区域校准（docs/区域校准.md）：玩家在一帧对局画面上框出每侧的豆和头像。
 // 这里只有 Windows 的画框窗口；识别怎么用这些框由引擎决定（WithCalibrationApply）。
 // 窗口先画出这一帧自动识别实际用的区域（引擎报告的每帧几何），没校准的框以
 // 本帧的默认框（自动）为起点；只有玩家动过的框才会保存，没动过的一切照旧。
+// 豆框的值永远是普通忍者的标准豆行：本帧某侧的豆行下移（九喇嘛水门、百战鼬、
+// 侠隐佐助）时，这一侧的豆框画在看得见的豆上，改好的框换回标准值再保存
+// （「校准值是标准忍者值」）。
 // 绘图与拖动见 calibrate_surface.go，方案文件见 calibrate_scheme.go。
 
 // calibTarget is one of the four boxes, in the contract's order.
@@ -78,7 +82,10 @@ func (t calibTarget) side() int {
 
 // Status line texts.
 const (
-	calibrationHint = "框里拖动可移动，拖边或角调大小，空白处拖动重画；点一下框后用方向键微调 1 像素（按住 Shift 调大小）。豆框紧贴 4 颗普通豆（柱间第 5、6 颗不框），小点落在每颗豆中间；头像框只框头像，不含名字和血条。九喇嘛水门、侠隐佐助、百战鼬的豆偏低，请在普通忍者身上框豆。"
+	calibrationHint = "框里拖动可移动，拖边或角调大小，空白处拖动重画；点一下框后用方向键微调 1 像素（按住 Shift 调大小）。豆框紧贴 4 颗普通豆（柱间第 5、6 颗不框），小点落在每颗豆中间；头像框只框头像，不含名字和血条。豆框按普通忍者的豆行保存；认出九喇嘛水门、侠隐佐助、百战鼬时会自动换算，认不出时请换普通忍者的画面。"
+	// calibrationRowDropNote follows the ninja of a side whose bead row the
+	// frame shows lowered.
+	calibrationRowDropNote = "豆行比普通忍者低，已按标准换算"
 	// calibrationAutoHint explains the overlay of a frame the engine analysed.
 	calibrationAutoHint      = "白色虚线是这一帧自动识别实际用的区域（十字是豆心）；带「自动」的框是默认方案，不改就保持自动。"
 	calibrationNoGeometry    = "这一帧没有自动识别区域（大厅、结算等画面，或不支持的分辨率），只能直接画框。"
@@ -224,7 +231,7 @@ const (
 var calibBoxSuffix = [...]string{"", "（自动）", "（已保存）", "（未保存）"}
 
 type calibShown struct {
-	rect  config.NormalizedRect
+	rect  config.NormalizedRect // where it shows on the frame (onFrame of its value)
 	state calibBoxState
 }
 
@@ -242,7 +249,11 @@ type calibrationSnapshot struct {
 	// geometry is what the engine used on this frame (pixels in img), zero
 	// when it did not analyse the HUD.
 	geometry [2]frame.SideGeometry
-	gen      uint64 // calibrationFeed.gen when the frame's capture began
+	// ninjas are the ninja recognised on each side (full names, "" = none).
+	ninjas [2]string
+	// drops are each side's row drop (calibrationRowDrop), 0 = standard row.
+	drops [2]float64
+	gen   uint64 // calibrationFeed.gen when the frame's capture began
 }
 
 func newCalibrationSnapshot(f frame.Frame) *calibrationSnapshot {
@@ -254,6 +265,7 @@ func newCalibrationSnapshot(f frame.Frame) *calibrationSnapshot {
 	}
 	// Pixels follow the copy to (0,0); the boxes are fractions of the bounds.
 	origin := f.Img.Bounds().Min
+	size := snap.img.Bounds().Size()
 	for i, g := range f.Geometry {
 		g.Beads = slices.Clone(g.Beads)
 		for j := range g.Beads {
@@ -266,8 +278,65 @@ func newCalibrationSnapshot(f frame.Frame) *calibrationSnapshot {
 			g.AvatarROI = g.AvatarROI.Sub(origin)
 		}
 		snap.geometry[i] = g
+		snap.drops[i] = calibrationRowDrop(g, size.X, size.Y)
 	}
+	snap.ninjas = [2]string{f.LeftNinja, f.RightNinja}
 	return snap
+}
+
+// calibMinRowDrop: a smaller drop (in bead pitches) is pixel rounding, not
+// a lowered row.
+const calibMinRowDrop = 0.1
+
+// calibrationRowDrop is how far, in bead pitches, the first four bead
+// centres g sampled on a w×h frame lie below the standard row of its default
+// bead box (docs/区域校准.md 校准值是标准忍者值): the row drop of a special
+// ninja (九喇嘛水门, 百战鼬, 侠隐佐助) as the frame shows it. Pixels are in
+// the frame's own (0,0) coordinates, like the snapshot's. Below
+// calibMinRowDrop, or without the geometry, it is 0.
+func calibrationRowDrop(g frame.SideGeometry, w, h int) float64 {
+	box := g.BeadBox
+	if len(g.Beads) < 4 || !(box.Width > 0) || !(box.Height > 0) || w <= 0 || h <= 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, p := range g.Beads[:4] {
+		sum += float64(p.Y)
+	}
+	standard := (box.Y + box.Height/2) * float64(h)
+	pitch := box.Width * float64(w) / 4
+	if d := (sum/4 - standard) / pitch; d >= calibMinRowDrop {
+		return d
+	}
+	return 0
+}
+
+// rowShift is how far the bead box r of t shows below its standard value on
+// this frame, as a fraction of the frame height: the side's row drop in
+// pitches of r itself (r.Width·W/4). Avatar boxes never shift.
+func (s *calibrationSnapshot) rowShift(t calibTarget, r config.NormalizedRect) float64 {
+	d := s.drops[t.side()]
+	if !t.beads() || d == 0 {
+		return 0
+	}
+	b := s.img.Bounds()
+	return d * r.Width * float64(b.Dx()) / 4 / float64(b.Dy())
+}
+
+// onFrame is where the box r of t, a standard value (the ordinary ninja's
+// bead row), shows on this frame: on the beads the frame shows.
+func (s *calibrationSnapshot) onFrame(t calibTarget, r config.NormalizedRect) config.NormalizedRect {
+	r.Y += s.rowShift(t, r)
+	return r
+}
+
+// standard inverts onFrame: the value to store for a box drawn or adjusted
+// on this frame (raised by the row drop, kept inside the frame).
+func (s *calibrationSnapshot) standard(t calibTarget, r config.NormalizedRect) config.NormalizedRect {
+	if shift := s.rowShift(t, r); shift != 0 {
+		r.Y = math.Max(0, r.Y-shift)
+	}
+	return r
 }
 
 func (s *calibrationSnapshot) hasGeometry() bool {
@@ -461,8 +530,11 @@ type calibrationWindow struct {
 	layout   *widget.RadioGroup
 	showAuto *widget.Check
 	info     *widget.Label
-	status   *widget.Label
-	confirm  *dialog.ConfirmDialog // the open confirmation, if any
+	// ninjas names the frame's recognised ninja per side and notes a lowered
+	// bead row (sidesText); hidden when there is nothing to say.
+	ninjas  *widget.Label
+	status  *widget.Label
+	confirm *dialog.ConfirmDialog // the open confirmation, if any
 }
 
 // openCalibration shows the calibration window; an open one is only brought
@@ -504,9 +576,11 @@ func newCalibrationWindow(s *session, w fyne.Window) *calibrationWindow {
 	c.showAuto.SetChecked(true)
 	c.showAuto.OnChanged = func(bool) { c.surface.Refresh() }
 	c.info = widget.NewLabel("等待画面…")
+	c.ninjas = widget.NewLabel("")
+	c.ninjas.Hide()
 	c.status = widget.NewLabel(calibrationHint)
 	// Chinese has no spaces to wrap at: wrap anywhere, full lines.
-	c.status.Wrapping = fyne.TextWrapBreak
+	c.ninjas.Wrapping, c.status.Wrapping = fyne.TextWrapBreak, fyne.TextWrapBreak
 
 	refresh := widget.NewButtonWithIcon("刷新画面", theme.ViewRefreshIcon(), c.refreshFrame)
 	clearSelected := widget.NewButtonWithIcon("清除所选", theme.ContentClearIcon(), c.clearSelected)
@@ -517,7 +591,7 @@ func newCalibrationWindow(s *session, w fyne.Window) *calibrationWindow {
 	save.Importance = widget.HighImportance
 	closeButton := widget.NewButtonWithIcon("关闭", theme.CancelIcon(), c.requestClose)
 
-	top := container.NewVBox(container.NewBorder(nil, nil, widget.NewLabel("框选"), container.NewHBox(c.showAuto, c.info), c.targets), c.layout)
+	top := container.NewVBox(container.NewBorder(nil, nil, widget.NewLabel("框选"), container.NewHBox(c.showAuto, c.info), c.targets), c.layout, c.ninjas)
 	bottom := container.NewVBox(c.status,
 		container.NewHBox(refresh, clearSelected, restore, importScheme, exportScheme, layout.NewSpacer(), save, closeButton))
 	w.SetContent(container.NewStack(canvas.NewRectangle(panelBG),
@@ -608,6 +682,12 @@ func (c *calibrationWindow) freshArrived() {
 	if c.done || snap == nil || snap == c.snap || snap.gen != c.s.calibrationFeed.gen.Load() || c.dirty() {
 		return
 	}
+	if c.surface.dragging {
+		// The box being dragged is in the shown frame's pixels and row
+		// drop: look again at the next frame.
+		c.awaitFresh()
+		return
+	}
 	if c.snap != nil && c.snap.hasGeometry() && !snap.hasGeometry() {
 		c.setStatus(c.savedText + "新画面没有自动识别区域：回到对局后点「刷新画面」查看按新设置识别的区域。")
 		return
@@ -645,8 +725,39 @@ func (c *calibrationWindow) showSnapshot(snap *calibrationSnapshot) {
 		name = "未识别的画面"
 	}
 	c.info.SetText(fmt.Sprintf("%s · %d×%d", name, b.Dx(), b.Dy()))
+	if text := c.sidesText(); text != "" {
+		c.ninjas.Importance = widget.MediumImportance
+		if snap.drops != [2]float64{} {
+			c.ninjas.Importance = widget.WarningImportance
+		}
+		c.ninjas.SetText(text)
+		c.ninjas.Show()
+	} else {
+		c.ninjas.Hide()
+	}
 	c.surface.Refresh()
 	c.setStatus(c.frameText() + c.pendingText())
+}
+
+// sidesText names the ninja the shown frame recognised on each side and
+// notes a side whose bead row it shows lowered: there the bead boxes show on
+// the visible beads and are stored as the ordinary ninja's row. Without a
+// recognised ninja or a drop a side says nothing (calibrationHint covers it).
+func (c *calibrationWindow) sidesText() string {
+	var out strings.Builder
+	for side, name := range c.snap.ninjas {
+		var notes []string
+		if name != "" {
+			notes = append(notes, ninja.ShortLabel(name))
+		}
+		if c.snap.drops[side] > 0 {
+			notes = append(notes, calibrationRowDropNote)
+		}
+		if len(notes) > 0 {
+			out.WriteString([2]string{"左侧：", "右侧："}[side] + strings.Join(notes, "，") + "。")
+		}
+	}
+	return out.String()
 }
 
 // frameText describes the shown frame: its layout, whether its automatic
@@ -705,9 +816,12 @@ func (c *calibrationWindow) boxes() [calibTargetCount]*config.NormalizedRect {
 	return out
 }
 
-// shown is each target's editable box: the pending edit, else the saved box,
-// else the shown frame's default box (automatic). Cleared boxes show nothing:
-// what automatic uses there is known only from a frame analysed after 保存.
+// shown is each target's editable box where it shows on the frame: the
+// pending edit, else the saved box, else the shown frame's default box
+// (automatic). Cleared boxes show nothing: what automatic uses there is known
+// only from a frame analysed after 保存. All of these are standard values; on a
+// side whose bead row the frame shows lowered, the bead box shows lowered by
+// the same drop (onFrame), on the beads the player sees.
 func (c *calibrationWindow) shown() [calibTargetCount]calibShown {
 	var out [calibTargetCount]calibShown
 	saved := calibrationRects(c.saved)
@@ -724,6 +838,9 @@ func (c *calibrationWindow) shown() [calibTargetCount]calibShown {
 				out[t] = calibShown{r, calibBoxAuto}
 			}
 		}
+		if out[t].state != calibBoxNone && c.snap != nil {
+			out[t].rect = c.snap.onFrame(calibTarget(t), out[t].rect)
+		}
 	}
 	return out
 }
@@ -737,7 +854,8 @@ func (c *calibrationWindow) defaultBox(t calibTarget) (config.NormalizedRect, bo
 	return c.snap.defaultBox(t)
 }
 
-// baseline is what t shows without an edit: the saved box, else the default.
+// baseline is t's value without an edit: the saved box, else the default
+// (standard values, as setEdited compares them).
 func (c *calibrationWindow) baseline(t calibTarget) (config.NormalizedRect, bool) {
 	if r := calibrationRects(c.saved)[t]; r != nil {
 		return *r, true
@@ -769,7 +887,8 @@ func (c *calibrationWindow) pendingText() string {
 	return "未保存：" + strings.Join(names, "、") + "。"
 }
 
-// finishBox turns a finished drag (surface coordinates) into the selected box.
+// finishBox turns a finished drag (surface coordinates) into the selected box,
+// stored as a standard value.
 func (c *calibrationWindow) finishBox(from, to fyne.Position) {
 	if c.snap == nil {
 		return
@@ -777,7 +896,7 @@ func (c *calibrationWindow) finishBox(from, to fyne.Position) {
 	name := calibTargetNames[c.target]
 	r, ok := calibrationBoxFromDrag(c.surface.fit(), from, to)
 	if ok {
-		c.drawn[c.target] = &calibBox{rect: r, profile: c.profile()}
+		c.drawn[c.target] = &calibBox{rect: c.snap.standard(c.target, r), profile: c.profile()}
 		c.touched[c.target] = true
 	}
 	c.surface.Refresh()
@@ -795,8 +914,9 @@ func (c *calibrationWindow) finishBox(from, to fyne.Position) {
 	c.setStatus(text + c.pendingText())
 }
 
-// setEdited makes r the pending box of t. Back where it started (the saved
-// or the automatic box) it is no edit at all, so 保存 leaves it alone.
+// setEdited makes r (a standard value) the pending box of t. Back where it
+// started (the saved or the automatic box) it is no edit at all, so 保存
+// leaves it alone.
 func (c *calibrationWindow) setEdited(t calibTarget, r config.NormalizedRect) {
 	if base, ok := c.baseline(t); ok && sameCalibrationRect(base, r) {
 		c.drawn[t], c.touched[t] = nil, false
@@ -810,12 +930,13 @@ func (c *calibrationWindow) setEdited(t calibTarget, r config.NormalizedRect) {
 	c.drawn[t], c.touched[t] = &calibBox{rect: r, profile: profile}, true
 }
 
-// finishAdjust stores a moved or resized box of t.
+// finishAdjust stores a moved or resized box of t; r is where it shows on
+// the frame.
 func (c *calibrationWindow) finishAdjust(t calibTarget, r config.NormalizedRect, grip calibGrip) {
 	if c.snap == nil {
 		return
 	}
-	c.setEdited(t, r)
+	c.setEdited(t, c.snap.standard(t, r))
 	c.surface.Refresh()
 	name := calibTargetNames[t]
 	if !c.touched[t] {
