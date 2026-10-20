@@ -187,14 +187,24 @@ class ProjectionCaptureService : Service() {
             drain(source)
             return
         }
-        val image = try {
-            source.acquireLatestImage()
-        } catch (_: IllegalStateException) {
-            // The producer may signal while a resize/close is in progress. Do not
-            // retain an image or let the ImageReader callback kill the service.
-            drain(source)
-            return
-        } ?: return
+        // Newest frame wins as with acquireLatestImage, but one image at a time: FrameLoop.offer
+        // closes the frame it replaces before the next acquire. acquireLatestImage would probe for
+        // a newer image while the analysis holds one and another is pending (= maxImages), which
+        // logs "Unable to acquire a buffer item" for nearly every frame of a busy fight.
+        while (true) {
+            val image = try {
+                source.acquireNextImage()
+            } catch (_: IllegalStateException) {
+                // The producer may signal while a resize/close is in progress. Do not
+                // retain an image or let the ImageReader callback kill the service.
+                drain(source)
+                return
+            } ?: return
+            offerImage(image)
+        }
+    }
+
+    private fun offerImage(image: android.media.Image) {
         var hb: android.hardware.HardwareBuffer? = null
         var handedOff = false
         try {
