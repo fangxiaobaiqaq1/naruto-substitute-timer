@@ -118,7 +118,7 @@ test('countdown sleeps while idle/background, resumes wall time, and cleans up',
   assert.equal(updates.at(-1), time);
   assert.equal(timers.size, 0, 'expiry stops ticking without clearing stored deadlines');
 
-  for (const state of [null, 'unknown', 'inactive', 'background']) {
+  for (const state of [undefined, null, 'unknown', 'extension', 'inactive', 'background', 'unrecognized-state']) {
     changeState(state);
     const count = updates.length;
     render(time + 1_000);

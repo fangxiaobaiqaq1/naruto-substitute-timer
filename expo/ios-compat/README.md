@@ -1,36 +1,43 @@
-# iOS 兼容性
+# iOS 兼容性（高版本优先）
 
-此目录保存移动前台版的生命周期适配与检查；`expo/ios/` 是 Expo prebuild 生成物，不应在里面维护长期修复。原生改动应放到 `expo/plugins/`，避免下次构建丢失。
+用户要求优先兼容高版本 iOS，而不是为了少量旧设备锁住老 SDK。本目录维护实际需要的生命周期适配和检查，不复制一套业务代码。`expo/ios/` 是 prebuild 生成物，长期原生修复应写入 `expo/plugins/`。
 
-## 本轮目标
+## 当前目标与工具链
 
-- **系统与设备**：iOS 13.4+、arm64 iPhone；保持竖屏与系统安全区。iPad 暂使用 iPhone 兼容模式，不宣称完成原生平板或横屏适配。
-- **工具链**：Expo SDK 51 / React Native 0.74 / Xcode 16.2。暂不升级 SDK，避免无意抬高最低 iOS 版本；后续升级需要同时回归原生依赖和老系统。
-- **计时**：按绝对截止时间计算，不依赖后台持续运行 JS；切回前台立即校正，后台及无有效倒计时时停止周期刷新。
-- **界面**：兼顾小屏、双边计时长文本、设置页键盘、字体缩放与至少 44 点的主要操作区域。
-- **安装**：Release 真机包内置 JS/Hermes bundle，不需要 Expo Go 或 Metro。构建不使用开发者证书，用户另行自签。
-- **权限边界**：ReplayKit 仍是占位实现；不可用时不假装已开始广播。未接入 App Groups、跨 App 识别或游戏上方悬浮窗，免费自签不能解除这些限制。
+- **最低系统**：iOS **16.4**（Expo SDK 58 的要求），arm64 iPhone。iOS 13/14 不再是构建或验收目标。
+- **优先验收**：iOS 18、iOS 26 系列的自签安装、启动、布局和生命周期；不把“最低版本”误当“主要支持版本”。更新系统须真机回归，不承诺未测试版本。
+- **稳定工具链**：Expo 58.0.16 / React Native 0.88.0 / React 19.3.0；GitHub `macos-26`、Xcode 26.6、iOS 26.5 SDK。未采用 Xcode 27 预览版，避免测试版工具链影响可复现性。
+- **依赖匹配**：版本来自 Expo 的 `bundledNativeModules.json` 和官方 SDK 58 模板；锁文件随源码提交。使用新架构默认配置，不再维持旧版 React Native 兼容分支。
+- **设备形态**：竖屏 iPhone，使用原生安全区适配刘海/灵动岛；iPad 暂走 iPhone 兼容模式，不宣称已完成横屏和平板布局。
 
-## 检查与验收
+## 已处理
 
-在 `expo/` 运行：
+- 倒计时使用绝对截止时间；后台和无有效倒计时时停止周期刷新，回到前台立即校正，不申请后台保活权限。
+- 双边计时按空间换行、保留系统字体缩放，设置页处理键盘避让，主要操作区域至少 44 点。
+- 新版安全区组件替代 React Native 已弃用的 SafeAreaView；主界面和独立 Modal 分别处理安全区。
+- 启动页使用 `expo-splash-screen` config plugin，不依赖旧版 `splash` 配置。
+- Release 包内置 JS/Hermes bundle，不依赖 Expo Go 或 Metro。未签名构建不包含开发者证书。
+- ReplayKit 不可用时只显示前台演示，不假装等待真实广播；App Groups、游戏识别和跨 App 悬浮显示不在此次构建范围内。
+
+## 检查
+
+在 `expo/` 执行：
 
 ```bash
 npm ci --include=dev
 npm run typecheck
 npm test
+npx expo install --check
 ```
 
-GitHub Actions 另检查真机平台、arm64 主程序、内置 JS bundle、App/内嵌 framework 的 `MinimumOSVersion` 声明，以及 IPA ZIP 完整性。声明和编译通过**不等于**所有 iOS 版本已通过真机验收。
+GitHub Actions 另验证 iPhoneOS 平台、arm64 主程序、内置 JS bundle、App/嵌入 framework 的 `MinimumOSVersion` 声明和 IPA ZIP 完整性。编译和这些检查通过**不等于真机兼容性已验收**。
 
-`macos-15` 镜像虽有 Xcode 16.2 / iOS 18.2 SDK，但不再预装对应模拟器运行时；`ibtool` 编译启动页仍需要它。工作流显式执行 `xcodebuild -downloadPlatform iOS -buildVersion 18.2`，不依赖 SDK 目录存在与否判断。这只是构建机组件，**不会把 App 最低系统从 13.4 提高到 18.2**。参见 [runner-images #13560](https://github.com/actions/runner-images/issues/13560)。
+## 必须补做的自签真机验收
 
-拿到 IPA 后仍需在自签设备上检查：
+1. 当前稳定高版本 iOS：爱思签名安装、冷启动、断网启动，不请求 Metro、不闪退；确认工具完整重签嵌入 frameworks。
+2. 小屏、刘海/灵动岛，大号系统字体下的单/双边计时、迷你控制和设置操作。
+3. 设置页键盘不遮挡操作；“完成”与系统下滑关闭后可再次打开。
+4. 15 秒/10 秒计时中切后台或锁屏后返回，剩余时间按实际经过时间更新，已过期的不重新开始。
+5. 设置保存、重启恢复、免费签名续签，以及至少一台 iOS 16.4–18 的回归设备。
 
-1. 首次安装、冷启动、关闭网络后启动，无闪退且不请求 Metro。
-2. 小屏与刘海/灵动岛机型，大号系统字体下双边计时、迷你控制和设置均可操作。
-3. 设置页输入文字时键盘不遮挡操作；完成、系统下滑关闭后可再次打开。
-4. 启动 15 秒/10 秒计时，切后台或锁屏后返回，剩余时间按真实经过时间更新；已过期的不重新开始。
-5. 设置保存、重启恢复、免费签名续签，以及工具是否完整重签嵌入的 frameworks。
-
-当前没有把“云端编译成功”当作 iOS 13.4/14 或最新系统的实机验证，也没有依靠后台保活绕过系统限制。
+旧的 SDK 51 / Xcode 16.2 构建实验见 Git 历史，不再为 iOS 14 安装额外旧模拟器组件或限制当前 SDK 升级。
