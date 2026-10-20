@@ -1,11 +1,15 @@
 package com.narutotimer
 
 import android.content.Context
+import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
@@ -15,17 +19,25 @@ import java.util.Locale
 /**
  * 启动时把识别资源交给 native AssetStore（architect 所有）。
  *
- * - APK assets 根下的 templates/、avatars/、game/、ninja_templates/（由 Gradle syncRecognitionAssets 生成）
- *   中每个 PNG：读原始字节 → 计算 SHA-256（注册为文本 "<path>.sha256"，供 avatars/index.json 校验）→
+ * - APK assets 根下的 templates/、avatars/、ninja_templates/（由 Gradle syncRecognitionAssets 生成）
+ *   中每个 PNG：读原始字节 →（仅 avatars/：计算 SHA-256，注册为文本 "<path>.sha256"，供 avatars/index.json 校验）→
  *   剥掉 iCCP/sRGB/gAMA/cHRM 色彩块（Go image/png 不做色彩管理，必须拿到原始像素）→
  *   BitmapFactory 解码为 *非预乘* ARGB_8888 → 以 RGBA 字节注册。
- * - 每个 .json 以 UTF-8 文本注册。
+ *   templates/ 只加载 manifest.json 引用的 PNG（native scene 目录只按清单读模板）。
+ * - 每个 .json 以 UTF-8 文本注册。game/ 下的 .json 仍在 APK 里，但 native 从不读取，不加载。
  * - 用户账号名图鉴：filesDir/identity/（含 seen/、fight/）下 png/jpg/jpeg，key 为 "identity/<相对路径>"。
  * - 最后设置我方账号名与区域校准，并 nativeFinishAssets() 构建引擎。
+ *
+ * 读文件、去色彩块和像素拷贝都用复用的暂存缓冲，加载结束即释放（docs/性能优化-android-app.md）。
  */
 object AssetLoader {
     private const val TAG = "AssetLoader"
-    private val ROOTS = listOf("templates", "avatars", "game", "ninja_templates")
+    /** Roots the native core reads; game/ (vision_catalog / substitutes) is never read natively. */
+    private val ROOTS = listOf("templates", "avatars", "ninja_templates")
+    private const val TEMPLATE_DIR = "templates/"
+    private const val TEMPLATE_MANIFEST = "templates/manifest.json"
+    /** Only the avatar catalog checks "<path>.sha256" (native ninja/avatar.cpp loadAvatarEntry). */
+    private const val SHA256_DIR = "avatars/"
     private const val IDENTITY_DIR = "identity"
 
     data class Report(
@@ -38,7 +50,12 @@ object AssetLoader {
         val nativeError: String,
     )
 
-    private var buffer: ByteBuffer = ByteBuffer.allocateDirect(256 * 1024)
+    // Scratch reused across files while loading (all under this object's monitor) and dropped by
+    // releaseScratch() afterwards: file bytes, the PNG without colour chunks, decoded RGBA pixels.
+    private var raw = ByteArray(0)
+    private var stripped = ByteArray(0)
+    private var pixels: ByteBuffer? = null
+    private var sha256: MessageDigest? = null
 
     /** 完整加载并构建引擎。耗时（数百毫秒），必须在后台线程调用。 */
     @Synchronized
@@ -47,48 +64,71 @@ object AssetLoader {
         val errors = ArrayList<String>()
         var images = 0
         var texts = 0
+        var skipped = 0
         var bytes = 0L
         if (!NativeCore.nativeInit()) errors += "nativeInit: ${NativeCore.lastError()}"
         val am = context.assets
-        for (root in ROOTS) {
-            for (path in listRecursive(context, root)) {
-                try {
-                    when {
-                        path.endsWith(".png", ignoreCase = true) -> {
-                            val raw = am.open(path).use { it.readBytes() }
-                            val n = registerImage(path, raw)
-                            if (n >= 0) { images++; bytes += n } else errors += "decode $path"
+        try {
+            val templates = templateFiles(am)
+            for (root in ROOTS) {
+                for (path in listAssets(am, root)) {
+                    try {
+                        if (path.endsWith(".png", ignoreCase = true)) {
+                            if (templates != null && path.startsWith(TEMPLATE_DIR) &&
+                                path.substring(TEMPLATE_DIR.length) !in templates) {
+                                skipped++
+                            } else {
+                                val len = readAsset(am, path) // May replace [raw]: read it first.
+                                val n = registerImage(path, raw, len)
+                                if (n >= 0) { images++; bytes += n } else errors += "decode $path"
+                            }
+                        } else if (path.endsWith(".json", ignoreCase = true)) {
+                            val len = readAsset(am, path)
+                            if (NativeCore.nativeAddText(path, String(raw, 0, len, Charsets.UTF_8))) texts++ else errors += "text $path"
                         }
-                        path.endsWith(".json", ignoreCase = true) -> {
-                            val text = am.open(path).use { it.readBytes().toString(Charsets.UTF_8) }
-                            if (NativeCore.nativeAddText(path, text)) texts++ else errors += "text $path"
-                        }
+                    } catch (e: Exception) {
+                        errors += "$path: ${e.message}"
                     }
-                } catch (e: Exception) {
-                    errors += "$path: ${e.message}"
                 }
             }
+            images += registerUserIdentityLocked(context, errors)
+        } finally {
+            releaseScratch()
         }
-        images += registerUserIdentity(context, errors)
+        val decoded = System.nanoTime()
         NativeCore.setPlayerNames(playerNames)
         if (settings != null && !NativeCore.setCalibration(settings)) errors += "calibration: ${NativeCore.lastError()}"
         val ready = NativeCore.nativeFinishAssets()
         val nativeError = if (ready) "" else NativeCore.lastError()
-        val millis = (System.nanoTime() - started) / 1_000_000
-        Log.i(TAG, "assets: images=$images texts=$texts bytes=$bytes ${millis}ms ready=$ready errors=${errors.size} $nativeError")
+        val now = System.nanoTime()
+        val millis = (now - started) / 1_000_000
+        Log.i(
+            TAG,
+            "assets: images=$images texts=$texts skipped=$skipped bytes=$bytes ${millis}ms " +
+                "(decode ${(decoded - started) / 1_000_000}ms, engine ${(now - decoded) / 1_000_000}ms) " +
+                "ready=$ready errors=${errors.size} $nativeError",
+        )
         return Report(images, texts, bytes, millis, errors, ready, nativeError)
     }
 
     /** 注册 filesDir/identity 下的用户图片。返回成功数。 */
     @Synchronized
-    fun registerUserIdentity(context: Context, errors: MutableList<String> = ArrayList()): Int {
+    fun registerUserIdentity(context: Context, errors: MutableList<String> = ArrayList()): Int =
+        try {
+            registerUserIdentityLocked(context, errors)
+        } finally {
+            releaseScratch()
+        }
+
+    private fun registerUserIdentityLocked(context: Context, errors: MutableList<String>): Int {
         val dir = File(context.filesDir, IDENTITY_DIR)
         if (!dir.isDirectory) return 0
         var n = 0
         dir.walkTopDown().filter { it.isFile && isImageName(it.name) }.sortedBy { it.path }.forEach { f ->
             val key = IDENTITY_DIR + "/" + f.relativeTo(dir).invariantSeparatorsPath
             try {
-                if (registerImage(key, f.readBytes()) >= 0) n++ else errors += "decode $key"
+                val len = f.inputStream().use { readFully(it, f.length().coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()) }
+                if (registerImage(key, raw, len) >= 0) n++ else errors += "decode $key"
             } catch (e: Exception) {
                 errors += "$key: ${e.message}"
             }
@@ -113,7 +153,14 @@ object AssetLoader {
         val file = File(dir, name)
         return try {
             FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            synchronized(this) { registerImage("$IDENTITY_DIR/seen/$name", file.readBytes()) }
+            val png = file.readBytes()
+            synchronized(this) {
+                try {
+                    registerImage("$IDENTITY_DIR/seen/$name", png, png.size)
+                } finally {
+                    releaseScratch()
+                }
+            }
             file
         } catch (e: Exception) {
             Log.w(TAG, "save opp crop failed", e)
@@ -128,34 +175,91 @@ object AssetLoader {
         return low.endsWith(".png") || low.endsWith(".jpg") || low.endsWith(".jpeg")
     }
 
-    private fun listRecursive(context: Context, root: String): List<String> {
+    /**
+     * Files under [root], sorted per directory. A child with a file extension we load is a file;
+     * only other names are listed again (AssetManager.list scans the APK's entries on every call).
+     */
+    private fun listAssets(am: AssetManager, root: String): List<String> {
         val out = ArrayList<String>()
-        val am = context.assets
         fun walk(path: String) {
             val children = am.list(path) ?: return
             if (children.isEmpty()) {
                 out += path
                 return
             }
-            for (c in children.sorted()) walk("$path/$c")
+            children.sort()
+            for (c in children) {
+                val low = c.lowercase(Locale.ROOT)
+                if (low.endsWith(".png") || low.endsWith(".json")) out += "$path/$c" else walk("$path/$c")
+            }
         }
         walk(root)
         return out
     }
 
-    /** 解码并注册一张图；返回像素字节数，失败返回 -1。 */
-    private fun registerImage(path: String, raw: ByteArray): Int {
-        if (path.endsWith(".png", ignoreCase = true)) {
-            NativeCore.nativeAddText("$path.sha256", sha256Hex(raw))
+    /**
+     * PNG names the template manifest references (any string value ending in .png: today "file"
+     * and "mask"); the native scene catalog reads templates only through it (scene.cpp readGray).
+     * null when the manifest cannot be read, in which case every template is loaded.
+     */
+    private fun templateFiles(am: AssetManager): Set<String>? = runCatching {
+        val len = readAsset(am, TEMPLATE_MANIFEST)
+        val out = HashSet<String>()
+        fun collect(v: Any?) {
+            when (v) {
+                is JSONObject -> v.keys().forEach { collect(v.opt(it)) }
+                is JSONArray -> for (i in 0 until v.length()) collect(v.opt(i))
+                is String -> if (v.endsWith(".png", ignoreCase = true)) out += v
+            }
         }
-        val bytes = if (isPng(raw)) stripColorChunks(raw) else raw
+        collect(JSONObject(String(raw, 0, len, Charsets.UTF_8)))
+        out.takeIf { it.isNotEmpty() }
+    }.onFailure { Log.w(TAG, "template manifest unreadable; loading every template", it) }.getOrNull()
+
+    /** Reads the APK asset [path] into [raw]; returns its length. */
+    private fun readAsset(am: AssetManager, path: String): Int = am.open(path).use { readFully(it, it.available()) }
+
+    /** Reads [input] to its end into [raw] (grown as needed); returns the length. */
+    private fun readFully(input: InputStream, sizeHint: Int): Int {
+        val hint = sizeHint.coerceIn(0, MAX_SIZE_HINT)
+        if (raw.size <= hint) raw = ByteArray(maxOf(hint + 1, MIN_SCRATCH_BYTES))
+        var n = 0
+        while (true) {
+            if (n == raw.size) raw = raw.copyOf(raw.size * 2)
+            val r = input.read(raw, n, raw.size - n)
+            if (r < 0) return n
+            n += r
+        }
+    }
+
+    private fun releaseScratch() {
+        raw = ByteArray(0)
+        stripped = ByteArray(0)
+        pixels = null
+        sha256 = null
+    }
+
+    /** 解码并注册 [data] 前 [len] 字节的一张图；返回像素字节数，失败返回 -1。调用方持有本对象的锁。 */
+    private fun registerImage(path: String, data: ByteArray, len: Int): Int {
+        if (path.startsWith(SHA256_DIR) && path.endsWith(".png", ignoreCase = true)) {
+            NativeCore.nativeAddText("$path.sha256", sha256Hex(data, len))
+        }
+        var src = data
+        var srcLen = len
+        if (isPng(data, len)) {
+            val n = stripColorChunks(data, len)
+            if (n >= 0) {
+                src = stripped
+                srcLen = n
+            }
+        }
         val opts = BitmapFactory.Options().apply {
             inPremultiplied = false
             inPreferredConfig = Bitmap.Config.ARGB_8888
             inScaled = false
             inMutable = false
         }
-        var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return -1
+        var bmp = BitmapFactory.decodeByteArray(src, 0, srcLen, opts) ?: return -1
         if (bmp.config != Bitmap.Config.ARGB_8888) {
             val copy = bmp.copy(Bitmap.Config.ARGB_8888, false)
             bmp.recycle()
@@ -164,8 +268,12 @@ object AssetLoader {
         try {
             val rowBytes = bmp.rowBytes
             val need = rowBytes * bmp.height
-            if (buffer.capacity() < need) buffer = ByteBuffer.allocateDirect(maxOf(need, buffer.capacity() * 2))
-            buffer.clear()
+            var buffer = pixels
+            if (buffer == null || buffer.capacity() < need) {
+                buffer = ByteBuffer.allocateDirect(maxOf(need, MIN_PIXEL_BYTES, (buffer?.capacity() ?: 0) * 2))
+                pixels = buffer
+            }
+            buffer!!.clear()
             // ARGB_8888 在内存中按 R,G,B,A 字节排列；非预乘位图按原值拷出。
             bmp.copyPixelsToBuffer(buffer)
             buffer.rewind()
@@ -175,41 +283,66 @@ object AssetLoader {
         }
     }
 
-    private fun sha256Hex(data: ByteArray): String {
-        val d = MessageDigest.getInstance("SHA-256").digest(data)
-        val sb = StringBuilder(64)
-        for (b in d) {
-            val v = b.toInt() and 0xff
-            sb.append("0123456789abcdef"[v ushr 4]).append("0123456789abcdef"[v and 0xf])
+    private fun sha256Hex(data: ByteArray, len: Int): String {
+        val md = sha256 ?: MessageDigest.getInstance("SHA-256").also { sha256 = it }
+        md.update(data, 0, len)
+        val d = md.digest()
+        val out = CharArray(d.size * 2)
+        for (i in d.indices) {
+            val v = d[i].toInt() and 0xff
+            out[2 * i] = HEX[v ushr 4]
+            out[2 * i + 1] = HEX[v and 0xf]
         }
-        return sb.toString()
+        return String(out)
     }
 
+    private const val HEX = "0123456789abcdef"
+    private const val MIN_SCRATCH_BYTES = 128 * 1024
+    private const val MIN_PIXEL_BYTES = 256 * 1024
+    private const val MAX_SIZE_HINT = 64 * 1024 * 1024
     private val PNG_SIG = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
-    private val COLOR_CHUNKS = setOf("iCCP", "sRGB", "gAMA", "cHRM")
 
-    private fun isPng(b: ByteArray): Boolean {
-        if (b.size < 8) return false
+    private fun isPng(b: ByteArray, len: Int): Boolean {
+        if (len < 8) return false
         for (i in 0 until 8) if (b[i] != PNG_SIG[i]) return false
         return true
     }
 
-    /** 逐块复制 PNG，去掉色彩管理块（CRC 原样保留，块内容不变）。结构异常则原样返回。 */
-    private fun stripColorChunks(b: ByteArray): ByteArray {
-        val out = java.io.ByteArrayOutputStream(b.size)
-        out.write(b, 0, 8)
+    /** iCCP / sRGB / gAMA / cHRM：Go image/png 不做色彩管理。 */
+    private fun isColorChunk(b: ByteArray, at: Int): Boolean =
+        chunkIs(b, at, "iCCP") || chunkIs(b, at, "sRGB") || chunkIs(b, at, "gAMA") || chunkIs(b, at, "cHRM")
+
+    private fun chunkIs(b: ByteArray, at: Int, type: String): Boolean {
+        for (k in 0 until 4) if (b[at + k] != type[k].code.toByte()) return false
+        return true
+    }
+
+    /**
+     * 逐块复制 PNG 到 [stripped]，去掉色彩管理块（CRC 原样保留，块内容不变），返回新长度；
+     * 没有色彩块或结构异常时返回 -1（调用方用原字节）。
+     */
+    private fun stripColorChunks(b: ByteArray, size: Int): Int {
+        if (stripped.size < size) stripped = ByteArray(maxOf(size, MIN_SCRATCH_BYTES))
+        val out = stripped
+        System.arraycopy(b, 0, out, 0, 8)
+        var n = 8
         var i = 8
         var dropped = false
-        while (i + 12 <= b.size) {
+        while (i + 12 <= size) {
             val len = ((b[i].toInt() and 0xff) shl 24) or ((b[i + 1].toInt() and 0xff) shl 16) or
                 ((b[i + 2].toInt() and 0xff) shl 8) or (b[i + 3].toInt() and 0xff)
-            if (len < 0 || i + 12 + len > b.size) return b
-            val type = String(b, i + 4, 4, Charsets.US_ASCII)
+            if (len < 0 || i + 12 + len > size) return -1
             val total = 12 + len
-            if (type in COLOR_CHUNKS) dropped = true else out.write(b, i, total)
+            if (isColorChunk(b, i + 4)) {
+                dropped = true
+            } else {
+                System.arraycopy(b, i, out, n, total)
+                n += total
+            }
+            val end = chunkIs(b, i + 4, "IEND")
             i += total
-            if (type == "IEND") break
+            if (end) break
         }
-        return if (dropped) out.toByteArray() else b
+        return if (dropped) n else -1
     }
 }
