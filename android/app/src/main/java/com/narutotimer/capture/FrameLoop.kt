@@ -58,6 +58,11 @@ object FrameLoop {
     private val generation = AtomicLong(0)
     private val wake = Object()
     @Volatile private var pending: CapturedFrame? = null
+    /**
+     * Frame pacing (guarded by [wake]): System.nanoTime before which the analysis thread does not
+     * start another frame; see [takeFrame].
+     */
+    private var notBefore = 0L
     @Volatile private var thread: Thread? = null
     private val analyzed = AtomicLong(0)
     private val dropped = AtomicLong(0)
@@ -110,20 +115,14 @@ object FrameLoop {
         val run = generation.incrementAndGet()
         val app = context.applicationContext as TimerApp
         val t = Thread({
+            var paceUntil = 0L
             while (started.get() && generation.get() == run) {
-                val frame = synchronized(wake) {
-                    while (started.get() && generation.get() == run && pending == null) {
-                        try { wake.wait(100) } catch (_: InterruptedException) { /* re-check state */ }
-                    }
-                    val x = pending
-                    pending = null
-                    x
-                } ?: continue
+                val frame = takeFrame(run, paceUntil) ?: continue
+                val begin = System.nanoTime()
                 var result: AnalysisResult? = null
                 try {
                     if (!started.get() || generation.get() != run) continue
                     if (app.nativeStatus != TimerApp.NativeStatus.READY) continue
-                    val begin = System.nanoTime()
                     result = analyze(frame)
                     val elapsed = System.nanoTime() - begin
                     if (result != null) {
@@ -147,11 +146,43 @@ object FrameLoop {
                         runCatching { takeSnapshot(frame, shot, result) }
                     }
                     frame.close()
+                    // Go nextCaptureWait: the next frame starts no earlier than this one's start +
+                    // pollIntervalMs (16 ms in a fight, 400 ms otherwise), read after onFrame so the
+                    // first fight frame already switches to the fight interval.
+                    paceUntil = begin + app.session.pollIntervalMs() * 1_000_000L
                 }
             }
         }, "nt-analysis-$run")
         thread = t
         t.start()
+    }
+
+    /**
+     * The newest offered frame, taken no earlier than [paceUntil] (System.nanoTime): frames offered
+     * while the analysis waits for its pace replace each other in [pending] (newest wins, the
+     * older is closed at once), so a 60–120 Hz projection is analysed at most every
+     * pollIntervalMs. The wait is measured from the previous frame's start (Go nextCaptureWait),
+     * so an analysis slower than the interval never waits, and a frame that arrives after the
+     * deadline starts at once. A pending snapshot request skips the wait for the frame it accepts.
+     * Null once the loop stopped or restarted.
+     */
+    private fun takeFrame(run: Long, paceUntil: Long): CapturedFrame? = synchronized(wake) {
+        notBefore = paceUntil
+        while (started.get() && generation.get() == run) {
+            val frame = pending
+            val left = paceUntil - System.nanoTime()
+            if (frame != null && (left <= 0L || snapshot?.accepts(frame) == true)) {
+                pending = null
+                return frame
+            }
+            // Before the deadline offer() does not wake this thread (the newest frame simply
+            // waits in pending); after it, the next offer does.
+            val waitNs = if (left > 0L) left else IDLE_WAIT_NS
+            try {
+                wake.wait(waitNs / 1_000_000L, (waitNs % 1_000_000L).toInt())
+            } catch (_: InterruptedException) { /* re-check state */ }
+        }
+        null
     }
 
     fun stop() {
@@ -160,6 +191,7 @@ object FrameLoop {
         synchronized(wake) {
             pending?.close()
             pending = null
+            notBefore = 0L
             snapshot = null // The requester's own timeout reports the failure.
             wake.notifyAll()
         }
@@ -188,7 +220,9 @@ object FrameLoop {
                 old.close()
                 dropped.incrementAndGet()
             }
-            wake.notifyAll()
+            // While the analysis paces itself it sleeps until its deadline; waking it for every
+            // frame of a 60–120 Hz source would only put it back to sleep.
+            if (System.nanoTime() - notBefore >= 0L || snapshot != null) wake.notifyAll()
         }
     }
 
@@ -357,6 +391,8 @@ object FrameLoop {
     }
 
     private const val TAG = "FrameLoop"
+    /** Longest single wait for a frame; the loop re-checks its state after it. */
+    private const val IDLE_WAIT_NS = 100_000_000L
     private const val STOP_JOIN_MS = 1_000L
     private const val SNAPSHOT_RESULT_MAX_AGE_NS = 2_000_000_000L
 }
