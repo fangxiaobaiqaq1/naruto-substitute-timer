@@ -73,10 +73,18 @@ func (NCC) Match(q Query) (Score, error) {
 	// ToGray(RGBA) 从零开始，而调用方也可传带原点和 stride 的 Gray 子图。
 	// nccAt 使用相对于 Gray.Bounds().Min 的偏移，输出仍是截图坐标。
 	origin := ib.Min
-	// The prefix sums cover exactly the ROI (every template footprint scanned
-	// lies inside it); they are local to this call, hence single-goroutine.
-	pre := newGrayPrefix(gray, roi.Min.X-origin.X, roi.Min.Y-origin.Y, roi.Dx(), roi.Dy())
-	defer pre.release()
+	// Every footprint scanned lies inside the ROI. The SIMD kernel reads the
+	// gray pixels directly (no bounds checks), so it is used only when the
+	// ROI's last pixel provably lies inside gray.Pix; otherwise the portable
+	// path keeps Go's bounds checks. Both give bit-identical scores.
+	kernel := nccKernel != nil && kernelFits(gray, roi.Sub(origin))
+	var pre *grayPrefix
+	if !kernel {
+		// The prefix sums cover exactly the ROI; they are local to this call,
+		// hence single-goroutine.
+		pre = newGrayPrefix(gray, roi.Min.X-origin.X, roi.Min.Y-origin.Y, roi.Dx(), roi.Dy())
+		defer pre.release()
+	}
 	best := Score{Peak: roi.Min}
 	scan := func(x0, y0, x1, y1, st int) {
 		if st < 1 {
@@ -96,7 +104,12 @@ func (NCC) Match(q Query) (Score, error) {
 		}
 		for y := y0; y <= y1; y += st {
 			for x := x0; x <= x1; x += st {
-				v := prepared.at(gray, pre, x-origin.X, y-origin.Y)
+				var v float64
+				if kernel {
+					v = prepared.atKernel(gray.Pix, gray.Stride, (y-origin.Y)*gray.Stride+x-origin.X)
+				} else {
+					v = prepared.at(gray, pre, x-origin.X, y-origin.Y)
+				}
 				if v > best.Value {
 					best.Value = v
 					best.Peak = image.Pt(x, y)
@@ -117,6 +130,17 @@ func (NCC) Match(q Query) (Score, error) {
 		}
 	}
 	return best, nil
+}
+
+// kernelFits reports whether rel (ROI in gray offsets, i.e. relative to the
+// image origin) lies inside gray.Pix, so that every template footprint within
+// it can be read without bounds checks.
+func kernelFits(gray *image.Gray, rel image.Rectangle) bool {
+	if rel.Empty() || rel.Min.X < 0 || rel.Min.Y < 0 || gray.Stride < rel.Max.X {
+		return false
+	}
+	last := (rel.Max.Y-1)*gray.Stride + rel.Max.X - 1
+	return last < len(gray.Pix)
 }
 
 // coarseStep is the sparse grid for large templates; small templates cannot

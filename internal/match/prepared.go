@@ -4,6 +4,7 @@ import (
 	"image"
 	"math"
 	"sync"
+	"unsafe"
 )
 
 // PreparedNCC owns a snapshot of one template and its binary mask. It is
@@ -12,15 +13,25 @@ import (
 // No pixel is sampled approximately: all nonzero-mask pixels contribute exactly
 // as in the scalar matcher.
 type PreparedNCC struct {
-	rect                 image.Rectangle
-	runs                 []nccRun
+	rect image.Rectangle
+	// spans are the contiguous mask runs in row order. Their template pixels
+	// are packed back to back in pix (span i starts at spans[i].t), followed
+	// by nccPad zero bytes so a vector kernel may read a whole block past the
+	// last span.
+	spans                []nccSpan
+	pix                  []byte
 	count, sum, variance float64
 }
 
-type nccRun struct {
-	x, y   int
-	pixels []byte
+// nccSpan is one contiguous run of mask pixels: template column x, row y,
+// length n (at most maxDotRun) and offset t of its pixels in PreparedNCC.pix.
+// The layout (four int32) is shared with the assembly kernels.
+type nccSpan struct {
+	x, y, n, t int32
 }
+
+// nccPad is the zero tail after the packed template pixels.
+const nccPad = 32
 
 // PrepareNCC precomputes template statistics and contiguous mask runs. Mask
 // origins/strides need not match the template; a smaller mask omits its missing
@@ -32,12 +43,11 @@ func PrepareNCC(templ, mask *image.Gray) *PreparedNCC {
 	b := templ.Bounds()
 	w, h := b.Dx(), b.Dy()
 	p := &PreparedNCC{rect: b}
-	data := make([]byte, w*h)
 	var count, sum, squares int64
-	p.runs = make([]nccRun, 0, h)
+	spans := make([]nccSpan, 0, h)
+	var packed int
 	for y := 0; y < h; y++ {
-		row := data[y*w : (y+1)*w]
-		copy(row, templ.Pix[y*templ.Stride:y*templ.Stride+w])
+		row := templ.Pix[y*templ.Stride : y*templ.Stride+w]
 		if mask != nil && y >= mask.Bounds().Dy() {
 			continue
 		}
@@ -60,15 +70,32 @@ func PrepareNCC(templ, mask *image.Gray) *PreparedNCC {
 			}
 			// Split very long runs so each run's dot product fits in uint32.
 			for ; start < x; start += maxDotRun {
-				p.runs = append(p.runs, nccRun{x: start, y: y, pixels: row[start:min(x, start+maxDotRun)]})
+				n := min(x, start+maxDotRun) - start
+				spans = append(spans, nccSpan{x: int32(start), y: int32(y), n: int32(n), t: int32(packed)})
+				packed += n
 			}
 		}
 	}
+	// Copy only the masked pixels: the snapshot is owned and immutable.
+	p.pix = make([]byte, packed+nccPad)
+	for _, s := range spans {
+		row := templ.Pix[int(s.y)*templ.Stride:]
+		copy(p.pix[s.t:s.t+s.n], row[s.x:s.x+s.n])
+	}
+	p.spans = append(make([]nccSpan, 0, len(spans)), spans...)
 	p.count, p.sum = float64(count), float64(sum)
 	if count > 0 {
 		p.variance = float64(squares) - p.sum*p.sum/p.count
 	}
 	return p
+}
+
+// SizeBytes is the memory the prepared template retains (cache accounting).
+func (p *PreparedNCC) SizeBytes() int {
+	if p == nil {
+		return 0
+	}
+	return int(unsafe.Sizeof(*p)) + cap(p.pix) + cap(p.spans)*int(unsafe.Sizeof(nccSpan{}))
 }
 
 // grayPrefix holds per-row prefix sums of gray and gray² over one rectangle
@@ -115,7 +142,8 @@ const maxDotRun = 66051
 // at scores the template at (ox, oy). pre must cover the template footprint.
 // Sums are exact integers, so the float formula sees the same values (and
 // performs the same operations in the same order) as the per-pixel scalar
-// accumulation it replaced: scores are bit-identical.
+// accumulation it replaced: scores are bit-identical. This is the portable
+// path; atKernel computes the same integers with SIMD.
 func (p *PreparedNCC) at(img *image.Gray, pre *grayPrefix, ox, oy int) float64 {
 	if p.count < 8 {
 		return 0
@@ -124,13 +152,13 @@ func (p *PreparedNCC) at(img *image.Gray, pre *grayPrefix, ox, oy int) float64 {
 	stride := pre.w + 1
 	// Match bounds-checks the whole template footprint first. Slicing once per
 	// run removes per-pixel GrayAt bounds/origin/mask checks from the hot loop.
-	for _, run := range p.runs {
-		t := run.pixels
-		base := (oy+run.y-pre.y0)*stride + ox + run.x - pre.x0
+	for _, s := range p.spans {
+		t := p.pix[s.t : s.t+s.n]
+		base := (oy+int(s.y)-pre.y0)*stride + ox + int(s.x) - pre.x0
 		end := base + len(t)
 		sum += pre.sum[end] - pre.sum[base]
 		squares += pre.square[end] - pre.square[base]
-		off := (oy+run.y)*img.Stride + ox + run.x
+		off := (oy+int(s.y))*img.Stride + ox + int(s.x)
 		row := img.Pix[off : off+len(t)]
 		row = row[:len(t)]
 		// PrepareNCC caps runs at maxDotRun, so uint32 cannot overflow.
@@ -148,6 +176,23 @@ func (p *PreparedNCC) at(img *image.Gray, pre *grayPrefix, ox, oy int) float64 {
 		}
 		product += uint64(a) + uint64(b) + uint64(c) + uint64(d)
 	}
+	return p.score(product, sum, squares)
+}
+
+// atKernel scores the template whose top-left pixel is pix[base] (row stride
+// stride) with the SIMD kernel: one call sums img·tpl, img and img² over all
+// spans. The caller guarantees that the whole footprint lies inside pix; the
+// kernel reads at most up to len(pix).
+func (p *PreparedNCC) atKernel(pix []byte, stride, base int) float64 {
+	if p.count < 8 {
+		return 0
+	}
+	product, sum, squares := nccKernel(&pix[base], stride, len(pix)-base, &p.spans[0], len(p.spans), &p.pix[0])
+	return p.score(product, sum, squares)
+}
+
+// score turns the exact integer sums into the clamped NCC value.
+func (p *PreparedNCC) score(product, sum, squares uint64) float64 {
 	sumI := float64(sum)
 	variance := float64(squares) - sumI*sumI/p.count
 	if variance <= 1e-6 || p.variance <= 1e-6 {
