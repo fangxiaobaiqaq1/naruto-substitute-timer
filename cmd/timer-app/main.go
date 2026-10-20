@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -21,7 +22,17 @@ import (
 	"narutotimer/internal/win32"
 )
 
+// gcPercent trims the heap headroom of the live timer. Its live heap is
+// dominated by long-lived buffers (capture ring, templates) while each frame
+// allocates little, so GOGC=50 lowers the peak RSS by a quarter at 1080p
+// (more at higher resolutions) for well under 1% more CPU
+// (docs/性能优化-windows.md). An explicit GOGC environment variable wins.
+const gcPercent = 50
+
 func main() {
+	if os.Getenv("GOGC") == "" {
+		debug.SetGCPercent(gcPercent)
+	}
 	win.EnablePerMonitorDPIAwareness()
 	if len(os.Args) == 4 && os.Args[1] == mumu.ProbeWorkerArgument {
 		runMuMuProbeWorker(os.Args[2], os.Args[3])
