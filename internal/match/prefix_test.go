@@ -14,10 +14,10 @@ func referencePreparedAt(p *PreparedNCC, img *image.Gray, ox, oy int) float64 {
 		return 0
 	}
 	var sum, squares, product int64
-	for _, run := range p.runs {
-		off := (oy+run.y)*img.Stride + ox + run.x
-		row := img.Pix[off : off+len(run.pixels)]
-		for x, t := range run.pixels {
+	for _, s := range p.spans {
+		off := (oy+int(s.y))*img.Stride + ox + int(s.x)
+		row := img.Pix[off : off+int(s.n)]
+		for x, t := range p.pix[s.t : s.t+s.n] {
 			v := int64(row[x])
 			sum += v
 			squares += v * v
