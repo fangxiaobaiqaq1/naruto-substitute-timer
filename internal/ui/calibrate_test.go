@@ -273,7 +273,7 @@ func TestCalibrationSaveNeedsMatchOrTrainingFrame(t *testing.T) {
 			calls := 0
 			s.calibrationApply = func(*config.RegionCalibration) { calls++ }
 			c := openCalibrationOn(t, s, f)
-			if c.snap.profile != "" || !strings.Contains(c.info.Text, "非对局") || !strings.Contains(c.status.Text, "请在对局或训练场画面上校准") {
+			if c.snap.profile != "" || !c.layout.Visible() || !strings.Contains(c.info.Text, "未识别") || !strings.Contains(c.status.Text, "选择训练场/决斗场") {
 				t.Fatalf("profile %q info %q status %q", c.snap.profile, c.info.Text, c.status.Text)
 			}
 			at, _ := surfaceMapper(t, c)
@@ -290,12 +290,22 @@ func TestCalibrationSaveNeedsMatchOrTrainingFrame(t *testing.T) {
 			if _, err := os.Stat(s.cfgPath); !os.IsNotExist(err) {
 				t.Fatalf("config written: %v", err)
 			}
-			// The boxes still save once drawn again on a match frame.
+			// An unsupported resolution may never be recognised as a match:
+			// the player names the layout and the boxes save.
+			c.layout.SetSelected("决斗场")
+			dragSurface(c.surface, at(150, 100), at(250, 124))
+			if err := c.save(); err != nil || s.cfg.Layout.Calibration == nil || s.cfg.Layout.Calibration.Profile != "duel" || calls != 1 {
+				t.Fatalf("save with a picked layout: %v %+v", err, s.cfg.Layout.Calibration)
+			}
+			// A recognised match frame overrides the pick.
 			s.provider = func() frame.Frame { return calibrationTestFrame(1920, 1080, "camp") }
 			s.captureOnce()
 			c.refreshFrame()
+			if c.layout.Visible() {
+				t.Fatal("layout picker shown on a recognised frame")
+			}
 			dragSurface(c.surface, at(150, 100), at(250, 124))
-			if err := c.save(); err != nil || s.cfg.Layout.Calibration == nil || s.cfg.Layout.Calibration.Profile != "camp" || calls != 1 {
+			if err := c.save(); err != nil || s.cfg.Layout.Calibration == nil || s.cfg.Layout.Calibration.Profile != "camp" || calls != 2 {
 				t.Fatalf("save on training frame: %v %+v", err, s.cfg.Layout.Calibration)
 			}
 		})
