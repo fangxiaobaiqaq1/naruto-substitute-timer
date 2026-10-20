@@ -66,6 +66,12 @@ type session struct {
 	cfgPath               string
 	provider              frame.Provider
 
+	// Region calibration (calibrate.go). The feed copies frames only while
+	// calibrationWin is open; calibrationWin is UI goroutine only.
+	calibrationApply func(*config.RegionCalibration)
+	calibrationFeed  calibrationFeed
+	calibrationWin   *calibrationWindow
+
 	mu                  sync.Mutex
 	beads               []frame.Bead
 	status              string
@@ -204,6 +210,13 @@ func WithSupportContext(executable, root string) Option {
 		s.executablePath = executable
 		s.supportRoot = root
 	}
+}
+
+// WithCalibrationApply lets the engine apply the player's region calibration
+// live. It is called on the UI goroutine with a private copy after the
+// calibration window saves (nil after 全部恢复自动 = automatic layout).
+func WithCalibrationApply(apply func(*config.RegionCalibration)) Option {
+	return func(s *session) { s.calibrationApply = apply }
 }
 
 func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
@@ -718,6 +731,8 @@ func (s *session) captureOnce() {
 
 	recorder := s.currentDiagnostics()
 	f := s.provider()
+	// One atomic load unless the calibration window is open.
+	s.offerCalibrationFrame(f)
 	trace := traceRef{recorder: recorder}
 	if recorder != nil {
 		trace.id = recorder.Observe(f, time.Now())
