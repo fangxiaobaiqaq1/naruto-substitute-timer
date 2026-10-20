@@ -10,8 +10,10 @@
 #include <string>
 #include <vector>
 
+#include "nt/assets.h"
 #include "nt/engine.h"
 #include "nt/frame.h"
+#include "nt/match.h"
 #include "nt/ninja.h"
 #include "nt/rgb.h"
 #include "nt/scene.h"
@@ -540,6 +542,366 @@ void testRegionCalibration() {
     }
 }
 
+// Special rows on calibrated sides (docs/区域校准.md 「校准值是标准忍者值」),
+// mirrors internal/engine/rgb/calibration_special_test.go without the avatar
+// catalog: the saved boxes are the ORDINARY standard rows of three devices the
+// automatic layout misses, and every special row is derived from them at the
+// side's calibrated scale: Minato/Itachi +13@540 (title, or the unidentified
+// thin gauge), Itachi's right-HUD portrait check at the calibrated window,
+// Xiayin +9@540 purple/red, Obito purple, Naruto red, Hashirama's six warm
+// slots, Madara warm. Name strips are deterministic block patterns registered
+// under the real template names (real NCC like SceneFixture, no repository
+// assets); the store is cleared afterwards.
+struct CalibDevice {
+    const char* name;
+    Point size;
+    double x0[2], y0[2], s[2];  // duel bead 0 and scale (px per 1600x900 unit) per side
+    const char* profile;          // the ordinary frame the boxes were drawn on
+};
+
+const Color kBlue{40, 200, 255, 255}, kDark{28, 54, 98, 255}, kGold{255, 200, 0, 255}, kWarm{240, 65, 18, 255},
+    kPurple{220, 60, 250, 255}, kPurpleDark{40, 15, 80, 255}, kRed{240, 95, 80, 255}, kRedDark{40, 10, 15, 255};
+
+struct Slot {
+    Color c;
+    bool lit, gold;
+};
+const Slot sB{kBlue, true, false}, sD{kDark, false, false}, sG{kGold, true, true}, sW{kWarm, true, false},
+    sWG{kGold, true, false},  // the warm palette reads a gold core as a warm light
+    sP{kPurple, true, false}, sPD{kPurpleDark, false, false}, sR{kRed, true, false}, sRD{kRedDark, false, false};
+
+struct CalibHUD {
+    const CalibDevice& d;
+    RGBA img;
+    explicit CalibHUD(const CalibDevice& dev) : d(dev), img(RGBA::New(MakeRect(0, 0, dev.size.X, dev.size.Y))) {
+        fill(img.Bounds(), Color{32, 32, 32, 255});
+    }
+    void fill(Rect r, Color c) {
+        r = r.Intersect(img.Bounds());
+        for (int y = r.Min.Y; y < r.Max.Y; ++y)
+            for (int x = r.Min.X; x < r.Max.X; ++x) img.SetRGBA(x, y, c);
+    }
+    static const std::vector<config::NormalizedPoint>& centres(const std::string& profile, int side) {
+        static const config::LayoutProfile camp = config::Default().Layout.Profile("camp"),
+                                           duel = config::Default().Layout.Profile("duel");
+        const config::LayoutProfile& p = profile == "duel" ? duel : camp;
+        return side ? p.Right.NominalCenters : p.Left.NominalCenters;
+    }
+    double s960(int side) const { return d.s[side] * 1600 / 960; }
+    // point maps a 1600x900 reference point through the side's transform.
+    void point(int side, double x, double y, double& fx, double& fy) const {
+        const config::NormalizedPoint c0 = centres("duel", side)[0];
+        fx = d.x0[side] + d.s[side] * (x - c0.X * 1600);
+        fy = d.y0[side] + d.s[side] * (y - c0.Y * 900);
+    }
+    void bead0(int side, const std::string& profile, double& x, double& y) const {
+        const config::NormalizedPoint c = centres(profile, side)[0];
+        point(side, c.X * 1600, c.Y * 900, x, y);
+    }
+    // beans draws one diamond per slot (5/6 extrapolated) dy@540 lower.
+    std::vector<Point> beans(int side, const std::string& profile, double dy, const std::vector<Slot>& slots) {
+        const auto& c = centres(profile, side);
+        const double pitch = (c[3].X - c[0].X) * 1600 / 3, s = s960(side);
+        const int rx = std::max(2, static_cast<int>(std::round(4.8 * s))), ry = std::max(3, static_cast<int>(std::round(6.5 * s)));
+        std::vector<Point> out;
+        for (size_t i = 0; i < slots.size(); ++i) {
+            const double x = i < 4 ? c[i].X * 1600 : c[0].X * 1600 + static_cast<double>(i) * pitch;
+            double fx = 0, fy = 0;
+            point(side, x, c[0].Y * 900 + dy * 900 / 540, fx, fy);
+            const Point p = Pt(static_cast<int>(std::round(fx)), static_cast<int>(std::round(fy)));
+            for (int yy = -ry; yy <= ry; ++yy)
+                for (int xx = -rx; xx <= rx; ++xx)
+                    if (detect::InBeadDiamond(0, 0, 2 * rx, 2 * ry, xx, yy)) img.SetRGBA(p.X + xx, p.Y + yy, slots[i].c);
+            out.push_back(p);
+        }
+        return out;
+    }
+    // beadBox is the player's box around the profile's four ordinary slots.
+    config::NormalizedRect beadBox(int side, const std::string& profile) const {
+        const auto& c = centres(profile, side);
+        double x0 = 0, y0 = 0;
+        bead0(side, profile, x0, y0);
+        const double pitch = std::abs(c[3].X - c[0].X) * 1600 / 3 * d.s[side], height = 13 * s960(side);
+        const double left = side ? x0 + pitch / 2 - 4 * pitch : x0 - pitch / 2;
+        const double W = d.size.X, H = d.size.Y;
+        return config::NormalizedRect{left / W, (y0 - height / 2) / H, 4 * pitch / W, height / H};
+    }
+    // portraitBox is the diamond portrait frame's bounding box (frame pixels).
+    void portraitBox(int side, const std::string& profile, double& x, double& y, double& w) const {
+        double bx = 0, by = 0;
+        bead0(side, profile, bx, by);
+        const double s = s960(side), half = 68.5 * s / 2;
+        x = bx + (side ? 41.0 : -38.0) * s - half;
+        y = by - 12.5 * s - half;
+        w = 2 * half;
+    }
+    config::NormalizedRect portraitRect(int side, const std::string& profile) const {
+        double x = 0, y = 0, w = 0;
+        portraitBox(side, profile, x, y, w);
+        return config::NormalizedRect{x / d.size.X, y / d.size.Y, w / d.size.X, w / d.size.Y};
+    }
+    void stamp(const std::string& key, double scale, Point at) {
+        const auto asset = AssetStore::Instance().Image(key);
+        const Gray g = match::ToGrayAsset(*asset);
+        const Gray s = match::ScaleGray(&g, static_cast<int>(std::round(g.Bounds().Dx() * scale)),
+                                        static_cast<int>(std::round(g.Bounds().Dy() * scale)));
+        for (int y = 0; y < s.Bounds().Dy(); ++y)
+            for (int x = 0; x < s.Bounds().Dx(); ++x) {
+                const uint8_t v = s.GrayAt(x, y);
+                img.SetRGBA(at.X + x, at.Y + y, Color{v, v, v, 255});
+            }
+    }
+    // title stamps a name strip above bead 0 like the real HUD.
+    void title(int side, const std::string& profile, const std::string& file) {
+        const std::string key = "ninja_templates/" + file + ".png";
+        const double s = s960(side);
+        double bx = 0, by = 0;
+        bead0(side, profile, bx, by);
+        const int w = static_cast<int>(std::round(AssetStore::Instance().Image(key)->Width * s));
+        const int x = side ? static_cast<int>(std::round(bx - 8 * s)) - w : static_cast<int>(std::round(bx + 8 * s));
+        stamp(key, s, Pt(x, static_cast<int>(std::round(by - 53.8 * s))));
+    }
+    // itachiPortrait stamps the right-HUD portrait (8, 9) units inside the
+    // portrait window of this profile's frame box.
+    void itachiPortrait(const std::string& profile) {
+        double x = 0, y = 0, w = 0, scale = 0;
+        portraitBox(1, profile, x, y, w);
+        const Rect window = ninja::AvatarRegionFromBox(x, y, w, w, false, scale);
+        stamp("ninja_templates/itachi_hyakusen_portrait.png", s960(1),
+              window.Min.Add(Pt(static_cast<int>(std::round(8 * scale)), static_cast<int>(std::round(9 * scale)))));
+    }
+    // gauge is the thin orange energy gauge (±2@540) ON the standard row.
+    void gauge(int side, const std::string& profile) {
+        const auto& c = centres(profile, side);
+        const double s = s960(side);
+        double x0 = 0, y = 0, x3 = 0, y3 = 0;
+        point(side, c[0].X * 1600, c[0].Y * 900, x0, y);
+        point(side, c[3].X * 1600, c[3].Y * 900, x3, y3);
+        const double outer = side ? x0 + 8 * s : x0 - 8 * s, inner = side ? x3 - 10 * s : x3 + 10 * s;
+        const int cy = static_cast<int>(std::round(y)), half = static_cast<int>(std::round(2 * s));
+        fill(MakeRect(static_cast<int>(std::round(std::min(outer, inner))), cy - half,
+                      static_cast<int>(std::round(std::max(outer, inner))) + 1, cy + half + 1),
+             Color{245, 150, 40, 255});
+    }
+    // healthBar (three sloping scanlines from bead 0 inwards) and the dark
+    // scenery measured 8..22@540 below real rows.
+    void healthBarAndScenery(int side, const std::string& profile) {
+        const auto& c = centres(profile, side);
+        double bx = 0, by = 0, x3 = 0, y = 0, hx = 0, hy = 0;
+        bead0(side, profile, bx, by);
+        point(side, c[3].X * 1600, c[3].Y * 900, x3, y);
+        point(side, c[0].X * 1600, profile == "camp" ? 70 : 74, hx, hy);
+        const double s = d.s[side], s9 = s960(side);
+        const int cy = static_cast<int>(std::round(hy)), step = std::max(1, static_cast<int>(std::round(s)));
+        const int length = static_cast<int>(200 * s), x = static_cast<int>(std::round(bx));
+        for (int row = -1; row <= 1; ++row) {
+            const int a = side ? x - length : x - row * step, b = side ? x + row * step + 1 : x + length;
+            fill(MakeRect(a, cy + row * step, b, cy + row * step + 1), Color{240, 70, 10, 255});
+        }
+        fill(MakeRect(static_cast<int>(std::round(std::min(bx, x3) - 10 * s9)), static_cast<int>(std::round(by + 8 * s9)),
+                      static_cast<int>(std::round(std::max(bx, x3) + 10 * s9)) + 1, static_cast<int>(std::round(by + 22 * s9)) + 1),
+             Color{21, 40, 57, 255});
+    }
+};
+
+// registerPattern adds a gray block pattern (4px blocks survive the reader's
+// half-scale coarse locator) as a non-premultiplied asset.
+void registerPattern(const std::string& file, int w, int h, uint32_t seed) {
+    std::vector<uint8_t> px(static_cast<size_t>(4 * w * h));
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            uint32_t v = (static_cast<uint32_t>(x / 4) * 73856093u) ^ (static_cast<uint32_t>(y / 4) * 19349663u) ^ (seed * 83492791u);
+            v = (v * 2654435761u) >> 24;
+            uint8_t* p = &px[static_cast<size_t>(4 * (y * w + x))];
+            p[0] = p[1] = p[2] = static_cast<uint8_t>(v);
+            p[3] = 255;
+        }
+    AssetStore::Instance().AddImage("ninja_templates/" + file + ".png", w, h, px.data(), static_cast<size_t>(4 * w));
+}
+
+void testRegionCalibrationSpecialRows() {
+    const config::Config cfg = config::Default();
+    const struct {
+        const char* file;
+        int w, h;
+    } strips[] = {{"minato_kyubi", 180, 21}, {"itachi_hyakusen", 167, 21}, {"itachi_hyakusen_portrait", 71, 71},
+                  {"sasuke_xiayin", 167, 20}, {"obito", 172, 22}, {"naruto", 172, 23}, {"hashirama", 146, 20},
+                  {"madara", 148, 21}};
+    uint32_t seed = 1;
+    for (const auto& strip : strips) registerPattern(strip.file, strip.w, strip.h, seed++);
+    const CalibDevice devices[] = {
+        {"tablet-2388x1668", Pt(2388, 1668), {330, 2041}, {250, 250}, {1.7, 1.7}, "duel"},
+        {"ultrawide-3440x1440", Pt(3440, 1440), {535.2, 2956.8}, {164.8, 164.8}, {1.6, 1.6}, "camp"},
+        {"tablet-2560x1600", Pt(2560, 1600), {318, 2200}, {190, 180}, {1.78, 1.70}, "duel"},
+    };
+    struct Variant {
+        const char* name;
+        std::string ninja;
+        const char* title;
+        bool itachi, gauge, rightOnly, portraits;
+        double offset;
+        std::vector<std::vector<Slot>> patterns;
+    };
+    const double e = ninja::EnergyGaugeRowOffset;
+    const std::vector<Variant> variants = {
+        {"minato-title", ninja::MinatoKyubi, "minato_kyubi", false, true, false, false, e, {{sG, sB, sD, sD}, {sB, sB, sB, sD}, {sD, sD, sD, sD}, {sG, sG, sG, sG}}},
+        {"minato-gauge-only", "", "", false, true, false, false, e, {{sG, sG, sD, sD}, {sB, sB, sB, sB}, {sB, sD, sD, sD}, {sD, sD, sD, sD}}},
+        {"itachi-title-portrait-box", ninja::ItachiHyakusen, "itachi_hyakusen", true, true, true, true, e, {{sB, sB, sG, sD}, {sD, sD, sD, sD}}},
+        {"itachi-title-beads-only", ninja::ItachiHyakusen, "itachi_hyakusen", true, true, true, false, e, {{sG, sG, sG, sD}, {sB, sD, sD, sD}}},
+        {"xiayin-purple", ninja::SasukeXiayin, "sasuke_xiayin", false, false, false, false, 9, {{sP, sP, sPD, sPD}, {sP, sP, sP, sP}, {sP, sPD, sPD, sPD}, {sP, sP, sP, sD}}},
+        {"xiayin-red", ninja::SasukeXiayin, "sasuke_xiayin", false, false, false, false, 9, {{sR, sRD, sRD, sRD}, {sR, sR, sR, sRD}, {sRD, sRD, sRD, sRD}, {sR, sR, sRD, sRD}}},
+        {"obito", ninja::Obito, "obito", false, false, false, false, 0, {{sP, sP, sPD, sD}, {sP, sP, sP, sPD}, {sPD, sPD, sPD, sPD}}},
+        {"naruto", ninja::Naruto, "naruto", false, false, false, false, 0, {{sR, sR, sRD, sD}, {sR, sR, sR, sR}, {sR, sRD, sRD, sRD}}},
+        {"hashirama", ninja::Hashirama, "hashirama", false, false, false, false, 0, {{sW, sW, sB, sW, sD, sD}, {sW, sW, sW, sW, sW, sD}, {sB, sB, sD, sD, sD, sD}, {sW, sWG, sW, sW, sW, sW}}},
+        {"madara", ninja::Madara, "madara", false, false, false, false, 0, {{sW, sB, sD, sD}, {sW, sW, sW, sW}, {sWG, sW, sW, sD}}},
+    };
+    const std::vector<std::vector<Slot>> ordinaryRows = {{sB, sB, sD, sD}, {sG, sG, sG, sG}, {sG, sB, sB, sD}, {sD, sD, sD, sD}, {sB, sB, sB, sB}};
+    auto analyze = [&](const config::RegionCalibration& c, const RGBA& img) {
+        config::LayoutConfig layout = cfg.Layout;
+        layout.Calibration = c;
+        rgb::Engine e(std::make_shared<ConfiguredLayout>(detect::ModeAuto, layout), cfg.Vision);
+        return e.AnalyzeAt(&img, 1700000000LL * Second);
+    };
+    // wantRow: labels, states, gold flags and sampled centres (±1px).
+    auto wantRow = [](const Result& r, int side, const std::vector<Slot>& slots, const std::vector<Point>& centres,
+                      const std::string& what) {
+        size_t n = 0;
+        for (const BeadInfo& b : r.Beads) {
+            if (b.Label.empty() || b.Label[0] != "LR"[side]) continue;
+            const size_t i = static_cast<size_t>(std::stoi(b.Label.substr(1)) - 1);
+            check(i < slots.size(), what + ": slot " + b.Label);
+            ++n;
+            check(!b.Unknown && b.Lit == slots[i].lit && b.Gold == slots[i].gold &&
+                      std::abs(b.X - centres[i].X) <= 1 && std::abs(b.Y - centres[i].Y) <= 1,
+                  what + ": " + b.Label);
+        }
+        check(n == slots.size(), what + ": slot count");
+    };
+    // The reported bead box is the standard box of this frame's profile, and
+    // the sampled row sits drop px below it.
+    auto wantStandard = [](const Result& r, int side, const CalibHUD& h, const std::string& profile, double drop,
+                           const std::string& what) {
+        const config::NormalizedRect got = r.Geometry[side].BeadBox, want = h.beadBox(side, profile);
+        const double W = h.d.size.X, H = h.d.size.Y;
+        check(std::abs(got.X - want.X) * W <= .01 && std::abs(got.Width - want.Width) * W <= .01 &&
+                  std::abs((got.Y + got.Height / 2) - (want.Y + want.Height / 2)) * H <= .01,
+              what + ": standard bead box");
+        double sum = 0;
+        for (int i = 0; i < 4; ++i) sum += r.Geometry[side].Beads[static_cast<size_t>(i)].Y;
+        check(std::abs(sum / 4 - (got.Y + got.Height / 2) * H - drop) <= 1, what + ": row drop");
+    };
+    int cases = 0;
+    for (size_t di = 0; di < 3; ++di) {
+        const CalibDevice& d = devices[di];
+        const CalibHUD ref(d);
+        config::RegionCalibration beadsOnly;
+        beadsOnly.Profile = d.profile;
+        beadsOnly.LeftBeads = ref.beadBox(0, d.profile);
+        beadsOnly.RightBeads = ref.beadBox(1, d.profile);
+        config::RegionCalibration full = beadsOnly;
+        full.LeftAvatar = ref.portraitRect(0, d.profile);
+        full.RightAvatar = ref.portraitRect(1, d.profile);
+        for (int pi = 0; pi < 2; ++pi) {
+            const std::string profile = pi ? "duel" : "camp";
+            for (int side = 0; side < 2; ++side) {
+                for (const Variant& v : variants) {
+                    if (v.rightOnly && side == 0) continue;
+                    const std::string what = std::string(d.name) + "/" + profile + "/" + "LR"[side] + "/" + v.name;
+                    const std::vector<Slot>& slots = v.patterns[(di * 4 + static_cast<size_t>(pi * 2 + side)) % v.patterns.size()];
+                    const std::vector<Slot>& others = ordinaryRows[(di + static_cast<size_t>(pi + side)) % ordinaryRows.size()];
+                    CalibHUD h(d);
+                    h.healthBarAndScenery(0, profile);
+                    h.healthBarAndScenery(1, profile);
+                    if (v.gauge) h.gauge(side, profile);
+                    const auto centres = h.beans(side, profile, v.offset, slots);
+                    const auto otherCentres = h.beans(1 - side, profile, 0, others);
+                    if (*v.title) h.title(side, profile, v.title);
+                    if (v.itachi) h.itachiPortrait(profile);
+                    const Result r = analyze(v.portraits ? full : beadsOnly, h.img);
+                    const std::string names[2] = {r.LeftNinja, r.RightNinja};
+                    const int slotCount[2] = {r.LeftSlots, r.RightSlots};
+                    check(r.LayoutProfile == profile && names[side] == v.ninja && names[1 - side].empty() &&
+                              slotCount[side] == static_cast<int>(slots.size()) && slotCount[1 - side] == 4,
+                          what + ": profile/names/slots");
+                    wantRow(r, side, slots, centres, what);
+                    wantRow(r, 1 - side, others, otherCentres, what + " other side");
+                    wantStandard(r, side, h, profile, v.offset * h.s960(side), what);
+                    wantStandard(r, 1 - side, h, profile, 0, what + " other side");
+                    if (v.ninja.empty() && di != 1) {
+                        // The automatic scale would re-read a different row.
+                        const double automatic = ConfiguredLayout(detect::ModeAuto, cfg.Layout).ContentArea(&h.img).first.HUDScale(960, 540);
+                        check(std::abs(std::round(v.offset * automatic) - std::round(v.offset * h.s960(side))) >= 2,
+                              what + ": the device scale discriminates");
+                    }
+                    // The reported boxes are standard: saving them reproduces the analysis.
+                    const Result again = analyze(defaultBoxes(r), h.img);
+                    check(sameBeads(again, r) && sameRegions(again, r) && again.LeftNinja == r.LeftNinja &&
+                              again.RightNinja == r.RightNinja,
+                          what + ": saved reported boxes");
+                    ++cases;
+                }
+            }
+            // Controls: the ordinary frame under the same calibration reads its
+            // standard rows; boxes misdrawn by a few px or a quarter pitch
+            // sideways never derive a special row, even from a gold row.
+            const std::vector<Slot> gold = {sG, sG, sG, sG};
+            const std::vector<Slot>& mixed = ordinaryRows[std::vector<size_t>{0, 2, 3, 4}[(di * 2 + static_cast<size_t>(pi)) % 4]];
+            const std::vector<Slot>* rows[2] = {&gold, &mixed};
+            if ((di + static_cast<size_t>(pi)) % 2 == 1) std::swap(rows[0], rows[1]);
+            CalibHUD h(d);
+            std::vector<Point> centres[2];
+            for (int side = 0; side < 2; ++side) {
+                h.healthBarAndScenery(side, profile);
+                centres[side] = h.beans(side, profile, 0, *rows[side]);
+            }
+            const std::string what = std::string(d.name) + "/" + profile + "/ordinary";
+            const Result r = analyze(full, h.img);
+            check(r.LayoutProfile == profile && r.LeftNinja.empty() && r.RightNinja.empty() && r.LeftSlots == 4 &&
+                      r.RightSlots == 4,
+                  what);
+            for (int side = 0; side < 2; ++side) {
+                wantRow(r, side, *rows[side], centres[side], what);
+                wantStandard(r, side, h, profile, 0, what);
+            }
+            const Result again = analyze(defaultBoxes(r), h.img);
+            check(sameBeads(again, r) && sameRegions(again, r), what + ": saved reported boxes");
+            const double W = d.size.X, H = d.size.Y;
+            const struct {
+                double dx, dy, scale, pitches;
+            } misdrawn[] = {{3, 3, 1, 0}, {-3, -2, 1.03, 0}, {2, -3, .97, 0}, {-2, 4, 1, 0}, {0, 0, 1, .25}, {0, 2, 1, -.25}};
+            for (const auto& m : misdrawn) {
+                auto off = [&](const config::NormalizedRect& b, double scale, double pitches) {
+                    const double cx = b.X + b.Width / 2, cy = b.Y + b.Height / 2, w = b.Width * scale, hh = b.Height * scale;
+                    return config::NormalizedRect{cx - w / 2 + m.dx / W + pitches * b.Width / 4, cy - hh / 2 + m.dy / H, w, hh};
+                };
+                config::RegionCalibration c = full;
+                c.LeftBeads = off(*full.LeftBeads, m.scale, m.pitches);
+                c.RightBeads = off(*full.RightBeads, m.scale, m.pitches);
+                c.LeftAvatar = off(*full.LeftAvatar, 1, 0);
+                c.RightAvatar = off(*full.RightAvatar, 1, 0);
+                const Result bad = analyze(c, h.img);
+                check(bad.LeftSlots == 4 && bad.RightSlots == 4 && bad.LeftNinja.empty() && bad.RightNinja.empty(),
+                      what + ": misdrawn slots/names");
+                for (const BeadInfo& b : bad.Beads) {
+                    const int side = b.Label[0] == 'R', i = b.Label[1] - '1';
+                    if (bad.LayoutProfile != profile) {
+                        check(b.Unknown, what + ": misdrawn other profile reads nothing");
+                        continue;
+                    }
+                    const Slot& want = (*rows[side])[static_cast<size_t>(i)];
+                    check(std::abs(b.Y - centres[side][static_cast<size_t>(i)].Y) <= 6 &&
+                              (b.Unknown || (b.Lit == want.lit && b.Gold == want.gold)),
+                          what + ": misdrawn " + b.Label + " no special row, no contradicting vote");
+                }
+            }
+        }
+    }
+    check(cases == 3 * 2 * (2 * 10 - 2), "calibrated special rows: case count");
+    AssetStore::Instance().Clear();
+    std::cout << "calibrated special rows: " << cases << " variant frames + 6 ordinary frames x 7 calibrations, "
+              << checks << " checks so far\n";
+}
+
 // Per-frame geometry (docs/区域校准.md 每帧几何), mirrors
 // internal/engine/configured_layout_geometry_test.go, internal/ninja/avatar_box_test.go
 // and internal/frame/source_test.go.
@@ -701,6 +1063,7 @@ void testFrameGeometry() {
 int main() {
     testEnergyGaugeRow();  // first: independent of the scene/gate checks below
     testRegionCalibration();
+    testRegionCalibrationSpecialRows();
     testFrameGeometry();
     testCompleteHUDAndGated();
     testStartFight();

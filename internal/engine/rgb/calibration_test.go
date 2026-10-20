@@ -86,18 +86,31 @@ func (h *deviceHUD) bead0(side int, profile string) (float64, float64) {
 	return h.point(side, c.X*detect.HUDReferenceWidth, c.Y*detect.HUDReferenceHeight)
 }
 
-// portrait stamps a catalog avatar inside a diamond frame where the real HUD
-// puts it relative to bead 0 and returns the frame's bounding box: the box a
-// player draws.
-func (h *deviceHUD) portrait(t *testing.T, side int, profile, id string) detect.PixelBox {
-	t.Helper()
+// portraitDiamond is the centre and half diagonal of the diamond portrait
+// frame where the real HUD puts it relative to bead 0.
+func (h *deviceHUD) portraitDiamond(side int, profile string) (cx, cy, half float64) {
 	bx, by := h.bead0(side, profile)
 	s := h.s960(side)
 	dx := -38.0
 	if side == 1 {
 		dx = 41
 	}
-	cx, cy, half := bx+dx*s, by-12.5*s, 68.5*s/2
+	return bx + dx*s, by - 12.5*s, 68.5 * s / 2
+}
+
+// portraitBox is the diamond frame's bounding box: the box a player draws.
+func (h *deviceHUD) portraitBox(side int, profile string) detect.PixelBox {
+	cx, cy, half := h.portraitDiamond(side, profile)
+	return detect.PixelBox{X: cx - half, Y: cy - half, W: 2 * half, H: 2 * half}
+}
+
+// portrait stamps a catalog avatar inside a diamond frame where the real HUD
+// puts it relative to bead 0 and returns the frame's bounding box: the box a
+// player draws.
+func (h *deviceHUD) portrait(t *testing.T, side int, profile, id string) detect.PixelBox {
+	t.Helper()
+	cx, cy, half := h.portraitDiamond(side, profile)
+	s := h.s960(side)
 	frame := color.RGBA{150, 40, 40, 255}
 	for y := int(cy - half); y <= int(cy+half)+1; y++ {
 		for x := int(cx - half); x <= int(cx+half)+1; x++ {
@@ -110,7 +123,7 @@ func (h *deviceHUD) portrait(t *testing.T, side int, profile, id string) detect.
 	size := int(math.Round(float64(avatar.Bounds().Dx()) * s * .6))
 	at := image.Pt(int(math.Round(cx))-size/2, int(math.Round(cy))-size/2)
 	xdraw.BiLinear.Scale(h.img, image.Rectangle{Min: at, Max: at.Add(image.Pt(size, size))}, avatar, avatar.Bounds(), draw.Over, nil)
-	return detect.PixelBox{X: cx - half, Y: cy - half, W: 2 * half, H: 2 * half}
+	return h.portraitBox(side, profile)
 }
 
 // title stamps a shipped name strip above bead 0 like the real HUD.

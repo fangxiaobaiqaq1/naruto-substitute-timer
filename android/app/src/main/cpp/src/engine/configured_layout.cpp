@@ -175,8 +175,8 @@ std::array<detect::SideCalibrationPtr, 2> ConfiguredLayout::sideCalibrations(con
 }
 
 bool ConfiguredLayout::DefaultBeadBox(const std::string& name, const std::vector<detect::BeadPosition>& row,
-                                      const Rect& frame, const detect::ContentArea& ca,
-                                      config::NormalizedRect& out) const {
+                                      const Rect& frame, const detect::ContentArea& ca, config::NormalizedRect& out,
+                                      const std::vector<detect::BeadPosition>& derived) const {
     out = config::NormalizedRect{};
     const auto it = profiles_.find(name);
     if (it == profiles_.end() || row.size() < 4 || frame.Empty()) return false;
@@ -203,13 +203,33 @@ bool ConfiguredLayout::DefaultBeadBox(const std::string& name, const std::vector
     if (ref.size() < 4 || !(s > 0) || ref[3].X == ref[0].X) return false;
     // Every centre must round back, also at half-pixel ties.
     constexpr double inf = std::numeric_limits<double>::infinity();
-    double xlo = -inf, xhi = inf, ylo = -inf, yhi = inf;
-    for (const detect::BeadPosition& b : row) {
-        const double dx = s * (b.LX - first.LX), dy = s * (b.LY - first.LY);
-        xlo = std::max(xlo, static_cast<double>(b.X) - .5 - dx);
-        xhi = std::min(xhi, static_cast<double>(b.X) + .5 - dx);
-        ylo = std::max(ylo, static_cast<double>(b.Y) - .5 - dy);
-        yhi = std::min(yhi, static_cast<double>(b.Y) + .5 - dy);
+    auto span = [&](const std::vector<detect::BeadPosition>& centres, double& xlo, double& xhi, double& ylo,
+                    double& yhi) {
+        xlo = -inf, xhi = inf, ylo = -inf, yhi = inf;
+        for (const detect::BeadPosition& b : centres) {
+            const double dx = s * (b.LX - first.LX), dy = s * (b.LY - first.LY);
+            xlo = std::max(xlo, static_cast<double>(b.X) - .5 - dx);
+            xhi = std::min(xhi, static_cast<double>(b.X) + .5 - dx);
+            ylo = std::max(ylo, static_cast<double>(b.Y) - .5 - dy);
+            yhi = std::min(yhi, static_cast<double>(b.Y) + .5 - dy);
+        }
+    };
+    double xlo = 0, xhi = 0, ylo = 0, yhi = 0;
+    span(row, xlo, xhi, ylo, yhi);
+    // A derived centre may sit on a half-pixel tie of its own (a 9@540 drop
+    // of exactly 25.5px at scale 1.7): keep it clear as well, unless that
+    // leaves no room, so the row itself is never less exact.
+    if (!derived.empty()) {
+        double dxlo = 0, dxhi = 0, dylo = 0, dyhi = 0;
+        span(derived, dxlo, dxhi, dylo, dyhi);
+        if (const double lo = std::max(xlo, dxlo), hi = std::min(xhi, dxhi); hi - lo > 2 * settleMargin) {
+            xlo = lo;
+            xhi = hi;
+        }
+        if (const double lo = std::max(ylo, dylo), hi = std::min(yhi, dyhi); hi - lo > 2 * settleMargin) {
+            ylo = lo;
+            yhi = hi;
+        }
     }
     x = settle(x, xlo, xhi, static_cast<double>(first.X));
     y = settle(y, ylo, yhi, static_cast<double>(first.Y));

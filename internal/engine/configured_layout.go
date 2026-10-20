@@ -219,7 +219,9 @@ const settleMargin = 1e-3
 // DefaultBeadBox is the bead box (fractions of frame) that, saved as this
 // profile's calibration, reproduces row and its scale (docs/区域校准.md 每帧
 // 几何). row is one side of PositionsInImage, before identity offsets.
-func (l *ConfiguredLayout) DefaultBeadBox(name string, row []detect.BeadPosition, frame image.Rectangle, ca detect.ContentArea) (config.NormalizedRect, bool) {
+// derived are the rows this frame derived from it (an identity's row drop,
+// slots 5/6): their centres round back too wherever the row's still do.
+func (l *ConfiguredLayout) DefaultBeadBox(name string, row []detect.BeadPosition, frame image.Rectangle, ca detect.ContentArea, derived ...detect.BeadPosition) (config.NormalizedRect, bool) {
 	p, ok := l.profiles[name]
 	if !ok || len(row) < 4 || frame.Empty() {
 		return config.NormalizedRect{}, false
@@ -247,11 +249,27 @@ func (l *ConfiguredLayout) DefaultBeadBox(name string, row []detect.BeadPosition
 		return config.NormalizedRect{}, false
 	}
 	// Every centre must round back, also at half-pixel ties.
-	xlo, xhi, ylo, yhi := math.Inf(-1), math.Inf(1), math.Inf(-1), math.Inf(1)
-	for _, b := range row {
-		dx, dy := s*(b.LX-first.LX), s*(b.LY-first.LY)
-		xlo, xhi = max(xlo, float64(b.X)-.5-dx), min(xhi, float64(b.X)+.5-dx)
-		ylo, yhi = max(ylo, float64(b.Y)-.5-dy), min(yhi, float64(b.Y)+.5-dy)
+	span := func(centres []detect.BeadPosition) (xlo, xhi, ylo, yhi float64) {
+		xlo, xhi, ylo, yhi = math.Inf(-1), math.Inf(1), math.Inf(-1), math.Inf(1)
+		for _, b := range centres {
+			dx, dy := s*(b.LX-first.LX), s*(b.LY-first.LY)
+			xlo, xhi = max(xlo, float64(b.X)-.5-dx), min(xhi, float64(b.X)+.5-dx)
+			ylo, yhi = max(ylo, float64(b.Y)-.5-dy), min(yhi, float64(b.Y)+.5-dy)
+		}
+		return
+	}
+	xlo, xhi, ylo, yhi := span(row)
+	// A derived centre may sit on a half-pixel tie of its own (a 9@540 drop
+	// of exactly 25.5px at scale 1.7): keep it clear as well, unless that
+	// leaves no room, so the row itself is never less exact.
+	if len(derived) > 0 {
+		dxlo, dxhi, dylo, dyhi := span(derived)
+		if lo, hi := max(xlo, dxlo), min(xhi, dxhi); hi-lo > 2*settleMargin {
+			xlo, xhi = lo, hi
+		}
+		if lo, hi := max(ylo, dylo), min(yhi, dyhi); hi-lo > 2*settleMargin {
+			ylo, yhi = lo, hi
+		}
 	}
 	x, y = settle(x, xlo, xhi, float64(first.X)), settle(y, ylo, yhi, float64(first.Y))
 	// Same pitch_P as sideCalibrations.
