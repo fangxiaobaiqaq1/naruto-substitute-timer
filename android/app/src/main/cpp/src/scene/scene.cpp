@@ -19,7 +19,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include "nt/assets.h"
@@ -29,12 +28,6 @@
 namespace nt::scene {
 
 namespace {
-
-struct RectLess {
-    bool operator()(const Rect& a, const Rect& b) const {
-        return std::tie(a.Min.X, a.Min.Y, a.Max.X, a.Max.Y) < std::tie(b.Min.X, b.Min.Y, b.Max.X, b.Max.Y);
-    }
-};
 
 std::string quote(const std::string& s) { return "\"" + s + "\""; }
 
@@ -253,6 +246,20 @@ public:
     Hit operator()(const preparedTemplate& t, const Rect* window = nullptr) {
         Rect roi = (window != nullptr ? *window : t.roi).Intersect(img_->Bounds());
         if (roi.Empty() || t.gray.Nil()) return Hit{t.spec.ID, t.spec.Scene, 0};
+        std::shared_ptr<const grayView> view = viewFor(roi);
+        return scoreHinted(c_, view->img, view->gray, roi, window != nullptr, t);
+    }
+
+    // one is the diagnostics form (scoreOne): whole ROI, hints untouched.
+    Hit one(const preparedTemplate& t) {
+        Rect roi = t.roi.Intersect(img_->Bounds());
+        if (roi.Empty() || t.gray.Nil()) return Hit{t.spec.ID, t.spec.Scene, 0};
+        std::shared_ptr<const grayView> view = viewFor(roi);
+        return scoreOne(c_, view->img, view->gray, t);
+    }
+
+private:
+    std::shared_ptr<const grayView> viewFor(const Rect& roi) {
         std::shared_ptr<const grayView> view;
         {
             std::lock_guard<std::mutex> lk(mu_);
@@ -277,10 +284,9 @@ public:
                 view = std::move(v);
             }
         }
-        return scoreHinted(c_, view->img, view->gray, roi, window != nullptr, t);
+        return view;
     }
 
-private:
     Catalog& c_;
     const RGBA* img_;
     std::mutex mu_;
@@ -533,25 +539,13 @@ std::vector<Hit> Catalog::ScoreAll(const RGBA* img) {
     if (img == nullptr) return {};
     auto [ca, supported] = contentArea(img);
     if (!supported) return {};
-    std::map<Rect, std::shared_ptr<grayView>, RectLess> views;
-    std::vector<Hit> out;
-    out.reserve(templates.size());
-    for (const preparedTemplate& t : prepare(ca)) {
-        Rect roi = t.roi.Intersect(img->Bounds());
-        if (roi.Empty() || t.gray.Nil()) {
-            out.push_back(Hit{t.spec.ID, t.spec.Scene, 0});
-            continue;
-        }
-        auto it = views.find(roi);
-        std::shared_ptr<grayView> v;
-        if (it == views.end()) {
-            v = newGrayView(img, roi);
-            views[roi] = v;
-        } else {
-            v = it->second;
-        }
-        out.push_back(scoreOne(*this, v->img, v->gray, t));
-    }
+    // Templates are independent and scoreOne has no side effects (no hints),
+    // so they are scored concurrently into their own slots; views of equal
+    // ROIs are still converted once and shared.
+    const std::vector<preparedTemplate>& prepared = prepare(ca);
+    Scorer score(*this, img);
+    std::vector<Hit> out(prepared.size());
+    forEach(static_cast<int>(prepared.size()), [&](int i) { out[i] = score.one(prepared[i]); });
     return out;
 }
 
