@@ -10,7 +10,7 @@ package com.narutotimer.ui
 //  - 「实时状态」：对局/认边、识别循环、资源、录屏免确认，每秒刷新。
 //  - 「对局设置」（Go openSettings）：认边方式/记住认边点选即生效；账号名与对面忍者在"保存设置"时
 //    经 session.applySettings 生效。回到前台时只回填用户没有改动过的输入框。
-//  - 「高级设置」：悬浮窗外观、采集与调试、在线更新、电脑 ADB、账号名图片导入。
+//  - 「高级设置」：悬浮窗外观、采集与调试、区域校准、在线更新、电脑 ADB、账号名图片导入。
 // 不移植：窗口置顶、OCR、GPU、诊断录制、真悬浮窗开关（Android 悬浮窗始终是真悬浮窗）。
 
 import android.Manifest
@@ -107,6 +107,8 @@ class MainActivity : Activity() {
     private lateinit var autoUpdateChk: CheckBox
     private lateinit var identityText: TextView
     private lateinit var identityLabelEdit: EditText
+    private lateinit var calibText: TextView
+    private lateinit var calibResetBtn: Button
 
     private val sideIds = IntArray(3)
     private val modeIds = IntArray(2)
@@ -355,6 +357,12 @@ class MainActivity : Activity() {
         Ui.add(advancedPanel, projectionChk, 0f)
         Ui.add(advancedPanel, debugChk, 0f)
 
+        section(advancedPanel, "区域校准（可选）", 18f)
+        Ui.add(advancedPanel, Ui.note(this, "平板、带鱼屏或模拟器窗口等少见分辨率下，豆或头像位置识别不准时，可在一帧游戏画面上手动框出。"), 2f)
+        calibText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(advancedPanel, it, 4f) }
+        calibResetBtn = Ui.button(this, "恢复自动", Ui.Kind.DANGER) { confirmResetCalibration() }
+        Ui.add(advancedPanel, Ui.row(this, Ui.button(this, "区域校准") { showCalibrationGuide() }, calibResetBtn), 6f)
+
         section(advancedPanel, "在线更新", 18f)
         Ui.add(advancedPanel, Ui.note(this, "可选 Gitee（国内）或 GitHub（海外）。只下载 HTTPS、带 SHA-256 校验的正式 APK。"), 2f)
         updateSourceGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
@@ -493,6 +501,7 @@ class MainActivity : Activity() {
             syncing = false
         }
         refreshIdentityCount()
+        refreshCalibration()
     }
 
     private fun updateAppearanceLabels() {
@@ -523,11 +532,49 @@ class MainActivity : Activity() {
                 Settings.KEY_REMEMBER_SIDE -> rememberChk.isChecked = settings.rememberSide
                 Settings.KEY_OVERLAY_MODE -> syncMode()
                 Settings.KEY_SHOW_BOTH -> bothChk.isChecked = settings.showBothSides
+                Settings.KEY_CALIB_PROFILE, in Settings.KEY_CALIB_RECTS -> refreshCalibration()
             }
         } finally {
             syncing = false
         }
         refreshStatus()
+    }
+
+    // ---- 区域校准（docs/区域校准.md） ----
+
+    private fun refreshCalibration() {
+        calibText.text = "当前：" + CalibrationActivity.summary(settings)
+        calibResetBtn.isEnabled = Settings.KEY_CALIB_RECTS.any { settings.calibRect(it) != null }
+    }
+
+    /** This screen covers the game, so live frames are taken from the in-game panel. */
+    private fun showCalibrationGuide() {
+        AlertDialog.Builder(this)
+            .setTitle("区域校准")
+            .setMessage(
+                "推荐在游戏里校准：进入对局或训练场，点计时卡片 → 设置 → 位置 →「区域校准」，" +
+                    "会截取当前游戏画面并打开校准页。\n\n" +
+                    "也可以载入一张对局或训练场的整屏截图（不要裁剪），再手动选择训练场或决斗场。",
+            )
+            .setPositiveButton("载入截图") { _, _ ->
+                runCatching { CalibrationActivity.openFile(this) }
+                    .onFailure { Log.e(TAG, "open calibration failed", it) }
+            }
+            .setNegativeButton("知道了", null)
+            .show()
+    }
+
+    private fun confirmResetCalibration() {
+        AlertDialog.Builder(this)
+            .setTitle("恢复自动")
+            .setMessage("清除已保存的豆和头像框，改回自动定位？")
+            .setPositiveButton("恢复自动") { _, _ ->
+                for (key in Settings.KEY_CALIB_RECTS) settings.setCalibRect(key, null)
+                refreshCalibration()
+                toast("已恢复自动")
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     // ---- 保存（Go applySettings） ----

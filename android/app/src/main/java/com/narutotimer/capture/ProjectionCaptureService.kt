@@ -170,7 +170,8 @@ class ProjectionCaptureService : Service() {
         vd.resize(w, hh, densityDpi)
         vd.setSurface(nextReader.surface)
         reader = nextReader
-        runCatching { oldReader?.close() }
+        // Closing a reader closes its acquired images; never while a snapshot reads their planes.
+        synchronized(FrameLoop.imageLock) { runCatching { oldReader?.close() } }
     }
 
     private fun createReader(w: Int, h: Int, run: Long) {
@@ -202,7 +203,7 @@ class ProjectionCaptureService : Service() {
             val timestamp = image.timestamp.takeIf { it > 0 } ?: System.nanoTime()
             // CapturedFrame owns both objects until the analysis thread has finished.
             val owned = hb
-            FrameLoop.offer(CapturedFrame(owned, timestamp, NativeMethod.PROJECTION) {
+            FrameLoop.offer(CapturedFrame(owned, timestamp, NativeMethod.PROJECTION, image) {
                 runCatching { owned.close() }
                 runCatching { image.close() }
             })
@@ -230,7 +231,7 @@ class ProjectionCaptureService : Service() {
         runCatching { display?.setSurface(null) }
         runCatching { display?.release() }
         display = null
-        runCatching { reader?.close() }
+        synchronized(FrameLoop.imageLock) { runCatching { reader?.close() } }
         reader = null
         val p = projection
         val cb = callback

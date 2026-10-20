@@ -35,6 +35,7 @@ android/
     ui/ProjectionPermissionActivity.kt                        # kt-capture-service
     overlay/{OverlayController,MiniTimerView,OverlaySettingsView}.kt # kt-overlay-ui
     ui/MainActivity.kt                                        # kt-overlay-ui
+    ui/{CalibrationActivity,CalibrationView,CalibrationFrames}.kt  # 区域校准界面（docs/区域校准.md）
 ```
 
 ## 2. 模块与归属
@@ -182,7 +183,7 @@ android/
 - 文件：capture/ProjectionCaptureService.kt、capture/ScreenshotCapture.kt、capture/FrameLoop.kt、
   service/TimerAccessibilityService.kt、ui/ProjectionPermissionActivity.kt。
 - Go 来源（思想）：internal/ui/run.go `loop()`/`nextCaptureWait`、internal/frame/source.go `boundedProvider`（单 worker、不排队、超时丢弃）。
-- 公开 API：`FrameLoop.start/stop/running/offer/offerFailure/stats`、`CapturedFrame`、
+- 公开 API：`FrameLoop.start/stop/running/offer/offerFailure/stats/requestSnapshot/cancelSnapshot`、`CapturedFrame`、
   `ProjectionCaptureService.start/stop/running`、`ScreenshotCapture.start/stop/running`、
   `TimerAccessibilityService.instance/isEnabled/startScreenshotFallback/stopScreenshotFallback`、`ProjectionPermissionActivity.launch`。
 - 依赖：NativeCore、TimerApp（session/settings/nativeStatus）、OverlayController（由无障碍服务创建）、AssetLoader.drainOppCrop。
@@ -336,6 +337,10 @@ MediaProjection VirtualDisplay(1280×720) ─▶ ImageReader(RGBA_8888, maxImage
 - 悬浮窗：`TYPE_ACCESSIBILITY_OVERLAY`（无障碍服务的 WindowManager），无需 SYSTEM_ALERT_WINDOW。
 - 设置：从计时条操作栏直接打开第三个 `TYPE_ACCESSIBILITY_OVERLAY` 窗口；面板覆盖安全显示区域，
   保存、保存并退出、输入法、内容滚动、返回键和录屏授权都在悬浮窗生命周期内处理，不启动 `MainActivity`。
+- 区域校准取帧：`FrameLoop.requestSnapshot(cb)` 把请求之后交付的下一帧（截屏还须是请求之后发起的）在分析后、
+  close 前复制成软件 ARGB_8888 Bitmap，在主线程连同该帧的布局（对局帧的 camp/duel，否则空串）交付。
+  录屏帧读 `CapturedFrame.image` 的 CPU plane（与 ImageReader.close 用 `FrameLoop.imageLock` 互斥），
+  截屏帧用 `Bitmap.wrapHardwareBuffer`。没有请求时每帧只多一次 volatile 读。
 - Android 14：先 `startForeground(..., FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)` 再 `getMediaProjection`；
   `createVirtualDisplay` 前必须 `registerCallback`；授权 Intent 只能用一次。
 

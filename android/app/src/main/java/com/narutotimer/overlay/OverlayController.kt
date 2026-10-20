@@ -6,8 +6,10 @@ package com.narutotimer.overlay
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -20,12 +22,15 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import android.widget.Toast
 import com.narutotimer.R
 import com.narutotimer.Settings
+import com.narutotimer.capture.FrameLoop
 import com.narutotimer.capture.ProjectionCaptureService
 import com.narutotimer.service.TimerAccessibilityService
 import com.narutotimer.tracker.OverlayState
 import com.narutotimer.tracker.Session
+import com.narutotimer.ui.CalibrationActivity
 import com.narutotimer.ui.ProjectionPermissionActivity
 import kotlin.math.abs
 import kotlin.math.max
@@ -64,6 +69,13 @@ class OverlayController(
     private var lastErrorLogAt = 0L
     private var lastStatusAt = 0L
 
+    // Region calibration snapshot in flight (main thread). A new run invalidates older callbacks.
+    private var calibrationRun = 0
+    private var calibrationCallback: ((Bitmap, String) -> Unit)? = null
+    /** The card is hidden while a calibration frame is taken or the editor is on screen. */
+    private var hiddenForCapture = false
+    private var hiddenForEditor = false
+
     private val tick = Runnable { tickNow() }
     private val autoHide = Runnable {
         setControls(false)
@@ -92,6 +104,7 @@ class OverlayController(
         }
         v.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
         placeFromSettings(safeRect(), v.measuredWidth, v.measuredHeight)
+        v.visibility = if (hiddenForCapture || hiddenForEditor) View.INVISIBLE else View.VISIBLE
 
         try {
             wm.addView(v, params)
@@ -112,6 +125,7 @@ class OverlayController(
     /** Removes the overlay windows and stops refresh. Main-thread API. */
     fun hide() {
         if (!showing && !settingsVisible) return
+        stopCalibrationCapture()
         closeSettings()
         showing = false
         main.removeCallbacks(tick)
@@ -146,6 +160,78 @@ class OverlayController(
         setEditing(true)
         main.removeCallbacks(autoHide)
         main.postDelayed(autoHide, EDIT_AUTO_END_MS)
+    }
+
+    /**
+     * Region calibration (docs/区域校准.md): closes the settings panel, hides the card,
+     * then after [delayMs] snapshots the next game frame (FrameLoop.requestSnapshot) and
+     * opens CalibrationActivity on it. Main-thread API; false when nothing is captured.
+     */
+    fun captureForCalibration(draft: Bundle?, delayMs: Long): Boolean {
+        if (destroyed || !showing || !FrameLoop.running) return false
+        closeSettings()
+        setControls(false)
+        setEditing(false)
+        stopCalibrationCapture()
+        val run = calibrationRun
+        // The card may cover the HUD; keep it out of the frame.
+        hiddenForCapture = true
+        applyCardVisibility()
+        main.postDelayed({ requestCalibrationFrame(run, draft) }, delayMs.coerceAtLeast(0L))
+        return true
+    }
+
+    /** CalibrationActivity is on screen: the card (an overlay above it) would cover the frame. */
+    fun setHiddenForEditor(hidden: Boolean) {
+        hiddenForEditor = hidden
+        applyCardVisibility()
+    }
+
+    private fun applyCardVisibility() {
+        view?.visibility = if (hiddenForCapture || hiddenForEditor) View.INVISIBLE else View.VISIBLE
+    }
+
+    private fun requestCalibrationFrame(run: Int, draft: Bundle?) {
+        if (run != calibrationRun || !showing) return
+        val callback: (Bitmap, String) -> Unit = { bitmap, profile ->
+            if (run == calibrationRun) {
+                stopCalibrationCapture()
+                if (!CalibrationActivity.openLive(service, bitmap, profile, draft)) toast("无法打开校准页面")
+            } else {
+                bitmap.recycle()
+            }
+        }
+        if (!FrameLoop.requestSnapshot(callback)) {
+            stopCalibrationCapture()
+            toast("识别没有运行，无法截取游戏画面")
+            return
+        }
+        calibrationCallback = callback
+        // A still screen gives the recorder no new frame; showing the card again is a change.
+        main.postDelayed({
+            if (run == calibrationRun) {
+                hiddenForCapture = false
+                applyCardVisibility()
+            }
+        }, SNAPSHOT_POKE_MS)
+        main.postDelayed({
+            if (run == calibrationRun && calibrationCallback != null) {
+                stopCalibrationCapture()
+                toast("没有取到游戏画面，请稍后重试")
+            }
+        }, SNAPSHOT_TIMEOUT_MS)
+    }
+
+    private fun stopCalibrationCapture() {
+        calibrationCallback?.let { FrameLoop.cancelSnapshot(it) }
+        calibrationCallback = null
+        calibrationRun++
+        hiddenForCapture = false
+        applyCardVisibility()
+    }
+
+    private fun toast(text: String) {
+        runCatching { Toast.makeText(service, text, Toast.LENGTH_SHORT).show() }
     }
 
     // ---- Refresh ----------------------------------------------------------
@@ -304,6 +390,12 @@ class OverlayController(
                     runCatching { ProjectionCaptureService.stop(service) }
                         .onFailure { Log.e(TAG, "projection stop failed", it) }
                     main.postDelayed({ updateSettingsStatus() }, 300)
+                }
+                override fun onCalibrate() {
+                    // The panel and its scrim must be off the screen before the frame is taken.
+                    if (!captureForCalibration(null, CalibrationActivity.PANEL_DELAY_MS)) {
+                        toast("识别没有运行，无法截取游戏画面")
+                    }
                 }
             },
         )
@@ -572,5 +664,8 @@ class OverlayController(
         private const val DEFAULT_Y_FRACTION = 0.28
         private const val RIGHT_SNAP_DP = 32f
         private const val SCRIM = 0x99000000.toInt()
+        /** Calibration snapshot: show the card again (a screen change) if no frame came yet. */
+        private const val SNAPSHOT_POKE_MS = 1_500L
+        private const val SNAPSHOT_TIMEOUT_MS = 5_000L
     }
 }

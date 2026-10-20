@@ -2,7 +2,12 @@ package com.narutotimer.capture
 
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
+import android.graphics.PixelFormat
 import android.hardware.HardwareBuffer
+import android.media.Image
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import com.narutotimer.AnalysisResult
 import com.narutotimer.AssetLoader
 import com.narutotimer.NativeCore
@@ -15,8 +20,21 @@ class CapturedFrame(
     val buffer: HardwareBuffer,
     val capturedAtNanos: Long,
     val method: Int,
+    /**
+     * CPU view of the same pixels when the source has one (ImageReader frames). Only
+     * [FrameLoop.requestSnapshot] reads it; recognition always uses [buffer].
+     */
+    val image: Image? = null,
+    /**
+     * When the source asked for this frame (System.nanoTime), if it is asked for and may arrive
+     * late (takeScreenshot); 0 = produced as it happened. Snapshots never use a frame requested
+     * before the snapshot itself, so a slow screenshot cannot show an older screen.
+     */
+    val requestedAtNanos: Long = 0L,
     private val release: () -> Unit,
 ) {
+    /** Offer order, assigned by [FrameLoop.offer] (snapshot requests wait for a newer frame). */
+    internal var sequence = 0L
     private val closed = AtomicBoolean(false)
     fun close() { if (closed.compareAndSet(false, true)) runCatching { release() } }
 }
@@ -48,6 +66,26 @@ object FrameLoop {
     @Volatile private var lastHeight = 0
     @Volatile private var lastResult: AnalysisResult? = null
 
+    /** A pending one-shot snapshot ([requestSnapshot]); null in normal operation. */
+    private class SnapshotRequest(
+        val afterSequence: Long,
+        val requestedAtNanos: Long,
+        val callback: (Bitmap, String) -> Unit,
+    ) {
+        fun accepts(frame: CapturedFrame): Boolean =
+            frame.sequence > afterSequence && (frame.requestedAtNanos == 0L || frame.requestedAtNanos - requestedAtNanos >= 0)
+    }
+    @Volatile private var snapshot: SnapshotRequest? = null
+    /** Frames offered so far (guarded by [wake]). */
+    private var offeredFrames = 0L
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    /**
+     * Serialises CPU reads of [CapturedFrame.image] planes with ImageReader.close() on the
+     * capture side (resize/stop), which closes acquired images and unmaps their planes.
+     */
+    internal val imageLock = Any()
+
     fun start(context: android.content.Context) {
         if (!started.compareAndSet(false, true)) return
         val run = generation.incrementAndGet()
@@ -62,11 +100,12 @@ object FrameLoop {
                     pending = null
                     x
                 } ?: continue
+                var result: AnalysisResult? = null
                 try {
                     if (!started.get() || generation.get() != run) continue
                     if (app.nativeStatus != TimerApp.NativeStatus.READY) continue
                     val begin = System.nanoTime()
-                    val result = analyze(frame)
+                    result = analyze(frame)
                     val elapsed = System.nanoTime() - begin
                     if (result != null) {
                         lastResult = result
@@ -83,6 +122,11 @@ object FrameLoop {
                 } catch (t: Throwable) {
                     app.session.onFrame(AnalysisResult.failure(t.message ?: "analysis failed", frame.capturedAtNanos, "native"))
                 } finally {
+                    // Without a pending request this is one volatile read per frame.
+                    val shot = snapshot
+                    if (shot != null && shot.accepts(frame)) {
+                        runCatching { takeSnapshot(frame, shot, result) }
+                    }
                     frame.close()
                 }
             }
@@ -97,6 +141,7 @@ object FrameLoop {
         synchronized(wake) {
             pending?.close()
             pending = null
+            snapshot = null // The requester's own timeout reports the failure.
             wake.notifyAll()
         }
         val old = thread
@@ -117,6 +162,7 @@ object FrameLoop {
                 frame.close()
                 return
             }
+            frame.sequence = ++offeredFrames
             val old = pending
             pending = frame
             if (old != null) {
@@ -124,6 +170,32 @@ object FrameLoop {
                 dropped.incrementAndGet()
             }
             wake.notifyAll()
+        }
+    }
+
+    /**
+     * One-shot frame snapshot (region calibration). The next frame offered after this call (and,
+     * for screenshots, also requested after it) is analysed as usual, then copied to a software
+     * ARGB_8888 bitmap before it is closed, and
+     * [callback] receives it on the main thread together with that frame's layout profile:
+     * "camp" / "duel" when the frame was recognised as a match, otherwise "" (lobby, VS, a
+     * non-game screen, native not ready — the engine's camp/duel pick is only a guess there).
+     * A frame that cannot be copied is skipped and the next one is tried. A newer request
+     * replaces a pending one; [stop] drops it, so callers should apply their own timeout.
+     * Returns false when the loop is not running.
+     */
+    fun requestSnapshot(callback: (Bitmap, layoutProfile: String) -> Unit): Boolean {
+        synchronized(wake) {
+            if (!started.get()) return false
+            snapshot = SnapshotRequest(offeredFrames, System.nanoTime(), callback)
+        }
+        return true
+    }
+
+    /** Withdraws a pending [requestSnapshot] made with [callback] (no-op once delivered). */
+    fun cancelSnapshot(callback: (Bitmap, String) -> Unit) {
+        synchronized(wake) {
+            if (snapshot?.callback === callback) snapshot = null
         }
     }
 
@@ -139,6 +211,75 @@ object FrameLoop {
             n, dropped.get(), if (n == 0L) 0.0 else totalNs.get().toDouble() / n / 1e6,
             lastMethod, lastWidth, lastHeight, r?.scene.orEmpty(), r?.gateScore ?: 0.0, r?.uncertain == true,
         )
+    }
+
+    /** Analysis thread, before [CapturedFrame.close]. */
+    private fun takeSnapshot(frame: CapturedFrame, request: SnapshotRequest, result: AnalysisResult?) {
+        if (!started.get()) return
+        val begin = System.nanoTime()
+        val bitmap = runCatching { copyFrame(frame) }
+            .onFailure { Log.w(TAG, "snapshot copy failed", it) }
+            .getOrNull() ?: return // Retried on the next frame.
+        val claimed = synchronized(wake) {
+            (snapshot === request).also { if (it) snapshot = null }
+        }
+        if (!claimed) {
+            bitmap.recycle()
+            return
+        }
+        // Same frame's analysis; a just-failed analysis falls back to a very recent result.
+        val analysed = result ?: lastResult?.takeIf {
+            it.analyzedAtNanos > 0 && System.nanoTime() - it.analyzedAtNanos in 0..SNAPSHOT_RESULT_MAX_AGE_NS
+        }
+        val profile = analysed?.takeIf { it.fighting }?.layoutProfile?.takeIf { it == "camp" || it == "duel" }.orEmpty()
+        Log.i(
+            TAG,
+            "snapshot ${bitmap.width}x${bitmap.height} method=${frame.method} " +
+                "${if (frame.image != null) "image" else "buffer"} ${(System.nanoTime() - begin) / 1_000_000}ms profile=$profile",
+        )
+        mainHandler.post { request.callback(bitmap, profile) }
+    }
+
+    private fun copyFrame(frame: CapturedFrame): Bitmap? {
+        // ImageReader frames (projection) usually lack GPU_SAMPLED_IMAGE usage, so they
+        // are read from the locked CPU planes; screenshots wrap the buffer directly.
+        frame.image?.let { image ->
+            runCatching { synchronized(imageLock) { copyImage(image) } }
+                .onFailure { Log.w(TAG, "snapshot plane copy failed", it) }
+                .getOrNull()?.let { return it }
+        }
+        if (frame.buffer.usage and HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE == 0L) return null
+        val source = Bitmap.wrapHardwareBuffer(frame.buffer, ColorSpace.get(ColorSpace.Named.SRGB)) ?: return null
+        return try {
+            source.copy(Bitmap.Config.ARGB_8888, false)
+        } finally {
+            source.recycle()
+        }
+    }
+
+    private fun copyImage(image: Image): Bitmap? {
+        if (image.format != PixelFormat.RGBA_8888 && image.format != PixelFormat.RGBX_8888) return null
+        val plane = image.planes.firstOrNull() ?: return null
+        val width = image.width
+        val height = image.height
+        val rowBytes = width * 4
+        val rowStride = plane.rowStride
+        val src = plane.buffer.duplicate()
+        if (width <= 0 || height <= 0 || plane.pixelStride != 4 || rowStride < rowBytes ||
+            src.capacity() < rowStride.toLong() * (height - 1) + rowBytes) return null
+        // Memory order R,G,B,A matches ARGB_8888 bitmaps; drop the row padding.
+        val packed = ByteBuffer.allocateDirect(rowBytes * height)
+        for (y in 0 until height) {
+            val start = y * rowStride
+            src.limit(start + rowBytes)
+            src.position(start)
+            packed.put(src)
+        }
+        packed.rewind()
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        bitmap.copyPixelsFromBuffer(packed)
+        bitmap.setHasAlpha(false) // A screen frame is opaque (RGBX padding byte is not alpha).
+        return bitmap
     }
 
     private fun analyze(frame: CapturedFrame): AnalysisResult? {
@@ -182,5 +323,7 @@ object FrameLoop {
         }
     }
 
+    private const val TAG = "FrameLoop"
     private const val STOP_JOIN_MS = 1_000L
+    private const val SNAPSHOT_RESULT_MAX_AGE_NS = 2_000_000_000L
 }
