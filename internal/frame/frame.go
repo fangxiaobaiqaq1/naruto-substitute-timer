@@ -75,11 +75,31 @@ type Provider func() Frame
 // 返回的函数可直接作为 frame.Provider 使用。
 func NewSnapshotter(eng engine.Engine, mode detect.ContentMode) Provider {
 	return func() Frame {
-		return snapshotFingerprinted(eng, mode)
+		return snapshotFingerprinted(eng, mode, nil)
 	}
 }
 
-func snapshot(eng engine.Engine, mode detect.ContentMode) Frame {
+// captureRing reuses PrintWindow output images like the MuMu SDK client's
+// ring: a delivered image stays valid while the next two captures run, the
+// contract of the selectable snapshotter's single capture worker (consumers
+// that keep pixels longer copy them). nil allocates every frame.
+type captureRing struct {
+	frames [3]*image.RGBA
+	next   int
+}
+
+func (r *captureRing) slot(width, height int) *image.RGBA {
+	out := r.frames[r.next]
+	if out == nil || out.Rect.Dx() != width || out.Rect.Dy() != height {
+		out = image.NewRGBA(image.Rect(0, 0, width, height))
+		r.frames[r.next] = out
+	}
+	return out
+}
+
+func (r *captureRing) advance() { r.next = (r.next + 1) % len(r.frames) }
+
+func snapshot(eng engine.Engine, mode detect.ContentMode, ring *captureRing) Frame {
 	var f Frame
 	f.CaptureStarted = time.Now()
 	f.CaptureMethod = "printwindow-fullcontent"
@@ -92,7 +112,13 @@ func snapshot(eng engine.Engine, mode detect.ContentMode) Frame {
 		return f
 	}
 	w := pickGameWindow(wins)
-	img, err := win.CaptureClient(w.HWND)
+	var img *image.RGBA
+	var err error
+	if ring != nil {
+		img, err = win.CaptureClientInto(w.HWND, ring.slot)
+	} else {
+		img, err = win.CaptureClient(w.HWND)
+	}
 	if err != nil {
 		f.Hold = true
 		if win.IsBusyFrame(err) {
@@ -107,6 +133,9 @@ func snapshot(eng engine.Engine, mode detect.ContentMode) Frame {
 		f.Hold = true
 		f.Err = fmt.Errorf("抓取模拟器返回空图像")
 		return f
+	}
+	if ring != nil {
+		ring.advance() // the slot is delivered with this frame
 	}
 	f.CapturedAt = time.Now()
 	f.Img = img

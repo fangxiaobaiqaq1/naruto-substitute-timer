@@ -13,3 +13,12 @@ type Client interface {
 	Close() error
 	Source() string
 }
+
+// RowHashClient is an optional Client extension: it captures like Capture and
+// also returns hash(row) for every row of the returned image, top to bottom,
+// computed while each row is still in cache. The frame scheduler folds these
+// into its duplicate-frame fingerprint instead of re-reading the whole image.
+// hashes is a reusable buffer; nil hash skips hashing.
+type RowHashClient interface {
+	CaptureRowHashes(hash func([]byte) uint64, hashes []uint64) (*image.RGBA, []uint64, error)
+}

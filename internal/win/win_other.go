@@ -33,8 +33,11 @@ func RestoreWindow(uintptr) error                { return errUnsupported }
 func IsIconic(uintptr) bool                      { return false }
 func IsWindow(uintptr) bool                      { return false }
 func CaptureClient(uintptr) (*image.RGBA, error) { return nil, errUnsupported }
-func IsBusyFrame(error) bool                     { return false }
-func ClientScreenRect(uintptr) (Rect, error)     { return Rect{}, errUnsupported }
-func EnablePerMonitorDPIAwareness()              {}
+func CaptureClientInto(uintptr, func(int, int) *image.RGBA) (*image.RGBA, error) {
+	return nil, errUnsupported
+}
+func IsBusyFrame(error) bool                 { return false }
+func ClientScreenRect(uintptr) (Rect, error) { return Rect{}, errUnsupported }
+func EnablePerMonitorDPIAwareness()          {}
 
 func FindLeidianRender(uintptr, uintptr) (uintptr, error) { return 0, errUnsupported }
