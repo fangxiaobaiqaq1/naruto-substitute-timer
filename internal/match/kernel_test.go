@@ -272,3 +272,81 @@ func BenchmarkKernels(b *testing.B) {
 		}
 	}
 }
+
+// matchNoSkip is Match's coarse/mid/fine search without skipping grid points
+// that an earlier pass already scored (the pre-optimisation loop).
+func matchNoSkip(gray *image.Gray, roi image.Rectangle, p *PreparedNCC) Score {
+	tw, th := p.rect.Dx(), p.rect.Dy()
+	pre := newGrayPrefix(gray, roi.Min.X, roi.Min.Y, roi.Dx(), roi.Dy())
+	defer pre.release()
+	best := Score{Peak: roi.Min}
+	scan := func(x0, y0, x1, y1, st int) {
+		for y := max(y0, roi.Min.Y); y <= min(y1, roi.Max.Y-th); y += st {
+			for x := max(x0, roi.Min.X); x <= min(x1, roi.Max.X-tw); x += st {
+				if v := p.at(gray, pre, x, y); v > best.Value {
+					best = Score{Value: v, Peak: image.Pt(x, y)}
+				}
+			}
+		}
+	}
+	step := coarseStep(tw, th)
+	scan(roi.Min.X, roi.Min.Y, roi.Max.X-tw, roi.Max.Y-th, step)
+	if step > 1 {
+		if mid := refineStep(step); mid > 1 {
+			scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, mid)
+			scan(best.Peak.X-mid, best.Peak.Y-mid, best.Peak.X+mid, best.Peak.Y+mid, 1)
+		} else {
+			scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, 1)
+		}
+	}
+	return best
+}
+
+// Skipping already-scored grid points must not change any value, peak or
+// tie: large templates exercise coarse, mid and fine passes, including peaks
+// at the ROI border (clamped windows) and flat images (all-equal scores).
+func TestMatchSkipsRescoredGridPointsExactly(t *testing.T) {
+	rng := rand.New(rand.NewPCG(31, 41))
+	for i := range 80 {
+		tw, th := 48+rng.IntN(90), 48+rng.IntN(90)
+		w, h := tw+rng.IntN(80), th+rng.IntN(80)
+		img := image.NewRGBA(image.Rect(0, 0, w, h))
+		for k := range img.Pix {
+			img.Pix[k] = uint8(rng.IntN(256))
+			if i%10 == 9 {
+				img.Pix[k] = uint8(k % 3) // nearly flat: many equal scores
+			}
+		}
+		gray := ToGray(img)
+		mx, my := rng.IntN(w-tw+1), rng.IntN(h-th+1)
+		if i%5 == 0 {
+			mx, my = w-tw, h-th // peak at the far corner
+		}
+		templ := image.NewGray(image.Rect(0, 0, tw, th))
+		for y := range th {
+			copy(templ.Pix[y*tw:(y+1)*tw], gray.Pix[(y+my)*gray.Stride+mx:])
+		}
+		for range tw * th / 4 {
+			templ.Pix[rng.IntN(len(templ.Pix))] = uint8(rng.IntN(256))
+		}
+		var mask *image.Gray
+		if i%2 == 1 {
+			mask = diamondMask(tw, th)
+		}
+		p := PrepareNCC(templ, mask)
+		for _, roi := range []image.Rectangle{img.Bounds(), img.Bounds().Inset(1), image.Rect(mx/2, my/2, w, h)} {
+			roi = roi.Intersect(img.Bounds())
+			got, err := (NCC{}).Match(Query{Image: img, Gray: gray, ROI: roi, Prepared: p})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if roi.Dx() < tw || roi.Dy() < th {
+				continue
+			}
+			want := matchNoSkip(gray, roi, p)
+			if got != want || math.Float64bits(got.Value) != math.Float64bits(want.Value) {
+				t.Fatalf("case %d %dx%d roi=%v: got %+v want %+v", i, tw, th, roi, got, want)
+			}
+		}
+	}
+}

@@ -86,6 +86,12 @@ func (NCC) Match(q Query) (Score, error) {
 		defer pre.release()
 	}
 	best := Score{Peak: roi.Min}
+	// Grid points already scored by an earlier pass of this call are not
+	// scored again: best.Value can only have grown since, so an identical
+	// re-score could never pass the strict '>' below. The result is the same,
+	// with fewer NCC evaluations in the refinement windows.
+	var passes [2]scanPass
+	npass := 0
 	scan := func(x0, y0, x1, y1, st int) {
 		if st < 1 {
 			st = 1
@@ -103,7 +109,16 @@ func (NCC) Match(q Query) (Score, error) {
 			y1 = roi.Max.Y - th
 		}
 		for y := y0; y <= y1; y += st {
+			var rows [2]bool
+			anyRow := false
+			for i, p := range passes[:npass] {
+				rows[i] = p.onRow(y)
+				anyRow = anyRow || rows[i]
+			}
 			for x := x0; x <= x1; x += st {
+				if anyRow && ((rows[0] && passes[0].onCol(x)) || (rows[1] && passes[1].onCol(x))) {
+					continue
+				}
 				var v float64
 				if kernel {
 					v = prepared.atKernel(gray.Pix, gray.Stride, (y-origin.Y)*gray.Stride+x-origin.X)
@@ -115,6 +130,10 @@ func (NCC) Match(q Query) (Score, error) {
 					best.Peak = image.Pt(x, y)
 				}
 			}
+		}
+		if npass < len(passes) {
+			passes[npass] = scanPass{x0, y0, x1, y1, st}
+			npass++
 		}
 	}
 	scan(roi.Min.X, roi.Min.Y, roi.Max.X-tw, roi.Max.Y-th, step)
@@ -131,6 +150,12 @@ func (NCC) Match(q Query) (Score, error) {
 	}
 	return best, nil
 }
+
+// scanPass is the grid one scan visited: x0+i*st <= x1, y0+j*st <= y1.
+type scanPass struct{ x0, y0, x1, y1, st int }
+
+func (p scanPass) onRow(y int) bool { return y >= p.y0 && y <= p.y1 && (y-p.y0)%p.st == 0 }
+func (p scanPass) onCol(x int) bool { return x >= p.x0 && x <= p.x1 && (x-p.x0)%p.st == 0 }
 
 // kernelFits reports whether rel (ROI in gray offsets, i.e. relative to the
 // image origin) lies inside gray.Pix, so that every template footprint within
