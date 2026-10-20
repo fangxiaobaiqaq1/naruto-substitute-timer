@@ -315,7 +315,10 @@ bool scoreAtHint(Catalog& c, const RGBA* img, Scorer& score, const preparedTempl
 
 // forEach calls fn for 0..n-1 on a bounded worker pool, or inline when there is
 // too little work to share. 内置 NCC 无状态，所以总是允许并行（Go parallelScoring）。
-void forEach(int n, const std::function<void(int)>& fn) { ParallelFor(n, fn); }
+template <class F>
+void forEach(int n, F&& fn) {
+    ParallelFor(n, std::forward<F>(fn));
+}
 
 }  // namespace
 
