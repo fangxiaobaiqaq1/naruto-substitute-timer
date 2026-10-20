@@ -9,7 +9,7 @@ import (
 )
 
 func TestMadaraCanonicalTitleUsesFourWarmSlotsOnBothSides(t *testing.T) {
-	data, err := templates.ReadFile("templates/madara.png")
+	data, err := diskTemplates.ReadFile("templates/madara.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestMadaraFourSlotPolicyAcceptsWarmAndBlueBodiesOnBothSides(t *testing.T) {
 func TestItachiHyakusenTitleAndPortraitRequireBothCurrentSignals(t *testing.T) {
 	load := func(name string) image.Image {
 		t.Helper()
-		data, err := templates.ReadFile("templates/" + name)
+		data, err := diskTemplates.ReadFile("templates/" + name)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -15,9 +15,15 @@ import (
 
 // Name strips come from user-supplied HUD crops. Special strips establish the
 // exact variant; ordinary strips establish only a display name (Slots == 0).
-// Neither kind establishes the scene or the player's side.
+// Neither kind establishes the scene or the player's side. Only the strips
+// NewReaderWithAvatars loads are embedded (TestEmbeddedNameTemplatesAllLoad);
+// source crops and unused ordinary names stay in the tree for tests.
 //
-//go:embed templates/*.png
+//go:embed templates/hashirama.png templates/hashirama_alt.png templates/madara.png
+//go:embed templates/obito.png templates/obito_current.png templates/naruto.png templates/naruto_right.png
+//go:embed templates/sasuke_xiayin.png templates/sasuke_xiayin_duel.png
+//go:embed templates/itachi_hyakusen.png templates/itachi_hyakusen_mumu.png templates/itachi_hyakusen_portrait.png
+//go:embed templates/minato_kyubi.png templates/hashirama_edo.png templates/naruto_student.png
 var templates embed.FS
 
 type Palette string

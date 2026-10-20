@@ -26,7 +26,7 @@ func TestReviewedTargetTitlesRecognizeWithoutGameplayInference(t *testing.T) {
 		{"hashirama_edo.png", "hashirama_edo.source.png", HashiramaEdo},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			data, err := templates.ReadFile("templates/" + tc.file)
+			data, err := diskTemplates.ReadFile("templates/" + tc.file)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -34,7 +34,7 @@ func TestReviewedTargetTitlesRecognizeWithoutGameplayInference(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			sourceData, err := templates.ReadFile("templates/" + tc.source)
+			sourceData, err := diskTemplates.ReadFile("templates/" + tc.source)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -39,7 +39,7 @@ func perfPortraitFrame(tb testing.TB, c *avatarCatalog, id string, scale float64
 func perfItachiFrame(tb testing.TB, scale float64) (*image.RGBA, image.Rectangle) {
 	tb.Helper()
 	load := func(name string) image.Image {
-		data, err := templates.ReadFile("templates/" + name)
+		data, err := diskTemplates.ReadFile("templates/" + name)
 		if err != nil {
 			tb.Fatal(err)
 		}

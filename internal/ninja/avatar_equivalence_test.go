@@ -156,7 +156,7 @@ func TestAvatarCatalogLoadReportsFirstFailingIndex(t *testing.T) {
 }
 
 func TestItachiPortraitSubImageScoreEqualsFullFrame(t *testing.T) {
-	data, err := templates.ReadFile("templates/itachi_hyakusen_portrait.png")
+	data, err := diskTemplates.ReadFile("templates/itachi_hyakusen_portrait.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func readerFixtures(t *testing.T) []struct {
 		scale float64
 	}
 	var out []fixture
-	files, err := fs.Glob(templates, "templates/*.png")
+	files, err := fs.Glob(diskTemplates, "templates/*.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func readerFixtures(t *testing.T) []struct {
 		if strings.Contains(file, "portrait") || strings.Contains(file, ".source.") {
 			continue
 		}
-		data, err := templates.ReadFile(file)
+		data, err := diskTemplates.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
