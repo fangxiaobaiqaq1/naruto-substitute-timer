@@ -19,6 +19,7 @@ import android.widget.TextView
 import com.narutotimer.Settings
 import com.narutotimer.capture.ProjectionCaptureService
 import com.narutotimer.tracker.Session
+import com.narutotimer.ui.CalibrationActivity
 import com.narutotimer.ui.MainActivity
 import com.narutotimer.ui.Ui
 import java.util.Locale
@@ -44,6 +45,8 @@ class OverlaySettingsView(
         fun onResetPosition() {}
         fun onRequestProjection() {}
         fun onStopProjection() {}
+        /** 区域校准: close the panel, snapshot the game, open the editor. */
+        fun onCalibrate() {}
     }
 
     private var syncing = false
@@ -75,6 +78,7 @@ class OverlaySettingsView(
     private val widthText = Ui.text(context, "", 13f, Ui.TEXT_2)
     private val heightText = Ui.text(context, "", 13f, Ui.TEXT_2)
     private val positionText = Ui.note(context, "")
+    private val calibText = Ui.note(context, "")
     private val projection = CheckBox(context)
     private val debug = CheckBox(context)
     private val projectionState = Ui.text(context, "", 13f, Ui.TEXT_2)
@@ -282,6 +286,10 @@ class OverlaySettingsView(
             },
         ), 12f)
         Ui.add(p, positionText, 10f)
+        Ui.add(p, Ui.title(context, "区域校准"), 18f)
+        Ui.add(p, Ui.note(context, "少见分辨率下豆或头像位置不准时，在对局或训练场画面上手动框出。点按后面板关闭，截取当前游戏画面。"), 4f)
+        Ui.add(p, calibText, 6f)
+        Ui.add(p, Ui.button(context, "区域校准") { callbacks.onCalibrate() }, 8f)
         return p
     }
 
@@ -344,6 +352,7 @@ class OverlaySettingsView(
         widthText.text = String.format(Locale.ROOT, "卡片宽度：%.0f%%", settings.cardWidth * 100)
         heightText.text = String.format(Locale.ROOT, "卡片高度：%.0f%%", settings.cardHeight * 100)
         positionText.text = "当前位置：" + if (settings.overlayX == Int.MIN_VALUE) "默认（屏幕上方居中）" else "${settings.overlayX}, ${settings.overlayY}"
+        calibText.text = "当前：" + CalibrationActivity.summary(settings)
         updateProjectionState()
     }
 

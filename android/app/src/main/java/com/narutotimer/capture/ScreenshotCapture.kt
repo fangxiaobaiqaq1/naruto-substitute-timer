@@ -32,6 +32,7 @@ class ScreenshotCapture(private val service: AccessibilityService) {
                 return
             }
             try {
+                val requestedAt = System.nanoTime()
                 service.takeScreenshot(Display.DEFAULT_DISPLAY, exec, object : TakeScreenshotCallback {
                     override fun onSuccess(result: ScreenshotResult) {
                         var handedOff = false
@@ -40,9 +41,11 @@ class ScreenshotCapture(private val service: AccessibilityService) {
                             hb = result.hardwareBuffer
                             if (hb != null && runningState.get() && runGeneration.get() == run) {
                                 val owned = hb
-                                FrameLoop.offer(CapturedFrame(owned, System.nanoTime(), NativeCore.METHOD_SCREENSHOT) {
-                                    runCatching { owned.close() }
-                                })
+                                FrameLoop.offer(
+                                    CapturedFrame(owned, System.nanoTime(), NativeCore.METHOD_SCREENSHOT, requestedAtNanos = requestedAt) {
+                                        runCatching { owned.close() }
+                                    },
+                                )
                                 handedOff = true
                             }
                         } finally {

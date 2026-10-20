@@ -38,6 +38,18 @@
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
+        <!-- 区域校准：横屏、全屏地在一帧游戏画面上框豆和头像。
+             从游戏内悬浮窗打开时是独立任务（NEW_TASK|CLEAR_TASK），关闭后回到游戏而不是主界面；
+             从主界面打开时留在主界面的任务里。尺寸变化不重建；其它重建靠保存的状态恢复。 -->
+        <activity
+            android:name=".ui.CalibrationActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:taskAffinity=""
+            android:theme="@style/Theme.NarutoTimer" />
+
         <service
             android:name=".capture.ProjectionCaptureService"
             android:exported="false"

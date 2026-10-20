@@ -2,6 +2,7 @@ package com.narutotimer.service
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -56,6 +57,7 @@ class TimerAccessibilityService : AccessibilityService() {
         appSettings.overlayEnabled = true
         try {
             val controller = overlay ?: OverlayController(this, app.session, appSettings).also { overlay = it }
+            controller.setHiddenForEditor(calibrationEditors > 0)
             if (!controller.isShowing) controller.show()
             if (!controller.isShowing) {
                 Log.w(TAG, "overlay did not attach")
@@ -116,6 +118,13 @@ class TimerAccessibilityService : AccessibilityService() {
     /** Opens a temporary drag mode after the in-overlay settings panel closes. */
     fun beginPositionEdit() = onMain { overlay?.startPositionEdit() }
 
+    /**
+     * Region calibration: after [delayMs] snapshot the game and open CalibrationActivity
+     * ([draft] = unsaved boxes to carry over). Main thread only; false if not capturing.
+     */
+    fun startCalibration(draft: Bundle?, delayMs: Long): Boolean =
+        Looper.myLooper() === Looper.getMainLooper() && overlay?.captureForCalibration(draft, delayMs) == true
+
     val isOverlayRunning: Boolean
         get() = overlay?.isShowing == true
 
@@ -135,6 +144,15 @@ class TimerAccessibilityService : AccessibilityService() {
         private const val TAG = "TimerAccessibility"
         @Volatile var instance: TimerAccessibilityService? = null
             private set
+
+        /** Started CalibrationActivity instances (main thread): the card would cover their frame. */
+        private var calibrationEditors = 0
+
+        /** CalibrationActivity onStart/onStop (main thread). */
+        fun setCalibrationEditorShown(shown: Boolean) {
+            calibrationEditors = (calibrationEditors + if (shown) 1 else -1).coerceAtLeast(0)
+            instance?.overlay?.setHiddenForEditor(calibrationEditors > 0)
+        }
 
         fun isEnabled(context: Context): Boolean {
             val expected = context.packageName + "/" + TimerAccessibilityService::class.java.name
