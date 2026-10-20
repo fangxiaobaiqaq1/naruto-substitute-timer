@@ -176,4 +176,32 @@ func TestWindowPreviews(t *testing.T) {
 		save(view.name, c.win.Canvas().Capture())
 		c.win.Close()
 	}
+
+	// A special left ninja (侠隐佐助 title on the synthetic HUD) whose bead
+	// row the engine lowers: the left bead box shows on the visible beads and
+	// is stored as the ordinary row; the window says so. Also at a larger
+	// window size, where the bead row is easier to see.
+	for _, view := range []struct {
+		name string
+		win  fyne.Size
+	}{
+		{"calibration-lowered-2400x1080", fyne.Size{}},
+		{"calibration-lowered-2400x1080-large", fyne.NewSize(1600, 900)},
+	} {
+		s := newPreviewSession()
+		w := fynetest.NewWindow(nil)
+		s.win = w
+		w.SetContent(s.overlayContent())
+		s.openCalibration()
+		c := s.calibrationWin
+		if view.win != (fyne.Size{}) {
+			c.win.Resize(view.win)
+		}
+		img, res := calibrationPreviewFrame(image.Pt(2400, 1080), nil, previewXiayin)
+		s.calibrationFeed.offer(frame.Frame{Img: img, Fighting: true, LayoutProfile: res.LayoutProfile, Geometry: res.Geometry,
+			LeftNinja: res.LeftNinja, RightNinja: res.RightNinja}, time.Now())
+		relayout(c.win)
+		save(view.name, c.win.Canvas().Capture())
+		c.win.Close()
+	}
 }
