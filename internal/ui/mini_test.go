@@ -212,10 +212,8 @@ func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
 	if got := s.miniStatus.Text; got != "12.4" {
 		t.Fatalf("mini timer text = %q", got)
 	}
-	s.miniWin.Resize(fyne.NewSize(480, 160))
-	s.applyDetachedMiniClock("11.4", tagMine)
-	if size := s.miniWin.Canvas().Size(); size.Width < 480 || size.Height < 160 {
-		t.Fatalf("detached mini window shrank after user resize: %v", size)
+	if got, pill := s.miniWin.Canvas().Size(), s.miniPillBox.MinSize(); got != pill.Add(fyne.NewSize(miniGrabMargin, miniGrabMargin)) {
+		t.Fatalf("window %v is not the pill %v plus the grab margin", got, pill)
 	}
 	if s.miniWindowControls.Visible() {
 		t.Fatal("mini controls visible before tapping the pill")
@@ -255,6 +253,94 @@ func TestDetachedMiniWindowUsesAndroidPillAndMainSettings(t *testing.T) {
 		t.Fatal("mini settings action did not open the main settings window")
 	}
 	s.settings.Close()
+}
+
+func TestDetachedMiniWindowIsThePillAndResizesFromEdges(t *testing.T) {
+	s := newDetachedMiniTestSession(t, config.Default())
+	s.applyDetachedMiniClock("12.4", tagMine)
+	margin := fyne.NewSize(miniGrabMargin, miniGrabMargin)
+	pill := func() fyne.Size { return s.miniPill.Size() }
+	fit := pill()
+	if fit != s.miniPillBox.MinSize() || s.miniWin.Canvas().Size() != fit.Add(margin) {
+		t.Fatalf("window %v, pill %v: the window must be the pill plus the grab margin", s.miniWin.Canvas().Size(), fit)
+	}
+	base := s.miniStatus.TextSize
+	right := s.miniEdges.Objects[0].(*fyne.Container).Objects[1].(*miniEdge)
+	bottom := s.miniEdges.Objects[1].(*fyne.Container).Objects[1].(*miniEdge)
+	drag := func(e *miniEdge, x, y float32) {
+		e.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{AbsolutePosition: fyne.NewPos(x, y)}})
+		e.DragEnd()
+	}
+
+	// Fyne picks the drag target at the pointer's previous position, which an
+	// outward drag from the pill's last pixel can move up to its 2-unit drag
+	// threshold past the pill: the strips must still be there.
+	moved := false
+	s.moveHook = func(int32, int32) { moved = true }
+	for _, at := range []fyne.Position{{X: fit.Width + 2, Y: fit.Height / 2}, {X: fit.Width / 2, Y: fit.Height + 2}} {
+		s.cfg.UI.MiniSize = nil
+		fynetest.Drag(s.miniWin.Canvas(), at, 1, 1)
+		if s.cfg.UI.MiniSize == nil || moved {
+			t.Fatalf("drag in the grab margin at %v missed the edge strip (moved window: %v)", at, moved)
+		}
+	}
+	s.cfg.UI.MiniSize = nil
+	s.fitDetachedMiniWindow()
+	if pill() != fit || s.miniStatus.TextSize != base {
+		t.Fatalf("reset: pill %v text %v", pill(), s.miniStatus.TextSize)
+	}
+
+	// Longer: only the width follows the pointer.
+	drag(right, fit.Width+100, 5)
+	if got := pill(); got.Width != fit.Width+100+miniEdgeSize/2 || got.Height != fit.Height || s.miniStatus.TextSize != base {
+		t.Fatalf("right edge: pill %v text %v (fit %v text %v)", got, s.miniStatus.TextSize, fit, base)
+	}
+	// Taller: the clock grows with the height.
+	drag(bottom, 5, fit.Height*2)
+	tall := pill()
+	if tall.Height != fit.Height*2+miniEdgeSize/2 || s.miniStatus.TextSize < base*1.8 {
+		t.Fatalf("bottom edge: pill %v text %v", tall, s.miniStatus.TextSize)
+	}
+	if s.miniWin.Canvas().Size() != tall.Add(margin) {
+		t.Fatalf("window %v does not hug the pill %v", s.miniWin.Canvas().Size(), tall)
+	}
+	stored, err := config.Load(s.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.UI.MiniSize; got == nil || got.Width != tall.Width || got.Height != tall.Height {
+		t.Fatalf("stored mini size = %+v, shown %v", got, tall)
+	}
+
+	// Clock text changes and the action row keep the dragged pill.
+	s.applyDetachedMiniClock("待机", tagIdle)
+	if got := pill(); got != tall {
+		t.Fatalf("text change resized the pill: %v -> %v", tall, got)
+	}
+	s.miniWindowSurface.Tapped(nil)
+	if got := pill(); got.Height != tall.Height || s.miniWin.Canvas().Size().Height <= tall.Height+miniGrabMargin {
+		t.Fatalf("open row: pill %v window %v", got, s.miniWin.Canvas().Size())
+	}
+	s.miniWindowSurface.Tapped(nil)
+	if got := s.miniWin.Canvas().Size(); got != tall.Add(margin) {
+		t.Fatalf("closing the row did not restore the pill: %v", got)
+	}
+
+	// Shrinking past the text stops at the text, and is stored as shown.
+	drag(right, 4, 0)
+	if got := pill(); got.Width <= 4 || got.Width != s.miniPillBox.MinSize().Width {
+		t.Fatalf("narrowest pill %v", got)
+	}
+	if got := s.cfg.UI.MiniSize; got.Width != pill().Width {
+		t.Fatalf("stored width %v below the shown pill", got.Width)
+	}
+
+	// Fitting the text again (settings checkbox) hides the edges.
+	s.cfg.UI.MiniAutoScale = true
+	s.applyMiniContentScale()
+	if s.miniEdges.Visible() || s.miniStatus.TextSize != base || pill() != s.miniPillBox.MinSize() {
+		t.Fatalf("auto fit: edges %v text %v pill %v", s.miniEdges.Visible(), s.miniStatus.TextSize, pill())
+	}
 }
 
 func TestSwapSideCyclesThroughAutoMode(t *testing.T) {

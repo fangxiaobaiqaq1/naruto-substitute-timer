@@ -253,11 +253,19 @@ type UIConfig struct {
 	// window; nil centres the window. Restores are clamped to a visible monitor.
 	WindowPosition *ScreenPoint `json:"windowPosition,omitempty"`
 	MiniPosition   *ScreenPoint `json:"miniPosition,omitempty"`
+	// MiniSize is the timer-only pill size the user dragged its edges to
+	// (Fyne units); nil fits the text. The height also sets the clock size.
+	MiniSize *ScreenSize `json:"miniSize,omitempty"`
 }
 
 type ScreenPoint struct {
 	X int `json:"x"`
 	Y int `json:"y"`
+}
+
+type ScreenSize struct {
+	Width  float32 `json:"width"`
+	Height float32 `json:"height"`
 }
 
 func Default() Config {

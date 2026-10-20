@@ -175,13 +175,15 @@ type session struct {
 	overlayOpacity     func(fyne.Window, float64) error // test seam for native HWND application
 	appearanceError    string
 	miniRoot           *fyne.Container
+	miniPillBox        *fyne.Container
+	miniPill           *canvas.Rectangle
+	miniEdges          *fyne.Container
 	miniStatus         *canvas.Text
 	miniWindowSurface  *miniSurface
 	miniWindowControls *fyne.Container
 	miniWindowButtons  []*scaledMiniButton
 	miniWindowBoth     *scaledMiniButton
 	miniWindowExpanded bool
-	miniCollapsedSize  fyne.Size
 	miniAdaptiveScale  float32
 }
 

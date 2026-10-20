@@ -278,7 +278,7 @@ func (s *session) buildSettings(tab int) {
 		s.applyFullTopmost()
 		showSettingsError(err, w)
 	}
-	autoScaleChk := widget.NewCheck("仅计时器窗口自动适应内容（关闭后可拉伸窗口等比缩放）", nil)
+	autoScaleChk := widget.NewCheck("仅计时器贴合文字（关闭后可拖动右边缘调长度、下边缘调高度和字号）", nil)
 	autoScaleChk.SetChecked(miniAutoScale)
 	autoScaleChk.OnChanged = func(on bool) {
 		s.mu.Lock()
