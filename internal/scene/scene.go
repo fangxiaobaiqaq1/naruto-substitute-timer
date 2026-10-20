@@ -94,6 +94,51 @@ type Catalog struct {
 	coldAt     time.Time
 	coldFrames int
 	lastCold   []Hit
+	// frame is the BeginFrame/EndFrame memo (engine.FrameScopedGate): it is
+	// consulted only for the very image passed to BeginFrame.
+	frameMu sync.Mutex
+	frame   *frameMemo
+}
+
+// frameMemo shares one analysed frame's work between DecideAt and the
+// StartFight/SupportsFight calls on the same image: gray views per ROI and
+// the full-ROI hit of every template DecideAt scanned completely. A cached
+// hit is exactly what scoreOne recomputes (same template, ROI and pixels).
+type frameMemo struct {
+	img   *image.RGBA
+	mu    sync.Mutex
+	views map[image.Rectangle]grayView
+	full  map[int]Hit // template index -> full-ROI hit of this frame
+}
+
+type grayView struct {
+	img  *image.RGBA
+	gray *image.Gray
+}
+
+// BeginFrame implements engine.FrameScopedGate.
+func (c *Catalog) BeginFrame(img *image.RGBA) {
+	c.frameMu.Lock()
+	c.frame = &frameMemo{img: img, views: map[image.Rectangle]grayView{}, full: map[int]Hit{}}
+	c.frameMu.Unlock()
+}
+
+// EndFrame implements engine.FrameScopedGate; the views are released.
+func (c *Catalog) EndFrame() {
+	c.frameMu.Lock()
+	c.frame = nil
+	c.frameMu.Unlock()
+}
+
+// memo returns the frame memo for img, or nil outside BeginFrame/EndFrame or
+// for any other image.
+func (c *Catalog) memo(img *image.RGBA) *frameMemo {
+	c.frameMu.Lock()
+	defer c.frameMu.Unlock()
+	if c.frame != nil && c.frame.img == img {
+		return c.frame
+	}
+	return nil
 }
 
 const (
@@ -407,7 +452,8 @@ func (c *Catalog) ScoreAll(img *image.RGBA) []Hit {
 	if !supported {
 		return nil
 	}
-	views := make(map[image.Rectangle]*image.Gray)
+	memo := c.memo(img)
+	view := c.views(img, memo)
 	out := make([]Hit, 0, len(c.templates))
 	for _, t := range c.prepare(ca) {
 		roi := t.roi.Intersect(img.Bounds())
@@ -415,13 +461,17 @@ func (c *Catalog) ScoreAll(img *image.RGBA) []Hit {
 			out = append(out, Hit{ID: t.spec.ID, Scene: t.spec.Scene})
 			continue
 		}
-		view := img.SubImage(roi).(*image.RGBA)
-		gray, ok := views[roi]
-		if !ok {
-			gray = match.ToGray(view)
-			views[roi] = gray
+		if memo != nil {
+			memo.mu.Lock()
+			hit, ok := memo.full[t.index]
+			memo.mu.Unlock()
+			if ok {
+				out = append(out, hit)
+				continue
+			}
 		}
-		out = append(out, c.scoreOne(view, gray, t))
+		v := view(roi)
+		out = append(out, c.scoreOne(v.img, v.gray, t))
 	}
 	return out
 }
@@ -654,6 +704,14 @@ func (c *Catalog) scoreAll(img *image.RGBA, prepared []preparedTemplate, at time
 		i := work[k]
 		hits[i] = score(prepared[i])
 	})
+	if memo := c.memo(img); memo != nil {
+		// Full-ROI scans of this frame; StartFight's ScoreAll reuses them.
+		memo.mu.Lock()
+		for _, i := range work {
+			memo.full[prepared[i].index] = hits[i]
+		}
+		memo.mu.Unlock()
+	}
 	cold := make([]Hit, len(prepared))
 	for i := range prepared {
 		if !done[i] {
@@ -706,17 +764,25 @@ func (c *Catalog) forEach(n int, fn func(int)) {
 // The view map is shared by parallel template scoring; a view converted twice
 // for the same ROI holds identical pixels, so either copy yields the same score.
 func (c *Catalog) scorer(img *image.RGBA) func(preparedTemplate) Hit {
-	type grayView struct {
-		img  *image.RGBA
-		gray *image.Gray
-	}
-	var mu sync.Mutex
-	views := make(map[image.Rectangle]grayView)
+	view := c.views(img, c.memo(img))
 	return func(t preparedTemplate) Hit {
 		roi := t.roi.Intersect(img.Bounds())
 		if roi.Empty() || t.gray == nil {
 			return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
 		}
+		v := view(roi)
+		return c.scoreHinted(v.img, v.gray, t)
+	}
+}
+
+// views returns a concurrency-safe ROI -> gray view converter for img. With a
+// frame memo the views are shared by every gate call on this frame.
+func (c *Catalog) views(img *image.RGBA, memo *frameMemo) func(image.Rectangle) grayView {
+	mu, views := new(sync.Mutex), make(map[image.Rectangle]grayView)
+	if memo != nil {
+		mu, views = &memo.mu, memo.views
+	}
+	return func(roi image.Rectangle) grayView {
 		mu.Lock()
 		view, ok := views[roi]
 		mu.Unlock()
@@ -731,7 +797,7 @@ func (c *Catalog) scorer(img *image.RGBA) func(preparedTemplate) Hit {
 			}
 			mu.Unlock()
 		}
-		return c.scoreHinted(view.img, view.gray, t)
+		return view
 	}
 }
 

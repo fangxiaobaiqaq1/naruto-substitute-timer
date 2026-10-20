@@ -51,6 +51,15 @@ type TimedGate interface {
 	DecideAt(img *image.RGBA, at time.Time) GateDecision
 }
 
+// FrameScopedGate may share one frame's work (gray views, full-ROI scores)
+// between DecideAt and the StartFight/SupportsFight calls that follow on the
+// same image. Gated brackets each AnalyzeAt with BeginFrame/EndFrame; the
+// image is not modified in between. Results are identical with or without it.
+type FrameScopedGate interface {
+	BeginFrame(img *image.RGBA)
+	EndFrame()
+}
+
 // Identity 是 VS / 换人画面上认出的双方账号。
 type Identity struct {
 	Side string
@@ -143,6 +152,10 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 	if img == nil {
 		g.pendingProfile = "" // An explicit missing frame breaks confirmation.
 		return Result{Name: g.name + "+gate", Uncertain: true}
+	}
+	if scoped, ok := g.Gate.(FrameScopedGate); ok {
+		scoped.BeginFrame(img)
+		defer scoped.EndFrame()
 	}
 	if img.Bounds() != g.lastBounds || (!g.lastAt.IsZero() && at.Before(g.lastAt)) {
 		g.clearScene()
