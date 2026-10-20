@@ -32,11 +32,14 @@ object CalibrationFrames {
     private const val AUTO_SUFFIX = ".json"
 
     /**
-     * A live frame's automatic analysis: the geometry its analysis used (docs/区域校准.md 每帧几何)
-     * and which boxes (Settings.KEY_CALIB_RECTS order) were calibrated then; for those the
-     * geometry's box is the calibration, not the automatic default.
+     * A live frame's automatic analysis: the geometry its analysis used (docs/区域校准.md 每帧几何),
+     * which boxes (Settings.KEY_CALIB_RECTS order) were calibrated then (for those the geometry's
+     * box is the calibration, not the automatic default) and the ninja recognised on each side
+     * (index 0 left, 1 right; "" = none).
      */
-    class Auto(val geometry: FrameGeometry, val calibrated: BooleanArray)
+    class Auto(val geometry: FrameGeometry, val calibrated: BooleanArray, val ninjas: List<String> = listOf("", "")) {
+        fun ninja(side: Int): String = ninjas.getOrNull(side).orEmpty()
+    }
 
     /** A frame this process holds for its editor. */
     class Held(val bitmap: Bitmap, val auto: Auto?)
@@ -202,6 +205,7 @@ object CalibrationFrames {
             .put("profile", g.layoutProfile)
             .put("sequence", g.sequence)
             .put("calibrated", JSONArray().also { a -> auto.calibrated.forEach { a.put(it) } })
+            .put("ninjas", JSONArray().put(auto.ninja(0)).put(auto.ninja(1)))
             .put("left", encodeSide(g.left))
             .put("right", encodeSide(g.right))
     }
@@ -227,7 +231,8 @@ object CalibrationFrames {
             left = decodeSide(o.getJSONObject("left")),
             right = decodeSide(o.getJSONObject("right")),
         )
-        return Auto(geometry, BooleanArray(flags.length()) { flags.getBoolean(it) })
+        val ninjas = o.optJSONArray("ninjas")
+        return Auto(geometry, BooleanArray(flags.length()) { flags.getBoolean(it) }, List(2) { ninjas?.optString(it).orEmpty() })
     }
 
     private fun decodeSide(o: JSONObject): SideGeometry {

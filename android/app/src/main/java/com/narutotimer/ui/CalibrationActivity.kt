@@ -13,6 +13,11 @@ package com.narutotimer.ui
 // 默认方案 = 自动：没保存过、也没改过的框从这一帧的 beadBox/avatarBox 开始，标「（自动）」。只有动过
 // （画、移动、缩放、导入、清除）的框才写入设置；什么都没改，保存不写任何设置，识别一切照旧。
 // 方案文件（导出/导入）的格式见 CalibrationScheme。
+//
+// 校准值是标准忍者值：保存的豆框永远是普通忍者的豆行。这一帧某侧采样的豆比标准行低（识别出水门/佐助/鼬
+// 的整行下移）时，这一侧的豆框（自动、已保存、未保存、导入的）在画板上下移到看得见的豆上，在这一帧画/改的
+// 豆框按同一下移换回标准值（CalibrationRow）。stored/pending/imported/autoBoxes 一律是标准值，只有画板上
+// 是下移后的位置（shownRect / standardRect）；头像框不动。
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -45,6 +50,7 @@ import com.narutotimer.Settings
 import com.narutotimer.TimerApp
 import com.narutotimer.capture.FrameLoop
 import com.narutotimer.service.TimerAccessibilityService
+import com.narutotimer.tracker.NinjaRules
 import com.narutotimer.ui.CalibrationView.Companion.COUNT
 import com.narutotimer.ui.CalibrationView.Companion.LABELS
 import java.io.ByteArrayOutputStream
@@ -63,6 +69,7 @@ class CalibrationActivity : Activity() {
     private lateinit var duelRadio: RadioButton
     private lateinit var autoCheck: CheckBox
     private lateinit var autoText: TextView
+    private lateinit var sideText: TextView
     private lateinit var regionHint: TextView
     private lateinit var clearButton: Button
     private val chips = arrayOfNulls<LinearLayout>(COUNT)
@@ -88,6 +95,10 @@ class CalibrationActivity : Activity() {
     private var auto: CalibrationFrames.Auto? = null
     /** This frame's automatic boxes (default scheme); null = unknown (no geometry, or calibrated then). */
     private val autoBoxes = arrayOfNulls<RectF>(COUNT)
+    /** Per side (0 left, 1 right): this frame's bead row below the standard row, in pitches (CalibrationRow.drop). */
+    private val drops = DoubleArray(2)
+    /** Per side: the ninja recognised on this frame ("" = none or no geometry). */
+    private val ninjas = arrayOf("", "")
     /** Size of the analysed frame (the shown bitmap may be scaled down). */
     private var frameWidth = 0
     private var frameHeight = 0
@@ -267,6 +278,8 @@ class CalibrationActivity : Activity() {
         Ui.add(body, autoCheck, 2f)
         autoText = Ui.text(this, "", 11.5f, Ui.TEXT_2)
         Ui.add(body, autoText, 0f)
+        sideText = Ui.text(this, "", 11.5f, Ui.TEXT_2).apply { visibility = View.GONE }
+        Ui.add(body, sideText, 4f)
         Ui.add(body, Ui.text(this, "要框的区域", 13f, Ui.TEXT_2), 10f)
         for (i in 0 until COUNT) chips[i] = chip(i)
         Ui.add(body, Ui.row(this, chips[0]!!, chips[1]!!, gapDp = 6f), 4f)
@@ -389,7 +402,7 @@ class CalibrationActivity : Activity() {
     /** The box stands for the automatic position: shown as such and never saved. */
     private fun automatic(i: Int) = edits[i] == EDIT_CLEAR || (edits[i] == EDIT_NONE && stored[i] == null)
 
-    /** Shows each box: its pending edit, the saved box, or this frame's automatic box. */
+    /** Shows each box: its pending edit, the saved box, or this frame's automatic box (as shown on this frame). */
     private fun syncBoard() {
         for (i in 0 until COUNT) {
             val isAuto = automatic(i)
@@ -398,9 +411,32 @@ class CalibrationActivity : Activity() {
                 isAuto -> autoBoxes[i]
                 else -> stored[i]?.let(::toRect)
             }
-            board.setBox(i, r, isAuto)
+            board.setBox(i, r?.let { shownRect(i, it) }, isAuto)
         }
     }
+
+    /** A standard box as the board shows it: a bead box on a dropped row sits on the visible beads. */
+    private fun shownRect(i: Int, r: RectF): RectF {
+        val dy = rowShift(i, r)
+        return RectF(r.left, r.top + dy, r.right, r.bottom + dy)
+    }
+
+    /** A box on the board as its standard value (what is saved and exported). */
+    private fun standardRect(i: Int, r: RectF): RectF {
+        val dy = rowShift(i, r)
+        return RectF(r.left, r.top - dy, r.right, r.bottom - dy)
+    }
+
+    /** CalibrationRow.shift of a bead box on this frame; avatar boxes never shift. */
+    private fun rowShift(i: Int, r: RectF): Float = when (i) {
+        CalibrationView.LEFT_BEADS -> CalibrationRow.shift(drops[0], r.width(), frameWidth, frameHeight)
+        CalibrationView.RIGHT_BEADS -> CalibrationRow.shift(drops[1], r.width(), frameWidth, frameHeight)
+        else -> 0f
+    }
+
+    /** Board box [shown] is the standard box [box] as shown here, or the same once stored. */
+    private fun sameShown(i: Int, shown: RectF, box: RectF): Boolean =
+        sameRect(shown, shownRect(i, box)) || sameRect(standardRect(i, shown), box)
 
     private fun select(i: Int) {
         selected = i
@@ -477,10 +513,25 @@ class CalibrationActivity : Activity() {
             source == SOURCE_FILE -> "载入的截图没有自动识别结果（只有在游戏里截取的画面才有），框要自己画。"
             else -> "这一帧没有自动识别结果（大厅、结算等画面不识别豆和头像），框要自己画。"
         }
+        // Per side: the ninja recognised on this frame and whether its bead row is converted.
+        val lines = if (g == null) emptyList() else (0 until 2).mapNotNull { s ->
+            val side = if (s == 0) "左侧" else "右侧"
+            val name = ninjas[s].takeIf { it.isNotBlank() }?.let(NinjaRules::shortLabel)
+            when {
+                drops[s] > 0.0 -> "$side：${if (name != null) "$name，" else ""}豆行比普通忍者低，已按标准换算"
+                name != null -> "$side：$name"
+                g.side(s == 0).beads.isNotEmpty() -> "$side：没认出忍者"
+                else -> null
+            }
+        }
+        sideText.text = lines.joinToString("\n")
+        sideText.setTextColor(if (drops.any { it > 0.0 }) Ui.WARN else Ui.TEXT_2)
+        sideText.visibility = if (lines.isEmpty()) View.GONE else View.VISIBLE
     }
 
     private val boardListener = object : CalibrationView.Listener {
         override fun onBoxEdited(index: Int) {
+            // [r] is where the board shows it; the boxes kept here are standard values.
             val r = board.box(index) ?: return
             val saved = stored[index]?.let(::toRect)
             val autoBox = autoBoxes[index]
@@ -490,16 +541,17 @@ class CalibrationActivity : Activity() {
                 else -> saved ?: autoBox
             }
             // Moved back to exactly where it was (as it would be saved): no change at all.
-            if (start != null && sameRect(r, start)) {
+            if (start != null && sameShown(index, r, start)) {
                 syncBoard()
                 return
             }
             edits[index] = when {
-                saved != null && sameRect(r, saved) -> EDIT_NONE
-                saved == null && autoBox != null && sameRect(r, autoBox) -> EDIT_NONE
+                saved != null && sameShown(index, r, saved) -> EDIT_NONE
+                saved == null && autoBox != null && sameShown(index, r, autoBox) -> EDIT_NONE
                 else -> EDIT_SET
             }
-            pending[index] = if (edits[index] == EDIT_SET) RectF(r) else null
+            // Drawn on this frame's (possibly dropped) row: kept, saved and exported as the standard row.
+            pending[index] = if (edits[index] == EDIT_SET) standardRect(index, r) else null
             imported[index] = null
             syncBoard()
             updateRegions()
@@ -551,9 +603,21 @@ class CalibrationActivity : Activity() {
     /** This frame's automatic analysis: the dashed regions and the default boxes. */
     private fun setAuto(frameAuto: CalibrationFrames.Auto?, bitmap: Bitmap) {
         val g = frameAuto?.geometry?.takeIf { it.width > 0 && it.height > 0 }
-        auto = if (g != null) frameAuto else null
+        val a = if (g != null) frameAuto else null
+        auto = a
         frameWidth = g?.width ?: bitmap.width
         frameHeight = g?.height ?: bitmap.height
+        // 校准值是标准忍者值: how far each side's sampled row lies below its standard row here.
+        for (s in 0 until 2) {
+            val side = g?.side(s == 0)
+            drops[s] = if (g == null || side == null) 0.0 else CalibrationRow.drop(
+                IntArray(side.beads.size) { side.beads[it].y }, side.beadBox?.toFloatArray(), g.width, g.height,
+            )
+            ninjas[s] = a?.ninja(s).orEmpty()
+        }
+        if (drops.any { it > 0.0 }) {
+            Log.i(TAG, "row drop left=${drops[0]} (${ninjas[0]}) right=${drops[1]} (${ninjas[1]})")
+        }
         val calibrated = frameAuto?.calibrated
         for (i in 0 until COUNT) {
             // A box calibrated when the frame was analysed reports that calibration, not the automatic box.
@@ -989,9 +1053,12 @@ class CalibrationActivity : Activity() {
         private const val STATE_EXPORT = "exportText"
         private const val STATE_EXPORT_UNSAVED = "exportUnsaved"
 
+        private const val BEAD_ROW_HINT =
+            "豆框按普通忍者的豆行保存；认出九喇嘛水门、侠隐佐助、百战鼬时会自动换算，认不出时请换普通忍者的画面。"
+
         private val REGION_HINTS = arrayOf(
-            "框住左边 4 颗豆（柱间的第 5、6 颗不框）。圆点是推算的豆心，1 号在最左。九喇嘛水门、侠隐佐助、百战鼬的豆偏低，请在普通忍者身上框。",
-            "框住右边 4 颗豆（柱间的第 5、6 颗不框）。圆点是推算的豆心，1 号在最右。九喇嘛水门、侠隐佐助、百战鼬的豆偏低，请在普通忍者身上框。",
+            "框住左边 4 颗豆（柱间的第 5、6 颗不框）。圆点是推算的豆心，1 号在最左。$BEAD_ROW_HINT",
+            "框住右边 4 颗豆（柱间的第 5、6 颗不框）。圆点是推算的豆心，1 号在最右。$BEAD_ROW_HINT",
             "紧贴左边的头像，不含名字和血条。",
             "紧贴右边的头像，不含名字和血条。",
         )
@@ -1005,7 +1072,7 @@ class CalibrationActivity : Activity() {
             val auto = snapshot.geometry?.takeIf(::hasRegions)?.let { g ->
                 // Boxes calibrated now were calibrated when this frame was analysed (the engine
                 // applies a saved calibration within ~0.1 s).
-                CalibrationFrames.Auto(g, BooleanArray(COUNT) { settings.calibRect(Settings.KEY_CALIB_RECTS[it]) != null })
+                CalibrationFrames.Auto(g, BooleanArray(COUNT) { settings.calibRect(Settings.KEY_CALIB_RECTS[it]) != null }, snapshot.ninjas)
             }
             val file = CalibrationFrames.holdLive(context, snapshot.bitmap, auto)
             val intent = Intent(context, CalibrationActivity::class.java)
