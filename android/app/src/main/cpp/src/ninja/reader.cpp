@@ -67,11 +67,12 @@ std::shared_ptr<Reader> Reader::NewReader() {
         {"sasuke_xiayin_duel", &SasukeXiayin, 4, Xiayin, 9, false},
         // User-provided native captures. These full-title templates establish
         // a display identity; they retain the ordinary four-slot/default-color
-        // policy. Minato is the reviewed energy-gauge row-offset exception.
+        // policy. Minato is the reviewed energy-gauge row-offset exception;
+        // four slots let the tracker keep that row through brief title gaps.
         {"itachi_hyakusen", &ItachiHyakusen, 4, Palette::None, EnergyGaugeRowOffset, true},
         // MuMu 1280x720 capture requires independent character HUD portrait evidence.
         {"itachi_hyakusen_mumu", &ItachiHyakusen, 4, Palette::None, EnergyGaugeRowOffset, true},
-        {"minato_kyubi", &MinatoKyubi, 0, Palette::None, EnergyGaugeRowOffset, false},
+        {"minato_kyubi", &MinatoKyubi, 4, Palette::None, EnergyGaugeRowOffset, false},
         {"hashirama_edo", &HashiramaEdo, 0, Palette::None, 0, false},
         {"naruto_student", &NarutoStudent, 0, Palette::None, 0, false},
     };
@@ -304,6 +305,10 @@ Readout avatarReadout(const AvatarMatch& m) {
     } else if (key == normalizeAvatarName(ItachiHyakusen)) {
         // Corpus ID 920541 is 宇智波鼬[百战]. Only that exact current avatar
         // variant gets the ordinary four-slot row and its 13px energy shift.
+        out.Slots = 4;
+        out.RowOffsetY = EnergyGaugeRowOffset;
+    } else if (key == normalizeAvatarName(MinatoKyubi)) {
+        // Catalog ID 90316 is exactly 波风水门[九喇嘛连结]: same energy row.
         out.Slots = 4;
         out.RowOffsetY = EnergyGaugeRowOffset;
     }

@@ -39,7 +39,8 @@ inline const std::string HashiramaEdo = "千手柱间[秽土转生]";
 inline const std::string HanzoEdo = "半藏[秽土转生]";
 // EnergyGaugeRowOffset is measured from reviewed native HUDs. The energy
 // gauge pushes these ordinary four-diamond rows down 13px at 960x540. It is
-// active only after the complete title template is verified.
+// active after a verified complete title or exact portrait (kept briefly as
+// a tracker hint); unidentified rows use only rgb's energy-band fallback.
 constexpr double EnergyGaugeRowOffset = 13;
 constexpr DurationNs DefaultCooldown = 15 * Second;
 constexpr DurationNs AlternateCooldown = 10 * Second;

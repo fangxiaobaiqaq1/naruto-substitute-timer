@@ -267,6 +267,23 @@ std::vector<BeadInfo> sampleCalibratedSpecial(const RGBA* img, const std::vector
                     }
                 }
             }
+            // Without an identity offset, an energy gauge may still cover the
+            // default row. Re-read the 13px@540 row; keep it only when complete
+            // and legal. Special palettes and offset identities are excluded.
+            if (identified[index].RowOffsetY == 0 && palette == ninja::Palette::None && !xiayin && row.size() == 4 &&
+                energyGaugeBand(img, row, area, rowStates)) {
+                const int dy = static_cast<int>(std::round(ninja::EnergyGaugeRowOffset * area.HUDScale(960, 540)));
+                std::vector<BeadInfo> candidateInfos;
+                std::vector<BeadState> candidateStates;
+                sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], Pt(0, dy), candidateInfos,
+                                    candidateStates);
+                if (detect::IsLegalPrefix(candidateStates) &&
+                    std::find(candidateStates.begin(), candidateStates.end(), detect::StateUnknown) ==
+                        candidateStates.end()) {
+                    rowInfos = std::move(candidateInfos);
+                    rowStates = std::move(candidateStates);
+                }
+            }
             out.insert(out.end(), rowInfos.begin(), rowInfos.end());
             states = std::move(rowStates);
         }

@@ -98,6 +98,32 @@ func applyNames(res *engine.Result, readouts [2]ninja.Readout) {
 	}
 }
 
+// energyGaugeBand is the unidentified energy-gauge signature on the default
+// row: a THIN gold band through every slot center (not gold 4px@540 above and
+// below, unlike real gold diamonds or a broad wash) that blanks all cores or
+// also fills every slot midpoint. It only permits a re-read; never a vote.
+func energyGaugeBand(img *image.RGBA, row []detect.BeadPosition, area detect.ContentArea, states []detect.BeadState) bool {
+	gold := func(x, y int) bool {
+		if !image.Pt(x, y).In(img.Bounds()) {
+			return false
+		}
+		c := img.RGBAAt(x, y)
+		r, g, b := int(c.R), int(c.G), int(c.B)
+		return r >= 190 && g >= 110 && r-b >= 80 && g-b >= 70
+	}
+	d := max(2, int(math.Round(4*area.HUDScale(960, 540))))
+	continuous := true
+	for i, p := range row {
+		if !gold(p.X, p.Y) || gold(p.X, p.Y-d) || gold(p.X, p.Y+d) {
+			return false
+		}
+		if i > 0 && !gold((row[i-1].X+p.X)/2, (row[i-1].Y+p.Y)/2) {
+			continuous = false
+		}
+	}
+	return len(row) > 0 && (continuous || allUnknownStates(states))
+}
+
 func specialPixel(palette ninja.Palette, r, g, b int) detect.BeadState {
 	switch palette {
 	case ninja.Warm:

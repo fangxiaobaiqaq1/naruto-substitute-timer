@@ -1,4 +1,5 @@
-// Host-only regressions for internal/engine/gated.go + internal/scene/scene.go.
+// Host-only regressions for internal/engine/gated.go + internal/scene/scene.go
+// (+ the rgb energy-gauge row re-read).
 // Run tests/hud_start_test.sh; this directory is outside the APK's src/ glob.
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "nt/engine.h"
+#include "nt/rgb.h"
 #include "nt/scene.h"
 
 namespace {
@@ -341,9 +343,76 @@ void testSupportHints() {
     f.c->prepare(ca);
     check(!f.c->hint(0, hint), "geometry change invalidates hints");
 }
+
+// Mirrors internal/engine/rgb/energy_gauge_test.go without assets (no title or
+// portrait): a thin orange gauge on the default row and beans 13px@540 lower
+// read via the guarded re-read; a white flash or broad gold wash over an
+// ordinary row stays unknown although the scenery below reads as four darks.
+void testEnergyGaugeRow() {
+    const config::Config cfg = config::Default();
+    const Color gold{255, 200, 0, 255}, blue{40, 200, 255, 255}, dark{28, 54, 98, 255};
+    for (Point size : {Pt(1280, 720), Pt(1920, 1080), Pt(2400, 1080)}) {
+        for (int cover = 0; cover < 4; ++cover) {  // 0/1: gauge left/right, 2: white flash, 3: gold wash
+            auto layout = std::make_shared<ConfiguredLayout>(detect::ModeAuto, cfg.Layout);
+            RGBA img = RGBA::New(MakeRect(0, 0, size.X, size.Y));
+            auto fill = [&](Rect r, Color c) {
+                for (int y = r.Min.Y; y < r.Max.Y; ++y)
+                    for (int x = r.Min.X; x < r.Max.X; ++x) img.SetRGBA(x, y, c);
+            };
+            fill(img.Bounds(), Color{32, 32, 32, 255});
+            const detect::ContentArea area = layout->ContentArea(&img).first;
+            const double s = area.HUDScale(960, 540);
+            auto px = [&](double v) { return static_cast<int>(std::round(v * s)); };
+            std::vector<detect::BeadPosition> rows[2];
+            for (const auto& p : layout->PositionsIn("duel", area)) rows[p.Side == "right"].push_back(p);
+            const int special = cover == 1 ? 1 : 0;
+            int want[2][4];
+            for (int side = 0; side < 2; ++side) {
+                const auto& row = rows[side];
+                const int x0 = std::min(row[0].X, row[3].X), x1 = std::max(row[0].X, row[3].X);
+                fill(MakeRect(x0 - px(10), row[0].Y + px(8), x1 + px(10) + 1, row[0].Y + px(22) + 1),
+                     Color{21, 40, 57, 255});
+                const bool gauge = cover < 2 && side == special;
+                if (gauge) fill(MakeRect(x0 - px(10), row[0].Y - px(2), x1 + px(10) + 1, row[0].Y + px(2) + 1),
+                                Color{245, 150, 40, 255});
+                const Color beans[4] = {gauge ? gold : blue, blue, dark, dark};
+                for (int i = 0; i < 4; ++i) {
+                    const auto& p = row[i];
+                    const double ly = p.LY + (gauge ? ninja::EnergyGaugeRowOffset * 900 / 540 : 0);
+                    const int y = area.MapHUDPixel(p.LX, ly, side == 1, 1600, 900).Y;
+                    const int rx = px(4.8), ry = px(6.5);
+                    for (int dy = -ry; dy <= ry; ++dy)
+                        for (int dx = -rx; dx <= rx; ++dx)
+                            if (detect::InBeadDiamond(0, 0, 2 * rx, 2 * ry, dx, dy))
+                                img.SetRGBA(p.X + dx, y + dy, beans[i]);
+                    want[side][i] = y;
+                }
+            }
+            if (cover >= 2) {
+                const int half = px(cover == 2 ? 3 : 9);
+                const auto& row = rows[0];
+                fill(MakeRect(row[0].X - px(10), row[0].Y - half, row[3].X + px(10) + 1, row[0].Y + half + 1),
+                     cover == 2 ? Color{255, 255, 255, 255} : gold);
+            }
+            rgb::Engine e(layout, cfg.Vision);
+            e.Prefer("duel");
+            const Result r = e.AnalyzeAt(&img, 1700000000LL * Second);
+            check(r.Beads.size() == 8, "energy gauge: eight slots");
+            for (const BeadInfo& b : r.Beads) {
+                const int side = b.Label[0] == 'R', i = b.Label[1] - '1';
+                const bool covered = cover >= 2 && side == 0;
+                const bool lit = i < 2, isGold = cover < 2 && side == special && i == 0;
+                check(covered ? b.Unknown && !b.Lit
+                              : !b.Unknown && b.Lit == lit && b.Gold == isGold && std::abs(b.Y - want[side][i]) <= 1,
+                      "energy gauge row " + std::to_string(size.X) + " case " + std::to_string(cover) + " " + b.Label);
+            }
+        }
+    }
+}
 } // namespace
 
 int main() {
+    testEnergyGaugeRow();  // first: independent of the scene/gate checks below
     testCompleteHUDAndGated();
     testStartFight();
     testSupportHints();

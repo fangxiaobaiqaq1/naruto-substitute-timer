@@ -40,7 +40,8 @@ func loadLocalRGBA(t *testing.T, path string) *image.RGBA {
 // verified complete title can move that side's sampling row. This capture
 // verifies BOTH complete titles (the training partner also runs
 // 波风水门[九喇嘛连结]); a row without a verified variant stays neutral, as
-// covered by TestEnergyGaugeOffsetIsExactVariantBound.
+// covered by TestEnergyGaugeOffsetIsExactVariantBound (the guarded identity-free
+// re-read is separate: energy_gauge_test.go).
 func TestMinatoKyubiEnergyGaugeMovesOnlyVerifiedSideRow(t *testing.T) {
 	img := loadLocalRGBA(t, "../../../tmp/user-frames/minato-energy-training.png")
 	cfg, err := config.Load("../../../config.json")

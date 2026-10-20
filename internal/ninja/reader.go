@@ -97,11 +97,12 @@ func NewReaderWithAvatars(options AvatarOptions) *Reader {
 		{"sasuke_xiayin_duel", SasukeXiayin, 4, Xiayin, 9, false},
 		// User-provided native captures. These full-title templates establish
 		// a display identity; they retain the ordinary four-slot/default-color
-		// policy. Minato is the reviewed energy-gauge row-offset exception.
+		// policy. Minato is the reviewed energy-gauge row-offset exception;
+		// four slots let the tracker keep that row through brief title gaps.
 		{"itachi_hyakusen", ItachiHyakusen, 4, "", EnergyGaugeRowOffset, true},
 		// MuMu 1280x720 capture requires independent character HUD portrait evidence.
 		{"itachi_hyakusen_mumu", ItachiHyakusen, 4, "", EnergyGaugeRowOffset, true},
-		{"minato_kyubi", MinatoKyubi, 0, "", EnergyGaugeRowOffset, false},
+		{"minato_kyubi", MinatoKyubi, 4, "", EnergyGaugeRowOffset, false},
 		{"hashirama_edo", HashiramaEdo, 0, "", 0, false},
 		{"naruto_student", NarutoStudent, 0, "", 0, false},
 	} {
@@ -320,6 +321,9 @@ func avatarReadout(m AvatarMatch) Readout {
 	case normalizeAvatarName(ItachiHyakusen):
 		// Corpus ID 920541 is 宇智波鼬[百战]. Only that exact current avatar
 		// variant gets the ordinary four-slot row and its 13px energy shift.
+		out.Slots, out.RowOffsetY = 4, EnergyGaugeRowOffset
+	case normalizeAvatarName(MinatoKyubi):
+		// Catalog ID 90316 is exactly 波风水门[九喇嘛连结]: same energy row.
 		out.Slots, out.RowOffsetY = 4, EnergyGaugeRowOffset
 	}
 	return out

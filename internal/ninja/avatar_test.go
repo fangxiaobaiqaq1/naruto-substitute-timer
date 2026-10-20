@@ -322,6 +322,37 @@ func TestHyakusenItachiOffsetRequiresExactCurrentAvatar(t *testing.T) {
 	}
 }
 
+// Catalog 90316 is the exact 九喇嘛连结 form: a strong current portrait alone
+// supplies its energy row; other Minato forms stay display-only.
+func TestMinatoKyubiOffsetRequiresExactCurrentAvatar(t *testing.T) {
+	all, err := loadEmbeddedAvatarCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"90316", "90011", "90101", "920111"} {
+		e := all.byID[id]
+		portrait, _, err := image.Decode(bytes.NewReader(e.data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		img := image.NewRGBA(portrait.Bounds())
+		draw.Draw(img, img.Bounds(), portrait, portrait.Bounds().Min, draw.Src)
+		r := &Reader{avatars: &avatarCatalog{entries: []*avatarEntry{e}, byID: map[string]*avatarEntry{id: e}}}
+		var tracker AvatarTracker
+		got := r.ResolveEvidence(img, image.Rectangle{}, img.Bounds(), 1, Readout{}, &tracker, time.Unix(1, 0))
+		want := Readout{Name: e.name, AvatarName: e.name, AvatarScore: got.AvatarScore}
+		if id == "90316" {
+			want.Slots, want.RowOffsetY = 4, EnergyGaugeRowOffset
+		}
+		if got != want || (id == "90316") != (e.name == MinatoKyubi) {
+			t.Fatalf("%s: %+v, want %+v", id, got, want)
+		}
+	}
+	if !avatarVariantPolicy(MinatoKyubi) {
+		t.Fatal("a geometry policy must not use the relaxed avatar margin")
+	}
+}
+
 func BenchmarkAvatarMatch(b *testing.B) {
 	c, err := loadEmbeddedAvatarCatalog()
 	if err != nil {
