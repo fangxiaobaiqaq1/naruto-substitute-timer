@@ -3,6 +3,7 @@ package com.narutotimer.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
@@ -23,8 +24,23 @@ import kotlin.math.min
  * One finger edits the selected box: inside = move, edges/corners (generous outer
  * margin) = resize, elsewhere = draw a new box. A tap on another box selects it. Two
  * fingers zoom and pan; a double tap toggles zoom. Edits are reported on finger up.
+ *
+ * Under the boxes, [autoRegions] shows what the engine actually used on this frame (thin
+ * dashed white, not editable): sampled bead centres, the name search rect and the avatar
+ * window of each side. A box marked automatic is labelled 「…（自动）」.
  */
 class CalibrationView(context: Context) : View(context) {
+    /**
+     * The engine's regions on this frame (docs/区域校准.md 每帧几何) in frame fractions; index 0
+     * left, 1 right. Rects may reach past the frame (the avatar window often does).
+     */
+    class AutoRegions(
+        /** Sampled bead centres per side: x0, y0, x1, y1, … */
+        val beads: Array<FloatArray>,
+        val names: Array<RectF?>,
+        val avatars: Array<RectF?>,
+    )
+
     interface Listener {
         /** A box was drawn, moved or resized. */
         fun onBoxEdited(index: Int) {}
@@ -39,6 +55,21 @@ class CalibrationView(context: Context) : View(context) {
         private set
 
     private val boxes = arrayOfNulls<RectF>(COUNT)
+    /** The box shows the automatic position (label 「…（自动）」). */
+    private val automatic = BooleanArray(COUNT)
+
+    var autoRegions: AutoRegions? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /** 「显示自动识别区域」 */
+    var showAuto = true
+        set(value) {
+            field = value
+            invalidate()
+        }
 
     var selected = 0
         set(value) {
@@ -93,6 +124,16 @@ class CalibrationView(context: Context) : View(context) {
     private val labelMetrics = Paint.FontMetrics()
     private val screen = RectF()
     private val pill = RectF()
+    private val autoStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.BUTT
+    }
+    private val autoDash = DashPathEffect(floatArrayOf(5f * density, 3.5f * density), 0f)
+    private val autoLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = sp(9.5f)
+        color = AUTO
+    }
+    private var autoLines = FloatArray(0)
 
     fun setImage(bitmap: Bitmap?) {
         image = bitmap
@@ -102,8 +143,10 @@ class CalibrationView(context: Context) : View(context) {
 
     fun box(index: Int): RectF? = boxes[index]?.let { RectF(it) }
 
-    fun setBox(index: Int, rect: RectF?) {
+    /** [automatic]: the box is the automatic position, labelled 「…（自动）」. */
+    fun setBox(index: Int, rect: RectF?, automatic: Boolean = false) {
         boxes[index] = rect?.let { RectF(it) }
+        this.automatic[index] = automatic && rect != null
         updateExclusion()
         invalidate()
     }
@@ -396,8 +439,102 @@ class CalibrationView(context: Context) : View(context) {
         stroke.color = Ui.OUTLINE
         stroke.strokeWidth = density
         canvas.drawRect(tx, ty, tx + b.width * scale, ty + b.height * scale, stroke)
+        if (showAuto) drawAuto(canvas, b)
         for (i in 0 until COUNT) if (i != selected) drawBox(canvas, i, false)
         drawBox(canvas, selected, true)
+    }
+
+    // ---- Automatic regions (what the engine used; not editable) -------------
+
+    private fun drawAuto(canvas: Canvas, b: Bitmap) {
+        val a = autoRegions ?: return
+        // Clipped to the frame: the engine crops to it too.
+        val l = max(tx, 0f)
+        val t = max(ty, 0f)
+        val r = min(tx + b.width * scale, width.toFloat())
+        val bottom = min(ty + b.height * scale, height.toFloat())
+        if (r <= l || bottom <= t) return
+        canvas.save()
+        canvas.clipRect(l, t, r, bottom)
+        for (side in 0 until 2) {
+            a.names.getOrNull(side)?.let { dashedRect(canvas, toScreen(it, screen)) }
+            a.avatars.getOrNull(side)?.let { dashedRect(canvas, toScreen(it, screen)) }
+            a.beads.getOrNull(side)?.let { drawAutoBeads(canvas, it) }
+        }
+        for (side in 0 until 2) {
+            val right = side == 1
+            a.names.getOrNull(side)?.let { autoLabel(canvas, "名字", toScreen(it, screen), right, l, t, r, bottom) }
+            a.avatars.getOrNull(side)?.let { autoLabel(canvas, "头像窗口", toScreen(it, screen), right, l, t, r, bottom) }
+        }
+        canvas.restore()
+    }
+
+    /** Thin dashed white over a dark line: readable on bright and dark HUDs. */
+    private fun dashedRect(canvas: Canvas, s: RectF) {
+        autoStroke.pathEffect = null
+        autoStroke.color = AUTO_HALO
+        autoStroke.strokeWidth = 2.4f * density
+        canvas.drawRect(s, autoStroke)
+        autoStroke.pathEffect = autoDash
+        autoStroke.color = AUTO
+        autoStroke.strokeWidth = 1.1f * density
+        canvas.drawRect(s, autoStroke)
+        autoStroke.pathEffect = null
+    }
+
+    /** Open crosshairs on the sampled pixels: the centre stays visible for the box's own dots. */
+    private fun drawAutoBeads(canvas: Canvas, beads: FloatArray) {
+        val b = image ?: return
+        val n = beads.size / 2
+        if (n == 0) return
+        var pitch = Float.MAX_VALUE
+        for (k in 1 until n) {
+            val d = hypot(
+                (beads[2 * k] - beads[2 * k - 2]) * b.width * scale,
+                (beads[2 * k + 1] - beads[2 * k - 1]) * b.height * scale,
+            )
+            if (d > 0f) pitch = min(pitch, d)
+        }
+        // A third of the pitch: neighbours stay apart at any zoom, the bead itself stays visible.
+        val outer = if (pitch == Float.MAX_VALUE) 6f * density else (pitch * 0.36f).coerceIn(3f * density, 16f * density)
+        val inner = outer * 0.4f
+        if (autoLines.size < n * 16) autoLines = FloatArray(n * 16)
+        val lines = autoLines
+        for (k in 0 until n) {
+            val cx = sx(beads[2 * k])
+            val cy = sy(beads[2 * k + 1])
+            val o = k * 16
+            lines[o] = cx - outer; lines[o + 1] = cy; lines[o + 2] = cx - inner; lines[o + 3] = cy
+            lines[o + 4] = cx + inner; lines[o + 5] = cy; lines[o + 6] = cx + outer; lines[o + 7] = cy
+            lines[o + 8] = cx; lines[o + 9] = cy - outer; lines[o + 10] = cx; lines[o + 11] = cy - inner
+            lines[o + 12] = cx; lines[o + 13] = cy + inner; lines[o + 14] = cx; lines[o + 15] = cy + outer
+        }
+        autoStroke.color = AUTO_HALO
+        autoStroke.strokeWidth = 2.8f * density
+        canvas.drawLines(lines, 0, n * 16, autoStroke)
+        autoStroke.color = AUTO
+        autoStroke.strokeWidth = 1.2f * density
+        canvas.drawLines(lines, 0, n * 16, autoStroke)
+    }
+
+    /** Small label inside the region's top corner (outer corner of each side), kept on the visible frame. */
+    private fun autoLabel(
+        canvas: Canvas, text: String, s: RectF, alignRight: Boolean,
+        l: Float, t: Float, r: Float, bottom: Float,
+    ) {
+        if (s.right < l || s.left > r || s.bottom < t || s.top > bottom) return
+        val padX = 3.5f * density
+        val padY = 1.5f * density
+        val inset = 2f * density
+        val fm = labelMetrics.also { autoLabelPaint.getFontMetrics(it) }
+        val w = autoLabelPaint.measureText(text) + 2 * padX
+        val h = fm.descent - fm.ascent + 2 * padY
+        val x = clamp(if (alignRight) s.right - inset - w else s.left + inset, l + inset, r - inset - w)
+        val y = clamp(s.top + inset, t + inset, bottom - inset - h)
+        pill.set(x, y, x + w, y + h)
+        fill.color = AUTO_LABEL_BG
+        canvas.drawRoundRect(pill, 3f * density, 3f * density, fill)
+        canvas.drawText(text, x + padX, y + padY - fm.ascent, autoLabelPaint)
     }
 
     private fun drawBox(canvas: Canvas, i: Int, active: Boolean) {
@@ -420,7 +557,7 @@ class CalibrationView(context: Context) : View(context) {
         stroke.strokeWidth = w
         drawOutset(canvas, s, w / 2f)
         if (i == LEFT_BEADS || i == RIGHT_BEADS) drawBeadCentres(canvas, i, s, color)
-        drawLabel(canvas, LABELS[i], s, color, w + halo)
+        drawLabel(canvas, if (automatic[i]) LABELS[i] + "（自动）" else LABELS[i], s, color, w + halo)
         if (active) drawHandles(canvas, s, color, w + halo)
     }
 
@@ -513,6 +650,10 @@ class CalibrationView(context: Context) : View(context) {
 
         private const val HALO = 0xB3000000.toInt()
         private const val LABEL_TEXT = 0xFF03161D.toInt()
+        /** Automatic regions: semi-transparent white on a dark line, never a box colour. */
+        private const val AUTO = 0xE6FFFFFF.toInt()
+        private const val AUTO_HALO = 0x8C000000.toInt()
+        private const val AUTO_LABEL_BG = 0x99000000.toInt()
         private const val MODE_NONE = 0
         private const val MODE_DRAW = 1
         private const val MODE_MOVE = 2
