@@ -31,6 +31,7 @@ import com.narutotimer.tracker.OverlayState
 import com.narutotimer.tracker.Session
 import com.narutotimer.ui.CalibrationActivity
 import com.narutotimer.ui.ProjectionPermissionActivity
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -65,6 +66,14 @@ class OverlayController(
     private var forceRender = true
     private var lastState: OverlayState? = null
     private var appliedOpacity = -1f
+    // Outside a fight (and with the settings panel closed) the 33 ms revision poll is off: Session
+    // pushes each revision change ([onRevision]) and the loop only wakes for the clock deadline.
+    // In a fight results arrive at up to 60 Hz, so polling coalesces them as before.
+    @Volatile private var revisionPush = false
+    private val revisionPosted = AtomicBoolean(false)
+    private val onRevision: () -> Unit = {
+        if (revisionPush && revisionPosted.compareAndSet(false, true)) main.post(tick)
+    }
     private var lastErrorLogAt = 0L
     private var lastStatusAt = 0L
 
@@ -117,6 +126,7 @@ class OverlayController(
         view = v
         showing = true
         settings.addListener(settingsListener)
+        session.revisionListener = onRevision
         forceRender = true
         tickNow()
     }
@@ -127,6 +137,8 @@ class OverlayController(
         stopCalibrationCapture()
         closeSettings()
         showing = false
+        revisionPush = false
+        if (session.revisionListener === onRevision) session.revisionListener = null
         main.removeCallbacks(tick)
         main.removeCallbacks(autoHide)
         settings.removeListener(settingsListener)
@@ -237,6 +249,7 @@ class OverlayController(
 
     private fun tickNow() {
         main.removeCallbacks(tick)
+        revisionPosted.set(false)
         if (!showing) return
         val now = System.nanoTime()
         val revision = session.revision
@@ -256,7 +269,15 @@ class OverlayController(
         if (settingsVisible && SystemClock.uptimeMillis() - lastStatusAt >= STATUS_REFRESH_MS) {
             updateSettingsStatus()
         }
-        val wait = min(clockDeadline - now, REVISION_POLL_NANOS)
+        val push = !settingsVisible && !session.fighting
+        revisionPush = push
+        // A change made before the push was switched on would otherwise wait for the deadline.
+        if (push && session.revision != lastSessionRevision) {
+            main.post(tick)
+            return
+        }
+        val untilClock = clockDeadline - now
+        val wait = (if (push) untilClock else min(untilClock, REVISION_POLL_NANOS))
             .coerceAtLeast(MIN_TICK_NANOS)
         main.postDelayed(tick, (wait + 999_999) / 1_000_000)
     }

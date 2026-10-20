@@ -99,6 +99,12 @@ class Session(
     @Volatile var revision: Long = 0L
         private set
 
+    /**
+     * Called after every [revision] change, on the mutating thread with the session lock held, so
+     * it must only schedule work (OverlayController posts a refresh while it is not polling).
+     */
+    @Volatile var revisionListener: (() -> Unit)? = null
+
     val fighting: Boolean get() = synchronized(lock) { isFighting }
     val side: String get() = synchronized(lock) { effectiveSideLocked() }
 
@@ -627,6 +633,7 @@ class Session(
     private fun bump() {
         revisionState++
         revision = revisionState
+        revisionListener?.invoke()
     }
 
     companion object {
