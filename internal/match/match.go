@@ -205,11 +205,20 @@ func ToGray(src image.Image) *image.Gray {
 		// a cropped HUD ROI is converted from its own current pixels, not from
 		// the top-left of the parent frame.
 		xoff, yoff := b.Min.X-rgba.Rect.Min.X, b.Min.Y-rgba.Rect.Min.Y
-		for y := 0; y < b.Dy(); y++ {
+		w, h := b.Dx(), b.Dy()
+		done := 0 // leading columns converted by the SIMD rows
+		if w4 := w &^ 3; grayRows != nil && w4 > 0 && h > 0 && xoff >= 0 && yoff >= 0 {
+			first := yoff*rgba.Stride + xoff*4
+			if last := first + (h-1)*rgba.Stride + w4*4; last <= len(rgba.Pix) && rgba.Stride >= w4*4 {
+				grayRows(&out.Pix[0], out.Stride, &rgba.Pix[first], rgba.Stride, w4, h)
+				done = w4
+			}
+		}
+		for y := 0; y < h; y++ {
 			start := (y+yoff)*rgba.Stride + xoff*4
-			srcRow := rgba.Pix[start : start+b.Dx()*4]
-			dstRow := out.Pix[y*out.Stride : y*out.Stride+b.Dx()]
-			for x := range dstRow {
+			srcRow := rgba.Pix[start : start+w*4]
+			dstRow := out.Pix[y*out.Stride : y*out.Stride+w]
+			for x := done; x < len(dstRow); x++ {
 				i := x * 4
 				dstRow[x] = uint8((299*uint32(srcRow[i]) + 587*uint32(srcRow[i+1]) + 114*uint32(srcRow[i+2]) + 500) / 1000)
 			}

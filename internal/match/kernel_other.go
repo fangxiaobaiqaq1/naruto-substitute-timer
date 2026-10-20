@@ -6,4 +6,5 @@ package match
 var (
 	nccKernel     nccKernelFunc
 	nccKernelName = "go"
+	grayRows      func(dst *byte, dstStride int, src *byte, srcStride int, w4, h int)
 )
