@@ -831,11 +831,15 @@ func (s *session) captureOnce() {
 		_, rightBefore := s.right.LastEvent()
 		s.observeBeads(f)
 		s.traceConfirmed(trace, leftBefore, rightBefore, time.Now())
-		lc, rc := countReady(f.Beads)
-		s.debugf("fight=%v scene=%s hold=%v beads L=%d R=%d side=%s leftCD=%s rightCD=%s",
-			f.Fighting, f.Scene, f.Hold, lc, rc, s.side,
-			timerapp.FormatCD(s.left.Remaining(f.CapturedAt)),
-			timerapp.FormatCD(s.right.Remaining(f.CapturedAt)))
+		// Formatting the debug line costs allocations on every fighting
+		// frame; build it only when debug output is on.
+		if s.cfg.DebugOn() {
+			lc, rc := countReady(f.Beads)
+			s.debugf("fight=%v scene=%s hold=%v beads L=%d R=%d side=%s leftCD=%s rightCD=%s",
+				f.Fighting, f.Scene, f.Hold, lc, rc, s.side,
+				timerapp.FormatCD(s.left.Remaining(f.CapturedAt)),
+				timerapp.FormatCD(s.right.Remaining(f.CapturedAt)))
+		}
 	}
 	dump := s.dumpNext
 	s.dumpNext = false

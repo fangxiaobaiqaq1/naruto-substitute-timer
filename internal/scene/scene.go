@@ -204,7 +204,7 @@ func Load(cfg config.Config) (*Catalog, error) {
 		refH = detect.LogicHeight
 	}
 	dir := filepath.Dir(path)
-	readGray := func(name string) (*image.Gray, error) {
+	decodeGray := func(name string) (*image.Gray, error) {
 		if !embedded {
 			return loadGray(filepath.Join(dir, name))
 		}
@@ -217,6 +217,21 @@ func Load(cfg config.Config) (*Catalog, error) {
 			return nil, err
 		}
 		return match.ToGray(img), nil
+	}
+	// Several manifest entries share one image or mask file (scale variants);
+	// each file is decoded once and the immutable gray image is shared.
+	type decoded struct {
+		gray *image.Gray
+		err  error
+	}
+	files := map[string]decoded{}
+	readGray := func(name string) (*image.Gray, error) {
+		if d, ok := files[name]; ok {
+			return d.gray, d.err
+		}
+		gray, err := decodeGray(name)
+		files[name] = decoded{gray, err}
+		return gray, err
 	}
 	out := &Catalog{
 		minimumRegions: man.MinimumRegions,

@@ -87,6 +87,8 @@ type Engine struct {
 	pausedAt              time.Time // Nonzero only during a bounded same-scene hold.
 	retryAt               time.Time // backend failure, independent of scene generation
 	sides                 [2]sideState
+	names_                *nameLayout // cached for e.cfg.Layout; nil = rebuild
+	namesBad              bool        // e.cfg.Layout has an invalid content mode
 	status, lastError     string
 	jobs                  chan job
 	results               chan completion
@@ -214,6 +216,7 @@ func (e *Engine) SetCalibration(c *config.RegionCalibration) {
 	}
 	e.mu.Lock()
 	e.cfg.Layout.Calibration = c
+	e.names_, e.namesBad = nil, false
 	e.invalidate()
 	e.mu.Unlock()
 	if inner, ok := e.inner.(engine.Calibrator); ok {
@@ -259,7 +262,7 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	var regions [2]image.Rectangle
 	if active {
 		var ok bool
-		regions, ok = nameRegions(img, e.cfg.Layout, res.LayoutProfile)
+		regions, ok = e.nameRegions(img, res.LayoutProfile)
 		active = ok
 	}
 	if !active {
@@ -424,6 +427,19 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		res.TextError = e.lastError
 	}
 	return res
+}
+
+// nameRegions is nameRegions(img, e.cfg.Layout, profile) with the layout
+// built once per configuration (caller holds mu).
+func (e *Engine) nameRegions(img *image.RGBA, profile string) ([2]image.Rectangle, bool) {
+	if e.names_ == nil && !e.namesBad {
+		e.names_, _ = newNameLayout(e.cfg.Layout)
+		e.namesBad = e.names_ == nil
+	}
+	if e.names_ == nil {
+		return [2]image.Rectangle{}, false
+	}
+	return e.names_.regions(img, profile)
 }
 
 func (e *Engine) Close() error {
