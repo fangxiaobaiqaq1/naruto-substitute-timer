@@ -252,7 +252,12 @@ void testMatch(std::mt19937& rng) {
     const auto kernels = nt::match::NCCKernels();
     const std::string original = nt::match::NCCKernel();
     for (int iter = 0; iter < 600; ++iter) {
-        const int iw = 1 + static_cast<int>(rng() % 160), ih = 1 + static_cast<int>(rng() % 120);
+        int iw = 1 + static_cast<int>(rng() % 160), ih = 1 + static_cast<int>(rng() % 120);
+        if (iter % 60 == 0) {
+            // Large search areas take the parallel prefix / parallel scan paths.
+            iw = 300 + static_cast<int>(rng() % 120);
+            ih = 230 + static_cast<int>(rng() % 60);
+        }
         const nt::Point origin(static_cast<int>(rng() % 50) - 25, static_cast<int>(rng() % 50) - 25);
         nt::Gray frame = nt::Gray::New(nt::MakeRect(0, 0, iw, ih));
         fillGray(frame, rng, iter % 7 == 0 ? 1 : (iter % 3 == 0 ? 2 : 0));

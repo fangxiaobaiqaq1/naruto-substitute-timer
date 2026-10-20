@@ -16,6 +16,7 @@
 #include <cstring>
 
 #include "nt/match.h"
+#include "nt/parallel.h"
 #include "ncc_dot.h"
 
 #if defined(__aarch64__)
@@ -118,20 +119,32 @@ void newGrayPrefix(grayPrefix& g, const nt::Gray& img, int x0, int y0, int w, in
         g.sum.resize(n);
         g.square.resize(n);
     }
-    for (int y = 0; y < h; ++y) {
-        const uint8_t* row = img.Pix + static_cast<ptrdiff_t>(y0 + y) * img.Stride + x0;
-        uint32_t* sums = g.sum.data() + static_cast<size_t>(y) * static_cast<size_t>(w + 1);
-        uint32_t* squares = g.square.data() + static_cast<size_t>(y) * static_cast<size_t>(w + 1);
-        uint32_t s = 0, q = 0;
-        sums[0] = 0;
-        squares[0] = 0;
-        for (int x = 0; x < w; ++x) {
-            const uint32_t v = row[x];
-            s += v;
-            q += v * v;
-            sums[x + 1] = s;
-            squares[x + 1] = q;
+    uint32_t* sumData = g.sum.data();
+    uint32_t* squareData = g.square.data();
+    auto rows = [&](int ya, int yb) {
+        for (int y = ya; y < yb; ++y) {
+            const uint8_t* row = img.Pix + static_cast<ptrdiff_t>(y0 + y) * img.Stride + x0;
+            uint32_t* sums = sumData + static_cast<size_t>(y) * static_cast<size_t>(w + 1);
+            uint32_t* squares = squareData + static_cast<size_t>(y) * static_cast<size_t>(w + 1);
+            uint32_t s = 0, q = 0;
+            sums[0] = 0;
+            squares[0] = 0;
+            for (int x = 0; x < w; ++x) {
+                const uint32_t v = row[x];
+                s += v;
+                q += v * v;
+                sums[x + 1] = s;
+                squares[x + 1] = q;
+            }
         }
+    };
+    // Rows are independent: a large search area (a wide screen region) is
+    // summed in parallel bands; small ones (avatar/name windows) stay inline.
+    if (static_cast<int64_t>(w) * h >= (int64_t{1} << 16) && h >= 8) {
+        constexpr int bands = 4;
+        ParallelFor(bands, [&](int b) { rows(h * b / bands, h * (b + 1) / bands); });
+    } else {
+        rows(0, h);
     }
 }
 

@@ -131,6 +131,14 @@ hit bestHit(const RGBA* img, const detect::ContentArea& ca, const config::Normal
     const Rect sb = search.Bounds();
     const double hudScale = ca.HUDScale(detect::LogicWidth, detect::LogicHeight);
     match::NCC ncc;
+    // Every query below scans sb or a window inside it on this gray: share one
+    // set of prefix sums (exact integers; see match::Query::Prefix).
+    thread_local match::grayPrefix searchPrefix;
+    const match::grayPrefix* prefix = nullptr;
+    if (gray.Bounds().Dx() <= match::maxDotRun) {
+        match::newGrayPrefix(searchPrefix, gray, 0, 0, gray.Bounds().Dx(), gray.Bounds().Dy());
+        prefix = &searchPrefix;
+    }
     for (const auto& n : names) {
         if (!n.Image) continue;
         int tw = static_cast<int>(std::round(static_cast<double>(n.Image->Width) * hudScale * scale));
@@ -147,6 +155,7 @@ hit bestHit(const RGBA* img, const detect::ContentArea& ca, const config::Normal
         q.ROI = sb;
         q.Template = &templ;
         q.Mask = maskPtr(mask);
+        q.Prefix = prefix;
         match::Score score;
         bool ok = ncc.Match(q, score);
         // Preserve the original full-patch path where downsampling leaves too
@@ -157,6 +166,7 @@ hit bestHit(const RGBA* img, const detect::ContentArea& ca, const config::Normal
             fq.Gray = &gray;
             fq.ROI = sb;
             fq.Template = &templ;
+            fq.Prefix = prefix;
             match::Score full;
             bool fullOk = ncc.Match(fq, full);
             if (fullOk && (!ok || full.Value > score.Value)) {
@@ -181,6 +191,7 @@ hit bestHit(const RGBA* img, const detect::ContentArea& ca, const config::Normal
                     rq.ROI = r;
                     rq.Template = &adjusted;
                     rq.Mask = maskPtr(adjustedMask);
+                    rq.Prefix = prefix;
                     match::Score refined;
                     if (ncc.Match(rq, refined) && refined.Value > score.Value) {
                         score = refined;

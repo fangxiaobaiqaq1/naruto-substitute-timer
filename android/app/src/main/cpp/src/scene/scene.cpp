@@ -619,11 +619,13 @@ engine::GateDecision Catalog::StartFight(const RGBA* img, const std::string& pro
 
 const std::vector<preparedTemplate>& Catalog::prepare(const detect::ContentArea& ca) {
     if (preparedValid && preparedArea == ca) return prepared_;
+    // Each template is scaled and prepared independently (pure), so a geometry
+    // change prepares them concurrently into their own slots.
     std::vector<preparedTemplate> out(templates.size());
-    for (size_t i = 0; i < templates.size(); ++i) {
+    forEach(static_cast<int>(templates.size()), [&](int i) {
         out[i] = prepareOne(ca, templates[i]);
-        out[i].index = static_cast<int>(i);
-    }
+        out[i].index = i;
+    });
     preparedArea = ca;
     prepared_ = std::move(out);
     preparedValid = true;
