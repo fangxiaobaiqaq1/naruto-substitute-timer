@@ -3,10 +3,10 @@
 package rgb
 
 import (
-	"fmt"
 	"image"
 	"math"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -551,13 +551,19 @@ func knownCount(beads []engine.BeadInfo) int {
 	return n
 }
 
+// beadLabels are the L1..L6 / R1..R6 labels: no formatting per bean and frame.
+var beadLabels = [2][6]string{{"L1", "L2", "L3", "L4", "L5", "L6"}, {"R1", "R2", "R3", "R4", "R5", "R6"}}
+
 // label 生成豆子编号（L1..L6 / R1..R6）。
 func label(side engine.Side, idx int) string {
-	prefix := "L"
+	prefix, row := "L", 0
 	if side == engine.Right {
-		prefix = "R"
+		prefix, row = "R", 1
 	}
-	return fmt.Sprintf("%s%d", prefix, idx+1)
+	if idx >= 0 && idx < len(beadLabels[row]) {
+		return beadLabels[row][idx]
+	}
+	return prefix + strconv.Itoa(idx+1)
 }
 
 // locateBead 在标定附近找豆。亮豆中间有一条暗青装饰带，中心常被判暗，

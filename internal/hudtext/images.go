@@ -48,16 +48,37 @@ func (s sheet) read(ctx context.Context, reader ocr.Recognizer) ([]ocr.Line, err
 }
 
 func nameRegions(img *image.RGBA, cfg config.LayoutConfig, profile string) ([2]image.Rectangle, bool) {
-	var out [2]image.Rectangle
+	layout, ok := newNameLayout(cfg)
+	if !ok {
+		return [2]image.Rectangle{}, false
+	}
+	return layout.regions(img, profile)
+}
+
+// nameLayout is the immutable layout behind nameRegions. The live engine
+// keeps one per layout configuration instead of rebuilding it every frame.
+type nameLayout struct {
+	cfg    config.LayoutConfig
+	mode   detect.ContentMode
+	layout *engine.ConfiguredLayout
+}
+
+func newNameLayout(cfg config.LayoutConfig) (*nameLayout, bool) {
 	mode, err := detect.ParseMode(cfg.ContentMode)
 	if err != nil {
-		return out, false
+		return nil, false
 	}
+	return &nameLayout{cfg: cfg, mode: mode, layout: engine.NewConfiguredLayout(mode, cfg)}, true
+}
+
+func (n *nameLayout) regions(img *image.RGBA, profile string) ([2]image.Rectangle, bool) {
+	var out [2]image.Rectangle
+	cfg, mode := n.cfg, n.mode
 	ca, ok := detect.ResolveContentArea(img, mode, cfg.ReferenceWidth, cfg.ReferenceHeight, cfg.AutoAspectTolerance)
 	if !ok {
 		return out, false
 	}
-	positions := engine.NewConfiguredLayout(mode, cfg).PositionsInImage(profile, img, ca)
+	positions := n.layout.PositionsInImage(profile, img, ca)
 	if len(positions) != 2*cfg.BeadsPerSide || cfg.BeadsPerSide < 1 {
 		return out, false
 	}
