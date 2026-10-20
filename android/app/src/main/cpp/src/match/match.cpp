@@ -5,6 +5,7 @@
 // Package match 提供与游戏无关的模板匹配器。
 // 第一实现是灰度 NCC；以后可换哈希 / 其它 Matcher，场景门闩不用改。
 #include "nt/match.h"
+#include "nt/parallel.h"
 
 #include <algorithm>
 #include <cstring>
@@ -17,6 +18,10 @@ namespace {
 // 用 thread_local 缓冲等价复用（ParallelFor 的每个工作线程各自一份）。
 thread_local grayPrefix tlsPrefix;
 constexpr size_t kKeepPrefixBytes = static_cast<size_t>(1) << 20;
+// kParallelScanWork (positions x template pixels) splits one scan over the
+// pool: ~1 ms of single-thread NCC work. Smaller scans (every avatar job,
+// name strips, hint windows) stay on their caller, which is already parallel.
+constexpr int64_t kParallelScanWork = int64_t{3} << 20;
 }  // namespace
 
 // Match 在 ROI 内滑动模板，返回最高 NCC。
@@ -91,25 +96,66 @@ bool NCC::Match(const Query& q, Score& out) const {
     };
     grid done[2];
     int doneCount = 0;
+    auto skipped = [&](int x, int y) {
+        return (doneCount > 0 && done[0].has(x, y)) || (doneCount > 1 && done[1].has(x, y));
+    };
+    // Rows wider than maxDotRun cannot use uint32 prefix sums (never in practice).
+    auto value = [&](int x, int y) {
+        return pre != nullptr ? prepared->at(*gray, *pre, x - origin.X, y - origin.Y)
+                              : prepared->atDirect(*gray, x - origin.X, y - origin.Y);
+    };
+    const int64_t templatePixels = static_cast<int64_t>(prepared->data_.size());
     auto scan = [&](int x0, int y0, int x1, int y1, int st) {
         if (st < 1) st = 1;
         if (x0 < roi.Min.X) x0 = roi.Min.X;
         if (y0 < roi.Min.Y) y0 = roi.Min.Y;
         if (x1 > roi.Max.X - tw) x1 = roi.Max.X - tw;
         if (y1 > roi.Max.Y - th) y1 = roi.Max.Y - th;
-        for (int y = y0; y <= y1; y += st) {
-            for (int x = x0; x <= x1; x += st) {
-                if ((doneCount > 0 && done[0].has(x, y)) || (doneCount > 1 && done[1].has(x, y))) continue;
-                // Rows wider than maxDotRun cannot use uint32 prefix sums (never in practice).
-                double v = pre != nullptr ? prepared->at(*gray, *pre, x - origin.X, y - origin.Y)
-                                          : prepared->atDirect(*gray, x - origin.X, y - origin.Y);
-                if (v > best.Value) {
-                    best.Value = v;
-                    best.Peak = Pt(x, y);
+        if (x0 > x1 || y0 > y1) return;
+        const int nx = (x1 - x0) / st + 1, ny = (y1 - y0) / st + 1;
+        if (ny >= 4 && static_cast<int64_t>(nx) * ny * templatePixels >= kParallelScanWork) {
+            // A large scan (a big control over a wide screen region): score the
+            // position rows on the pool into a buffer, then reduce here in the
+            // exact sequential order with the same strict '>' (first maximum wins).
+            thread_local std::vector<double> scanValues;
+            scanValues.resize(static_cast<size_t>(nx) * static_cast<size_t>(ny));
+            double* values = scanValues.data();
+            const int bands = std::min(ny, 8);
+            ParallelFor(bands, [&](int band) {
+                for (int j = ny * band / bands; j < ny * (band + 1) / bands; ++j) {
+                    const int y = y0 + j * st;
+                    for (int i = 0; i < nx; ++i) {
+                        const int x = x0 + i * st;
+                        if (!skipped(x, y)) values[static_cast<size_t>(j) * nx + i] = value(x, y);
+                    }
+                }
+            });
+            for (int j = 0; j < ny; ++j) {
+                const int y = y0 + j * st;
+                for (int i = 0; i < nx; ++i) {
+                    const int x = x0 + i * st;
+                    if (skipped(x, y)) continue;
+                    const double v = values[static_cast<size_t>(j) * nx + i];
+                    if (v > best.Value) {
+                        best.Value = v;
+                        best.Peak = Pt(x, y);
+                    }
+                }
+            }
+            if (scanValues.capacity() > (static_cast<size_t>(32) << 10)) scanValues = std::vector<double>();
+        } else {
+            for (int y = y0; y <= y1; y += st) {
+                for (int x = x0; x <= x1; x += st) {
+                    if (skipped(x, y)) continue;
+                    double v = value(x, y);
+                    if (v > best.Value) {
+                        best.Value = v;
+                        best.Peak = Pt(x, y);
+                    }
                 }
             }
         }
-        if (doneCount < 2 && x0 <= x1 && y0 <= y1) done[doneCount++] = grid{x0, y0, x1, y1, st};
+        if (doneCount < 2) done[doneCount++] = grid{x0, y0, x1, y1, st};
     };
     scan(roi.Min.X, roi.Min.Y, roi.Max.X - tw, roi.Max.Y - th, step);
     if (step > 1) {
