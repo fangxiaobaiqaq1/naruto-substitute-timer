@@ -3,8 +3,10 @@
 package ocr
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -72,9 +74,15 @@ func prepareLocalRuntime() (string, *runtimeModules, error) {
 			}
 			files[name] = data
 		}
+		// The directory name hashes each library's precomputed digest
+		// (runtimeDigests, tested against the files): the same name as
+		// hashing the embedded bytes, without reading ~19 MB per launch.
+		digest, err := hex.DecodeString(runtimeDigests[name])
+		if err != nil || len(digest) != sha256.Size {
+			return "", nil, fmt.Errorf("missing runtime digest for %s", name)
+		}
 		hash.Write([]byte(name))
-		digest := sha256.Sum256(files[name])
-		hash.Write(digest[:])
+		hash.Write(digest)
 	}
 	cache, err := os.UserCacheDir()
 	if err != nil {
@@ -139,9 +147,10 @@ func moduleFilename(h windows.Handle) (string, error) {
 }
 
 func ensureRuntimeFile(path string, data []byte) error {
-	digest := sha256.Sum256(data)
+	// A byte comparison verifies the cached copy exactly, without hashing it
+	// (and the embedded original) on every launch.
 	stored, err := os.ReadFile(path)
-	if err == nil && sha256.Sum256(stored) == digest {
+	if err == nil && bytes.Equal(stored, data) {
 		return nil
 	}
 	if err != nil && !os.IsNotExist(err) {
@@ -151,7 +160,7 @@ func ensureRuntimeFile(path string, data []byte) error {
 	if err := atomicRuntimeWrite(path, data); err != nil {
 		// A concurrent worker can win the atomic install and lock the correct DLL.
 		other, readErr := os.ReadFile(path)
-		if readErr == nil && sha256.Sum256(other) == digest {
+		if readErr == nil && bytes.Equal(other, data) {
 			return nil
 		}
 		return err
