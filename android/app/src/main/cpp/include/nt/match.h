@@ -130,6 +130,7 @@ nt::Gray ToGray(const nt::RGBA* src);
 nt::Gray ToGray(const nt::Gray* src);
 // ToGray(image.Image) 对解码 PNG 的通用路径：At().RGBA() 预乘后再算亮度。
 // 等价于 Go 对 png.Decode 结果调用 match.ToGray。输出原点 (0,0)。
+// 返回 AssetImage::Luma 的共享视图（注册时已算好）：只读，调用方不得写入。
 nt::Gray ToGrayAsset(const AssetImage& src);
 
 // ScaleGray 双线性缩放到指定尺寸。nil 返回 0x0。

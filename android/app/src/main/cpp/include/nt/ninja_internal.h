@@ -32,10 +32,13 @@ struct avatarIndexEntry {
 
 struct avatarEntry {
     std::string id, name, baseName;
-    std::shared_ptr<const AssetImage> data;  // Go: PNG 字节；这里是已解码像素，decode() 只做灰度/掩膜
+    // Go: PNG 字节；这里是注册时转换好的资源图（亮度 + alpha>=128 位图，见 nt/assets.h）。
+    std::shared_ptr<const AssetImage> data;
     // Go 的 16² thumb 从未被读取，Android 不再生成（省内存与加载时间）。
     Gray coarseGray, coarseMask;
-    Gray gray, mask;  // 懒计算（Go decode()）
+    // Go decode() 的灰度 = data->Luma 的共享视图。全分辨率脸部掩膜（alpha ∩ 菱形）不常驻：
+    // 模板缓存未命中时由 avatarFaceMask(*data) 现算（与原掩膜逐位相同）。
+    Gray gray;
 };
 
 // avatarTemplateKey keys the catalog's scaled-template cache: one entry at one
@@ -128,6 +131,8 @@ std::string avatarBaseName(const avatarIndexEntry& item);
 std::string avatarName(const avatarIndexEntry& item);
 // avatarFaceMask keeps alpha ∩ the inner diamond.
 Gray avatarFaceMask(const Rect& bounds, const Gray& alpha);
+// avatarFaceMask(src): the same mask from the asset's alpha >= 128 bits.
+Gray avatarFaceMask(const AssetImage& src);
 // avatarGrayMask：预乘亮度 + (a16 >= 0x8000) 掩膜。
 void avatarGrayMask(const AssetImage& src, Gray& gray, Gray& mask);
 Rect avatarAnchorRect(const Rect& roi, double scale);

@@ -10,6 +10,10 @@
 // 每个 PNG 还会附带一个文本 "<path>.sha256"：原始 PNG 文件字节的小写 SHA-256，
 // 供 avatars/index.json 的完整性校验（Go loadAvatarCatalog 的 sha256 检查）。
 //
+// 内存（docs/性能优化-android-native.md）：识别核心对资源图只用到 Go 语义的亮度（ToGrayAsset）与
+// alpha >= 128 掩膜（头像）。AddImage 当场算好这两样并丢掉 RGBA：每像素 4 字节 → 1 字节
+// （+ 有透明像素时 1 位）。亮度只算一次，引擎构建 / 校准重建直接共享，不再从 RGBA 重算。
+//
 // 线程安全：所有方法都加锁；image()/text() 返回共享所有权，调用方可长期持有。
 #pragma once
 
@@ -25,24 +29,28 @@
 
 namespace nt {
 
-// 一张解码后的资源图：紧凑、非预乘 RGBA8，stride = 4*Width，原点 (0,0)。
+// 一张资源图（原点 (0,0)）。注册时从非预乘 RGBA8 转换，之后不可变。
 struct AssetImage {
     int Width = 0;
     int Height = 0;
-    std::vector<uint8_t> Pixels;  // 非预乘 R,G,B,A
+    // Luma 是 Go 对 png.Decode 结果调用 match.ToGray 的灰度：NRGBA 预乘 16 位分量 >> 8 后的
+    // 整数亮度（GoLumaFromNRGBA；不透明像素即 8 位原值的亮度）。紧凑 stride = Width。
+    // 只读：复制视图共享同一块像素（match::ToGrayAsset 就返回它）。
+    Gray Luma;
+    // alpha >= 128 的像素位图（Go: color.NRGBA.RGBA() 的 a16 >= 0x8000），行优先，每行
+    // RowWords() 个 64 位字。空 = 所有像素都满足（例如不透明 PNG）。
+    std::vector<uint64_t> OpaqueBits;
 
-    // 只读视图（Bounds = (0,0)-(W,H)）。注意：这是 *非预乘* 像素，
-    // 转灰度必须用 match::ToGrayAsset（复刻 Go NRGBA 预乘路径），不能用 ToGray(RGBA)。
-    RGBA View() const {
-        return RGBA(const_cast<uint8_t*>(Pixels.data()), 4 * Width, MakeRect(0, 0, Width, Height));
+    size_t RowWords() const { return (static_cast<size_t>(Width) + 63) / 64; }
+    // Opaque：(x, y) 的 alpha >= 128（x,y 以 0 为原点且在范围内）。
+    bool Opaque(int x, int y) const {
+        if (OpaqueBits.empty()) return true;
+        const uint64_t word = OpaqueBits[static_cast<size_t>(y) * RowWords() + static_cast<size_t>(x) / 64];
+        return ((word >> (static_cast<unsigned>(x) % 64)) & 1u) != 0;
     }
-    // Go 通用路径 src.At(x,y).RGBA()，返回 16 位预乘分量（x,y 以 0 为原点）。
-    void RGBA16(int x, int y, uint32_t& r, uint32_t& g, uint32_t& b, uint32_t& a) const {
-        const uint8_t* p = Pixels.data() + (static_cast<size_t>(y) * Width + x) * 4;
-        r = GoNRGBAChannel16(p[0], p[3]);
-        g = GoNRGBAChannel16(p[1], p[3]);
-        b = GoNRGBAChannel16(p[2], p[3]);
-        a = GoAlpha16(p[3]);
+    // 常驻像素字节（诊断）。
+    size_t Bytes() const {
+        return static_cast<size_t>(Width) * static_cast<size_t>(Height) + OpaqueBits.size() * sizeof(uint64_t);
     }
 };
 
@@ -52,7 +60,7 @@ public:
 
     void Clear();
 
-    // rgba：非预乘 RGBA8，rowStride 为字节步长（>= 4*w）。会复制像素。
+    // rgba：非预乘 RGBA8，rowStride 为字节步长（>= 4*w）。转换成 AssetImage（不保留 rgba）。
     void AddImage(const std::string& path, int w, int h, const uint8_t* rgba, size_t rowStride);
     void AddText(const std::string& path, std::string text);
 
