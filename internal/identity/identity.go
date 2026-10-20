@@ -349,16 +349,17 @@ func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, 
 		if tw < 8 || th < 8 || tw > gray.Bounds().Dx() || th > gray.Bounds().Dy() {
 			continue
 		}
-		templ := match.ScaleGray(match.ToGray(n.Image), tw, th)
+		t := scaledNameTemplate(n.Image, tw, th)
+		templ, prepared := t.gray, t.full
 		var mask *image.Gray
 		if maxWidth > 0 {
-			mask = accountGlyphMask(templ)
+			mask, prepared = t.mask, t.masked
 		}
-		score, err := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: search.Bounds(), Template: templ, Mask: mask})
+		score, err := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: search.Bounds(), Template: templ, Mask: mask, Prepared: prepared})
 		// Preserve the original full-patch path where downsampling leaves too
 		// little glyph/outline detail for the mask. Neither threshold is lowered.
 		if mask != nil && (err != nil || score.Value < fightMinScore) {
-			full, fullErr := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: search.Bounds(), Template: templ})
+			full, fullErr := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: search.Bounds(), Template: templ, Prepared: t.full})
 			if fullErr == nil && (err != nil || full.Value > score.Value) {
 				score, err = full, nil
 			}
@@ -373,9 +374,9 @@ func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, 
 					if dw == 0 && dh == 0 {
 						continue
 					}
-					adjusted := match.ScaleGray(match.ToGray(n.Image), tw+dw, th+dh)
-					roi := image.Rectangle{Min: peak, Max: peak.Add(adjusted.Bounds().Size())}.Inset(-2).Intersect(search.Bounds())
-					refined, e := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: roi, Template: adjusted, Mask: accountGlyphMask(adjusted)})
+					adjusted := scaledNameTemplate(n.Image, tw+dw, th+dh)
+					roi := image.Rectangle{Min: peak, Max: peak.Add(adjusted.gray.Bounds().Size())}.Inset(-2).Intersect(search.Bounds())
+					refined, e := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: roi, Template: adjusted.gray, Mask: adjusted.mask, Prepared: adjusted.masked})
 					if e == nil && refined.Value > score.Value {
 						score = refined
 					}
@@ -387,6 +388,65 @@ func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, 
 		}
 	}
 	return best
+}
+
+// nameTemplate is what bestHit derives from one book image at one size: the
+// scaled gray template, its glyph mask and both prepared matchers. All are
+// pure functions of the image and the size.
+type nameTemplate struct {
+	gray, mask   *image.Gray
+	masked, full *match.PreparedNCC
+}
+
+type nameTemplateKey struct {
+	img  image.Image
+	w, h int
+}
+
+// nameTemplates memoizes nameTemplate across recognitions (every 500 ms per
+// confirmed scene), instead of rescaling every book image on each of them.
+// Book images are immutable once loaded; a reloaded book brings new images
+// and the bounded map is simply dropped when it grows past its cap.
+var nameTemplates struct {
+	sync.Mutex
+	m map[nameTemplateKey]*nameTemplate
+}
+
+const nameTemplateCap = 512
+
+// cacheNameTemplates lets tests compare against uncached preparation.
+var cacheNameTemplates = true
+
+func scaledNameTemplate(img image.Image, w, h int) *nameTemplate {
+	build := func() *nameTemplate {
+		gray := match.ScaleGray(match.ToGray(img), w, h)
+		mask := accountGlyphMask(gray)
+		return &nameTemplate{gray: gray, mask: mask, masked: match.PrepareNCC(gray, mask), full: match.PrepareNCC(gray, nil)}
+	}
+	// Only pointer images are comparable map keys with identity semantics.
+	switch img.(type) {
+	case *image.NRGBA, *image.RGBA, *image.Gray, *image.Paletted, *image.YCbCr, *image.NRGBA64, *image.RGBA64, *image.Gray16, *image.CMYK:
+	default:
+		return build()
+	}
+	if !cacheNameTemplates {
+		return build()
+	}
+	key := nameTemplateKey{img, w, h}
+	nameTemplates.Lock()
+	t, ok := nameTemplates.m[key]
+	nameTemplates.Unlock()
+	if ok {
+		return t
+	}
+	t = build()
+	nameTemplates.Lock()
+	if nameTemplates.m == nil || len(nameTemplates.m) >= nameTemplateCap {
+		nameTemplates.m = make(map[nameTemplateKey]*nameTemplate)
+	}
+	nameTemplates.m[key] = t
+	nameTemplates.Unlock()
+	return t
 }
 
 func mapRect(ca detect.ContentArea, r config.NormalizedRect, sides ...string) image.Rectangle {
