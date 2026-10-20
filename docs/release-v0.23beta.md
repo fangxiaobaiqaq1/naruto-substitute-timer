@@ -37,9 +37,31 @@
 - **新增**：记住完整浮窗和迷你窗口的位置，恢复时限制在可见显示器内（配置 `ui.windowPosition` / `ui.miniPosition`）。
 - **设置窗口**：常规页按卡片分组；重复打开设置不再重建窗口（原来会取消正在进行的更新下载和模拟器扫描）；窗口置顶即时生效；Ctrl+M 在设置窗口也可用；更新开关和更新源移到「关于与更新」；切换更新源后隐藏旧源的「发现新版本」；模拟器页重新扫描时保留尚未保存的选择；扫描线程不再读取界面输入框；禁用按钮有明显区分。
 
+## 三、实机反馈修复
+
+用户在真实 Windows 和手机上试用 `ui-refresh` 测试包后反馈的问题。
+
+### Windows 仅计时器
+
+- **点「退出」后两个窗口都在**：进入迷你时 `SetWindowFrameless` 保存了窗口样式，当时窗口可见，样式里带 `WS_VISIBLE`；退出时先 `Hide()`，再把保存的样式写回，`WS_VISIBLE` 把刚隐藏的迷你窗口又显示出来（停在最后一帧）。现在迷你窗口（本身就是无边框 splash 窗口）只改置顶，不再改样式；`SetWindowFrameless` 恢复样式时也保留当前可见性。按钮改名「退出迷你」（回到完整浮窗）。
+- **框大于实体**：原来窗口按 `miniWidth×miniHeight`（280×48）开，计时底板只有约 72×36 居中；另外为了能拉伸加了 `WS_THICKFRAME`。真机（Win10，125%）上系统会在整个窗口外画一圈细边框和阴影，而且边框吃掉客户区（318×38 的窗口只剩 302×22），底板和操作行被裁掉一截。现在窗口就是底板本身（展开时加上操作行），不再使用系统边框；只有圆角和右/下 3 单位的抓取带是扣色（透明、点击穿透）。
+- **调长宽**：底板右边缘 6 单位拖动调长度、下边缘调高度（数字按高度缩放 50%–400%），光标变为拉伸形状；不会小于文字。Fyne 只在指针「上一个位置」仍在控件上时才开始拖动（阈值 2 单位），从底板最外一列像素向外拖会先移出窗口、拖不动（真机上下边缘复现），所以拉伸带延伸到底板外 3 单位的扣色区。尺寸保存在新增的 `ui.miniSize`（Fyne 单位，缺省 = 贴合文字）；`miniWidth/miniHeight` 不再用于迷你窗口。设置里的「仅计时器贴合文字」勾选时忽略拖出的尺寸并隐藏拉伸边。底板最窄按「88.8」计，10.0 → 9.9 时窗口不跳。
+
+### 安卓
+
+- 计时卡片（完整/迷你）可以直接按住拖动，不用先点开；超过系统触摸阈值才算拖动，轻点仍打开操作栏。「调整位置」只高亮卡片。
+- 新增「卡片宽度」「卡片高度」（100%–300%，游戏内设置 → 外观，主界面高级设置），分别拉长/拉高卡片，文字大小仍由「悬浮窗大小」决定并居中；「恢复默认外观」一并重置。
+
 ## 测试包
 
-本地 `dist/ui-refresh/`（git 忽略，不提交）：
+实机反馈修复版 `dist/ui-fix/`（Tailscale 8778 端口，停止：`pkill -f "http.server 8778"`）：
+
+| 文件 | 说明 | SHA-256 |
+|---|---|---|
+| `timer-app.exe` | Windows x64，版本 `development-ui-fix` | `927e44c676b888a0520ffc4c23a2911e1df5a8710ec14c584f222787817f733e` |
+| `naruto-timer-universal-debug.apk` | 0.2.10（versionCode 30），同一调试签名，可覆盖安装 | `aeeee479bb986b1b6ca47bd451768336836d4b44e434c717d9698991a0db81fa` |
+
+上一版 `dist/ui-refresh/`（git 忽略，不提交）：
 
 | 文件 | 说明 | SHA-256 |
 |---|---|---|
@@ -51,15 +73,16 @@
 ## 验证范围
 
 - 安卓：在 Android 14 模拟器上实际运行，游戏截图作背景检查卡片各状态、迷你、操作行、位置调整、设置面板各页、录屏授权和主界面。倒计时各状态截图使用临时演示数据，演示代码已删除、未提交。
-- Windows：只做了交叉编译和软件渲染截图，**原生窗口行为（透明键、点击穿透、置顶、位置记忆、迷你样式）未在真实 Windows 上运行**。
+- Windows（`ui-refresh`）：只做了交叉编译和软件渲染截图，原生窗口行为未在真实 Windows 上运行。
+- Windows（`ui-fix`）：用户同意后经 SSH 在其 Win10（125%）桌面会话里自动运行：旧版复现「退出后两个窗口都可见」和外圈边框/内容被裁；探针程序证实「隐藏后写回保存的样式」会让 `IsWindowVisible` 变回 true，修复后保持隐藏。新版确认：无系统边框（窗口 94×47 = 客户区）、轻点展开/收起、右边缘拉长、「退出迷你」后只剩完整浮窗。下边缘拉高在真机上失败，归因为 Fyne 拖动起始规则，已加抓取带并用单测覆盖；抓取带版本未再上真机（模拟鼠标会抢用户鼠标，后续只请用户手动截图）。
+- 安卓（`ui-fix`）：模拟器上确认未点开时直接拖动会移动并保存位置、轻点仍打开操作栏、宽 180%/高 150% 的迷你和完整卡片内容居中。
 - Go：`./internal/ui ./internal/config ./internal/app ./internal/win32` 通过；失败项均为缺少私有 `inbox/` 截图的旧用例，以及 `cmd/timer-app` 的 `TestInstalledAppUsesUserDataAndPortableKeepsOwnConfig`（改动前在 Linux 上同样失败）。
 - 安卓生产 JNI 链路（`android/tools/chaincheck/run.sh`）：8 组普通场景和真实侠隐截图通过；后续合成特殊忍者部分在 `decoded profile: actual=duel expected=camp` 处中断，改动前已存在，与本次前端无关。
 
 ## 待用户实机确认
 
-1. Windows 仅计时器：底板外透明并可点击穿透到游戏，底板和按钮可点击/拖动；第一次进入迷你就有透明和置顶。
-2. Windows：退出迷你后完整浮窗保持置顶；重启后两个窗口回到上次位置。
-3. 安卓：卡片大小是否合适（默认 100%）；先点开再拖动的操作是否顺手；游戏内授权录屏流程；通知栏「停止识别」按钮。
+1. Windows 仅计时器：没有外圈边框；从底板最边上向右/向下拖都能拉伸，重启后尺寸和位置保留；「退出迷你」后只剩完整浮窗且保持置顶。
+2. 安卓：直接拖动对局中是否容易误移；宽度/高度滑条是否满足需要；游戏内授权录屏流程；通知栏「停止识别」按钮。
 
 ## 待办
 
@@ -91,5 +114,6 @@ gradle -p android :app:assembleDebug --offline --console=plain
 bash android/tools/chaincheck/run.sh
 ```
 
-- 本机模拟器：AVD `ui34`（Android 14 x86_64，系统镜像手动解压到 SDK 的 `system-images/android-34/default/x86_64`）。无窗口启动：`emulator -avd ui34 -no-window -no-audio -gpu swiftshader_indirect -no-snapshot`。注意 `uiautomator dump` 会重新绑定无障碍服务并关掉悬浮窗；模拟器里当前装的是改动前的旧 APK（用于对比截图），继续使用前先装新包。
+- 本机模拟器：AVD `ui34`（Android 14 x86_64，系统镜像手动解压到 SDK 的 `system-images/android-34/default/x86_64`）。无窗口启动：`emulator -avd ui34 -no-window -no-audio -gpu swiftshader_indirect -no-snapshot`。注意 `uiautomator dump` 会重新绑定无障碍服务并关掉悬浮窗；模拟器里当前装的是 `ui-fix` APK（卡片宽 180%、高 150%，完整模式）。轻点操作栏按钮要在同一条 adb 命令里完成，操作栏 5 秒后自动收起。
+- 真 Windows：`docs/内网SSH连接.md` 的主机有人在用。SSH 会话在 session 0，看不到桌面；用 `Register-ScheduledTask`（`-LogonType Interactive`，用户为当前登录者）才能在桌面会话里运行。不要用 `SetCursorPos`/`mouse_event` 模拟操作（会抢用户鼠标）；`PostMessage` 模拟的点击也不可靠（GLFW 按下时 `SetCapture`，会收到真实光标位置）。需要交互验证时请用户手动操作截图；只读样式/可见性的探针可以放在屏幕外运行。
 - 推送 GitHub 时 13302 出口出现 TLS 握手失败，改用 AGENTS.md 中的 2260 下载代理成功（凭据见 AGENTS.md，不写入仓库）。
