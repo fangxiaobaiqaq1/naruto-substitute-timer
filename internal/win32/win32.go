@@ -465,6 +465,9 @@ func SetWindowFrameless(hwnd uintptr, frameless bool, restore uintptr) (uintptr,
 	} else if next == 0 {
 		next = style | WSCaption
 	}
+	// The saved style was read while the window was shown: writing its
+	// WS_VISIBLE back would re-show a window hidden since then.
+	next = next&^WSVisible | style&WSVisible
 	if next != style {
 		ProcSetLastError.Call(0)
 		previous, _, callErr := ProcSetWindowLongPtrW.Call(hwnd, GWLStyle, next)

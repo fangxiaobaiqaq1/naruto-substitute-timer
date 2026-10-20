@@ -15,16 +15,26 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
+	"narutotimer/internal/config"
 	"narutotimer/internal/win32"
 )
 
 const (
-	minimumMiniOpacity      = 0.20
-	maximumMiniOpacity      = 1.00
-	minimumMiniWindowWidth  = 96
-	minimumMiniWindowHeight = 28
+	minimumMiniOpacity = 0.20
+	maximumMiniOpacity = 1.00
 	// miniClockText is the timer-only window's clock size at 100 %.
 	miniClockText = 22
+	// Clock padding inside the timer-only pill.
+	miniPadY, miniPadX = 3, 14
+	// miniEdgeSize is the grab strip on the pill's right and bottom edges.
+	miniEdgeSize = 6
+	// miniGrabMargin is a keyed-out (click-through) band past the pill that
+	// still belongs to the strips. Fyne starts a drag only if the pointer's
+	// previous position is on the strip, and drags under its 2-unit threshold
+	// would otherwise leave the window first when begun on the pill's edge.
+	miniGrabMargin = 3
+	// Clock scale range when the user drags the pill's height.
+	minimumMiniScale, maximumMiniScale = 0.5, 4.0
 	// Moving from the timer surface onto a hover button fires MouseOut before
 	// the button's MouseIn; the hide check runs after that hand-over.
 	miniHoverSettle = 80 * time.Millisecond
@@ -79,6 +89,42 @@ func (m *miniSurface) DragEnd() {
 		m.s.rememberMiniPosition()
 	}
 }
+
+// miniEdge stretches the timer-only pill from its right edge (width) or
+// bottom edge (height). The window has no native sizing frame: Windows draws
+// that frame around the whole window, larger than the pill.
+type miniEdge struct {
+	widget.BaseWidget
+	s        *session
+	vertical bool
+}
+
+func newMiniEdge(s *session, vertical bool) *miniEdge {
+	e := &miniEdge{s: s, vertical: vertical}
+	e.ExtendBaseWidget(e)
+	return e
+}
+
+func (e *miniEdge) CreateRenderer() fyne.WidgetRenderer {
+	r := canvas.NewRectangle(transparentColor)
+	r.SetMinSize(fyne.NewSize(miniEdgeSize+miniGrabMargin, miniEdgeSize+miniGrabMargin))
+	return widget.NewSimpleRenderer(r)
+}
+
+func (e *miniEdge) Cursor() desktop.Cursor {
+	if e.vertical {
+		return desktop.VResizeCursor
+	}
+	return desktop.HResizeCursor
+}
+
+// Dragged puts the edge under the pointer. Canvas coordinates suffice: a
+// right/bottom resize never moves the window's top-left corner.
+func (e *miniEdge) Dragged(ev *fyne.DragEvent) {
+	e.s.resizeDetachedMini(ev.AbsolutePosition, e.vertical)
+}
+
+func (e *miniEdge) DragEnd() { e.s.rememberMiniSize() }
 
 // miniButton keeps the controls up while the pointer rests on a button, even
 // though the surface underneath has already received MouseOut.
@@ -218,10 +264,6 @@ func (s *session) setupDetachedMiniWindow(a fyne.App) {
 	s.miniWin.SetPadded(false)
 	s.miniWin.SetFixedSize(false)
 	s.miniWin.SetContent(s.buildDetachedMiniContent())
-	s.mu.Lock()
-	width, height := s.cfg.UI.MiniWidth, s.cfg.UI.MiniHeight
-	s.mu.Unlock()
-	s.miniWin.Resize(fyne.NewSize(float32(max(minimumMiniWindowWidth, width)), float32(max(minimumMiniWindowHeight, height))))
 	s.miniWin.SetCloseIntercept(func() {
 		if s.isMini() {
 			showSettingsError(s.setMiniMode(false), s.win)
@@ -244,7 +286,8 @@ func (s *session) buildDetachedMiniContent() fyne.CanvasObject {
 	settings := newScaledMiniButton(s, "设置", s.openSettings, false)
 	swap := newScaledMiniButton(s, "换边", s.swapSide, false)
 	s.miniWindowBoth = newScaledMiniButton(s, "两边计时", s.toggleBothSides, false)
-	exit := newScaledMiniButton(s, "退出", s.toggleMini, true)
+	// It returns to the full overlay; quitting is the full window's close button.
+	exit := newScaledMiniButton(s, "退出迷你", s.toggleMini, true)
 	s.miniWindowButtons = []*scaledMiniButton{settings, swap, s.miniWindowBoth, exit}
 	buttons := container.NewGridWithColumns(4, settings, swap, s.miniWindowBoth, exit)
 	controlsBG := canvas.NewRectangle(panelBG)
@@ -254,17 +297,21 @@ func (s *session) buildDetachedMiniContent() fyne.CanvasObject {
 
 	// An opaque pill (not the key colour) behind the clock: readable over any
 	// game background, and the whole pill is clickable/draggable, not only the
-	// glyph strokes. Everything outside it stays keyed out and click-through.
-	pill := canvas.NewRectangle(panelBG)
-	pill.CornerRadius = 12
-	pill.StrokeColor = panelBorder
-	pill.StrokeWidth = 1
+	// glyph strokes. The window is exactly the pill (plus the open action
+	// row); only the rounded corners show the keyed-out canvas colour.
+	s.miniPill = canvas.NewRectangle(panelBG)
+	s.miniPill.CornerRadius = 12
+	s.miniPill.StrokeColor = panelBorder
+	s.miniPill.StrokeWidth = 1
 	s.miniWindowSurface = newMiniSurface(s)
-	status := container.NewStack(pill, container.New(layout.NewCustomPaddedLayout(3, 3, 14, 14), s.miniStatus), s.miniWindowSurface)
-	s.miniRoot = container.NewVBox(status, s.miniWindowControls)
-	// The mini window is a timer-only surface. Its native color key removes the
-	// Fyne canvas clear color around the text; controls still get their own panel.
-	return container.NewStack(canvas.NewRectangle(transparentColor), container.NewCenter(s.miniRoot))
+	clock := container.New(layout.NewCustomPaddedLayout(miniPadY, miniPadY, miniPadX, miniPadX), s.miniStatus)
+	s.miniPillBox = container.NewStack(s.miniPill, clock, s.miniWindowSurface)
+	s.miniEdges = container.NewStack(
+		container.NewHBox(layout.NewSpacer(), newMiniEdge(s, false)),
+		container.NewVBox(layout.NewSpacer(), newMiniEdge(s, true)))
+	pill := container.New(layout.NewCustomPaddedLayout(0, miniGrabMargin, 0, miniGrabMargin), s.miniPillBox)
+	s.miniRoot = container.NewBorder(nil, s.miniWindowControls, nil, nil, container.NewStack(pill, s.miniEdges))
+	return s.miniRoot
 }
 
 func (s *session) toggleDetachedMiniControls() {
@@ -280,16 +327,11 @@ func (s *session) setDetachedMiniExpanded(on bool) {
 	}
 	s.miniWindowExpanded = on
 	if on {
-		// Remember the collapsed size so closing the row puts the clock back.
-		s.miniCollapsedSize = s.miniWin.Canvas().Size()
 		s.miniWindowControls.Show()
 	} else {
 		s.miniWindowControls.Hide()
 	}
 	s.miniWindowControls.Refresh()
-	if !on && s.miniCollapsedSize.Width > 1 {
-		s.miniWin.Resize(s.miniCollapsedSize)
-	}
 	s.fitDetachedMiniWindow()
 }
 
@@ -603,49 +645,85 @@ func (s *session) setMiniFloating(on bool) error {
 	return err
 }
 
+// fitDetachedMiniWindow sizes the window to the pill (plus the open action
+// row and the thin click-through grab margin). A dragged pill size is kept,
+// never below the text; its height sets the clock scale.
 func (s *session) fitDetachedMiniWindow() {
 	if s.miniWin == nil || s.miniRoot == nil {
 		return
 	}
 	s.mu.Lock()
-	width, height := s.cfg.UI.MiniWidth, s.cfg.UI.MiniHeight
-	autoScale := s.cfg.UI.MiniAutoScale
+	want, auto := s.cfg.UI.MiniSize, s.cfg.UI.MiniAutoScale
 	s.mu.Unlock()
-	minimum := fyne.NewSize(float32(minimumMiniWindowWidth), float32(minimumMiniWindowHeight)).Max(s.miniRoot.MinSize())
-	current := s.miniWin.Canvas().Size()
-	if current.Width <= 1 || current.Height <= 1 {
-		initial := fyne.NewSize(float32(max(minimumMiniWindowWidth, width)), float32(max(minimumMiniWindowHeight, height)))
-		current = initial.Max(minimum)
-		s.miniWin.Resize(current)
+	pill, scale := fyne.Size{}, float32(1)
+	if !auto && want != nil && want.Width > 0 && want.Height > 0 {
+		pill = fyne.NewSize(want.Width, want.Height)
+		scale = float32(math.Min(maximumMiniScale, math.Max(minimumMiniScale, float64(pill.Height/s.miniNaturalHeight()))))
 	}
-	if autoScale {
-		if s.miniAdaptiveScale != 1 || s.miniAdaptiveScale == 0 {
-			s.setMiniContentScale(1)
-		}
-	} else if !s.miniWindowExpanded {
-		// The user's window size sets the scale; opening the action row only
-		// grows the window and must not shrink the clock.
-		scale := float32(math.Min(float64(current.Width/280), float64(current.Height/48)))
-		if scale < 0.75 {
-			scale = 0.75
-		}
-		if scale > 2.0 {
-			scale = 2.0
-		}
-		if math.Abs(float64(scale-s.miniAdaptiveScale)) > 0.01 || s.miniAdaptiveScale == 0 {
-			s.setMiniContentScale(scale)
-		}
+	if auto {
+		s.miniEdges.Hide()
+	} else {
+		s.miniEdges.Show()
 	}
-	minimum = fyne.NewSize(float32(minimumMiniWindowWidth), float32(minimumMiniWindowHeight)).Max(s.miniRoot.MinSize())
-	current = s.miniWin.Canvas().Size()
-	if current.Width < minimum.Width || current.Height < minimum.Height {
-		if current.Width < minimum.Width {
-			current.Width = minimum.Width
-		}
-		if current.Height < minimum.Height {
-			current.Height = minimum.Height
-		}
-		s.miniWin.Resize(current)
+	if math.Abs(float64(scale-s.miniAdaptiveScale)) > 0.01 {
+		s.setMiniContentScale(scale)
+	}
+	// Never narrower than any countdown, so 10.0 -> 9.9 does not jump.
+	clock := fyne.MeasureText("88.8", s.miniStatus.TextSize, s.miniStatus.TextStyle)
+	s.miniPill.SetMinSize(pill.Max(fyne.NewSize(clock.Width+2*miniPadX, 0)))
+	if size := s.miniRoot.MinSize(); size != s.miniWin.Canvas().Size() {
+		s.miniWin.Resize(size)
+	}
+}
+
+// miniNaturalHeight is the pill height at 100 %: one clock line plus padding.
+func (s *session) miniNaturalHeight() float32 {
+	return fyne.MeasureText("8", s.miniTextSize(miniClockText), fyne.TextStyle{Bold: true}).Height + 2*miniPadY
+}
+
+// miniShownSize is the collapsed pill as drawn: the dragged size, never below
+// the text.
+func (s *session) miniShownSize() config.ScreenSize {
+	shown := s.miniPillBox.MinSize()
+	return config.ScreenSize{Width: shown.Width, Height: shown.Height}
+}
+
+// resizeDetachedMini puts the dragged edge under the pointer; the other
+// dimension keeps the stored size, or the size shown now.
+func (s *session) resizeDetachedMini(at fyne.Position, vertical bool) {
+	if s.miniRoot == nil {
+		return
+	}
+	size := s.miniShownSize()
+	s.mu.Lock()
+	if s.cfg.UI.MiniSize != nil {
+		size = *s.cfg.UI.MiniSize
+	}
+	if vertical {
+		size.Height = at.Y + miniEdgeSize/2
+	} else {
+		size.Width = at.X + miniEdgeSize/2
+	}
+	s.cfg.UI.MiniSize = &size
+	s.mu.Unlock()
+	s.fitDetachedMiniWindow()
+}
+
+// rememberMiniSize saves the size as shown, so the next drag starts at the
+// visible edge even if this one went below the text.
+func (s *session) rememberMiniSize() {
+	if s.miniRoot == nil {
+		return
+	}
+	size := s.miniShownSize()
+	s.mu.Lock()
+	if s.cfg.UI.MiniSize != nil {
+		s.cfg.UI.MiniSize = &size
+	}
+	err := s.saveSettingsLocked()
+	s.mu.Unlock()
+	if err != nil {
+		s.debugf("save mini size: %v", err)
 	}
 }
 
@@ -670,6 +748,12 @@ func (s *session) nativeFloating(on, topmost bool) error {
 		return s.floatingHook(on)
 	}
 	return s.runNativeWindowHWND(target, func(hwnd uintptr) error {
+		if target == s.miniWin {
+			// Already a frameless splash window, resized by its own edges. A
+			// native sizing frame is drawn around the whole keyed window, and
+			// writing a saved style back re-showed it after Hide.
+			return win32.SetWindowTopmost(hwnd, on || topmost)
+		}
 		previous, err := win32.SetWindowFrameless(hwnd, on, s.savedStyle)
 		if err != nil {
 			return err
