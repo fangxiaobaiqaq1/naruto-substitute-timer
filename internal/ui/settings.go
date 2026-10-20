@@ -340,6 +340,7 @@ func (s *session) buildSettings(tab int) {
 	})
 	updateAppearanceLabels()
 
+	calibrationEntry := widget.NewButtonWithIcon("区域校准（豆/头像）", theme.MediaPhotoIcon(), s.openCalibration)
 	diagnosticEntry := widget.NewButtonWithIcon("采集与延迟诊断 / 原帧录制", theme.MediaRecordIcon(), s.openDiagnostics)
 	general := container.NewVScroll(container.NewVBox(
 		sectionCard("我方所在边", container.NewVBox(sideSel, rememberChk,
@@ -354,6 +355,8 @@ func (s *session) buildSettings(tab int) {
 		sectionCard("外观", container.NewVBox(
 			opacityText, opacitySlider, fontScaleText, fontScaleSlider, miniOpacityText, miniOpacitySlider,
 			resetAppearance, appearanceNote)),
+		sectionCard("区域校准", container.NewVBox(
+			wrapped("少见分辨率识别不准时，在对局/训练场画面上自己框出豆和头像"), calibrationEntry)),
 		sectionCard("诊断", container.NewVBox(
 			wrapped("采集异常、延迟或识别问题时录制诊断，导出后反馈。"), diagnosticEntry)),
 	))

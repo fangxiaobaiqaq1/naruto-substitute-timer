@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -8,10 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	fynetest "fyne.io/fyne/v2/test"
 
 	timerapp "narutotimer/internal/app"
 	"narutotimer/internal/config"
+	"narutotimer/internal/frame"
 	"narutotimer/internal/ninja"
 )
 
@@ -116,5 +120,39 @@ func TestWindowPreviews(t *testing.T) {
 		}
 		s.openDiagnostics()
 		save("diagnostics", s.diagnosticWindow.Canvas().Capture())
+		if scroll, ok := s.settingsTabs.Items[0].Content.(*container.Scroll); ok {
+			s.settingsTabs.SelectIndex(0)
+			scroll.ScrollToBottom()
+			save("settings-0-常规-bottom", s.settings.Canvas().Capture())
+		}
+	}
+
+	// Region calibration on a synthetic 2400×1080 duel frame: two saved boxes,
+	// one drawn but not saved, and a non-16:9 tablet frame.
+	// The GLFW driver re-lays out a label whose text grew; this canvas does not.
+	relayout := func(w fyne.Window) { w.Content().Refresh() }
+	for _, size := range []image.Point{{2400, 1080}, {2388, 1668}} {
+		s := newPreviewSession()
+		w := fynetest.NewWindow(nil)
+		s.win = w
+		w.SetContent(s.overlayContent())
+		leftBeads := config.NormalizedRect{X: 0.081, Y: 0.104, Width: 0.052, Height: 0.022}
+		leftAvatar := config.NormalizedRect{X: 0.004, Y: 0.006, Width: 0.072, Height: 0.128}
+		s.cfg.Layout.Calibration = &config.RegionCalibration{Profile: "duel", LeftBeads: &leftBeads, LeftAvatar: &leftAvatar}
+		s.openCalibration()
+		c := s.calibrationWin
+		if size.X == 2400 {
+			save("calibration-waiting", c.win.Canvas().Capture())
+		}
+		s.calibrationFeed.offer(frame.Frame{Img: calibrationPreviewFrame(size.X, size.Y), Fighting: true, LayoutProfile: "duel"}, time.Now())
+		relayout(c.win)
+		if size.X == 2400 {
+			c.targets.SetSelected("右侧豆")
+			fit := c.surface.fit()
+			dragSurface(c.surface, fit.point(0.867, 0.104), fit.point(0.919, 0.126))
+			relayout(c.win)
+		}
+		save(fmt.Sprintf("calibration-%dx%d", size.X, size.Y), c.win.Canvas().Capture())
+		c.win.Close()
 	}
 }
