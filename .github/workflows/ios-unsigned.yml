@@ -74,7 +74,7 @@ jobs:
           platform="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$app/Info.plist")"
           [[ "$platform" == iPhoneOS ]] || { echo "::error::Not a device build"; exit 1; }
           executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")"
-          xcrun lipo -verify_arch arm64 "$app/$executable"
+          xcrun lipo "$app/$executable" -verify_arch arm64
           python3 - "$app" <<'PY'
           import json, pathlib, plistlib, sys
           app = pathlib.Path(sys.argv[1])
