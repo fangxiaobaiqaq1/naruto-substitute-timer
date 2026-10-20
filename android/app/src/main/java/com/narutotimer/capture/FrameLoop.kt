@@ -10,6 +10,7 @@ import android.os.Looper
 import android.util.Log
 import com.narutotimer.AnalysisResult
 import com.narutotimer.AssetLoader
+import com.narutotimer.FrameGeometry
 import com.narutotimer.NativeCore
 import com.narutotimer.TimerApp
 import java.nio.ByteBuffer
@@ -66,11 +67,24 @@ object FrameLoop {
     @Volatile private var lastHeight = 0
     @Volatile private var lastResult: AnalysisResult? = null
 
+    /** A calibration snapshot ([requestSnapshot]): one frame and what its analysis used. */
+    class Snapshot(
+        /** Software ARGB_8888 copy of the frame; the receiver owns it. */
+        val bitmap: Bitmap,
+        /** "camp" / "duel" when the frame was recognised as a match, otherwise "". */
+        val layoutProfile: String,
+        /**
+         * [NativeCore.lastGeometry] of the same analysis (sequence and size checked; docs/区域校准.md
+         * 每帧几何); null when there is none (failed analysis, engine rebuilt in between).
+         */
+        val geometry: FrameGeometry?,
+    )
+
     /** A pending one-shot snapshot ([requestSnapshot]); null in normal operation. */
     private class SnapshotRequest(
         val afterSequence: Long,
         val requestedAtNanos: Long,
-        val callback: (Bitmap, String) -> Unit,
+        val callback: (Snapshot) -> Unit,
     ) {
         fun accepts(frame: CapturedFrame): Boolean =
             frame.sequence > afterSequence && (frame.requestedAtNanos == 0L || frame.requestedAtNanos - requestedAtNanos >= 0)
@@ -177,14 +191,15 @@ object FrameLoop {
      * One-shot frame snapshot (region calibration). The next frame offered after this call (and,
      * for screenshots, also requested after it) is analysed as usual, then copied to a software
      * ARGB_8888 bitmap before it is closed, and
-     * [callback] receives it on the main thread together with that frame's layout profile:
-     * "camp" / "duel" when the frame was recognised as a match, otherwise "" (lobby, VS, a
-     * non-game screen, native not ready — the engine's camp/duel pick is only a guess there).
+     * [callback] receives a [Snapshot] on the main thread: the bitmap, that frame's layout profile
+     * ("camp" / "duel" when the frame was recognised as a match, otherwise "" — lobby, VS, a
+     * non-game screen, native not ready; the engine's camp/duel pick is only a guess there) and
+     * the geometry that same analysis used, read on this thread right after it.
      * A frame that cannot be copied is skipped and the next one is tried. A newer request
      * replaces a pending one; [stop] drops it, so callers should apply their own timeout.
      * Returns false when the loop is not running.
      */
-    fun requestSnapshot(callback: (Bitmap, layoutProfile: String) -> Unit): Boolean {
+    fun requestSnapshot(callback: (Snapshot) -> Unit): Boolean {
         synchronized(wake) {
             if (!started.get()) return false
             snapshot = SnapshotRequest(offeredFrames, System.nanoTime(), callback)
@@ -193,7 +208,7 @@ object FrameLoop {
     }
 
     /** Withdraws a pending [requestSnapshot] made with [callback] (no-op once delivered). */
-    fun cancelSnapshot(callback: (Bitmap, String) -> Unit) {
+    fun cancelSnapshot(callback: (Snapshot) -> Unit) {
         synchronized(wake) {
             if (snapshot?.callback === callback) snapshot = null
         }
@@ -232,12 +247,23 @@ object FrameLoop {
             it.analyzedAtNanos > 0 && System.nanoTime() - it.analyzedAtNanos in 0..SNAPSHOT_RESULT_MAX_AGE_NS
         }
         val profile = analysed?.takeIf { it.fighting }?.layoutProfile?.takeIf { it == "camp" || it == "duel" }.orEmpty()
+        // The geometry of that same analysis: this is the only analysing thread, so nothing else
+        // replaced it; a calibration rebuild in between clears it (null) and a failed frame has
+        // sequence 0. The size check keeps a fallback result's geometry off a resized frame.
+        val geometry = analysed?.takeIf { it.sequence > 0 }?.let { a ->
+            runCatching { NativeCore.lastGeometry() }
+                .onFailure { Log.w(TAG, "snapshot geometry failed", it) }
+                .getOrNull()
+                ?.takeIf { it.sequence == a.sequence && it.width == bitmap.width && it.height == bitmap.height }
+        }
         Log.i(
             TAG,
             "snapshot ${bitmap.width}x${bitmap.height} method=${frame.method} " +
-                "${if (frame.image != null) "image" else "buffer"} ${(System.nanoTime() - begin) / 1_000_000}ms profile=$profile",
+                "${if (frame.image != null) "image" else "buffer"} ${(System.nanoTime() - begin) / 1_000_000}ms " +
+                "profile=$profile geometry=${geometry?.let { "seq ${it.sequence} ${it.layoutProfile}" } ?: "none"}",
         )
-        mainHandler.post { request.callback(bitmap, profile) }
+        val shot = Snapshot(bitmap, profile, geometry)
+        mainHandler.post { request.callback(shot) }
     }
 
     private fun copyFrame(frame: CapturedFrame): Bitmap? {

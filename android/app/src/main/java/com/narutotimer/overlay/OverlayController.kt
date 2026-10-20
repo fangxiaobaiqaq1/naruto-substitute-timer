@@ -6,7 +6,6 @@ package com.narutotimer.overlay
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Bundle
@@ -71,7 +70,7 @@ class OverlayController(
 
     // Region calibration snapshot in flight (main thread). A new run invalidates older callbacks.
     private var calibrationRun = 0
-    private var calibrationCallback: ((Bitmap, String) -> Unit)? = null
+    private var calibrationCallback: ((FrameLoop.Snapshot) -> Unit)? = null
     /** The card is hidden while a calibration frame is taken or the editor is on screen. */
     private var hiddenForCapture = false
     private var hiddenForEditor = false
@@ -193,12 +192,12 @@ class OverlayController(
 
     private fun requestCalibrationFrame(run: Int, draft: Bundle?) {
         if (run != calibrationRun || !showing) return
-        val callback: (Bitmap, String) -> Unit = { bitmap, profile ->
+        val callback: (FrameLoop.Snapshot) -> Unit = { shot ->
             if (run == calibrationRun) {
                 stopCalibrationCapture()
-                if (!CalibrationActivity.openLive(service, bitmap, profile, draft)) toast("无法打开校准页面")
+                if (!CalibrationActivity.openLive(service, shot, draft)) toast("无法打开校准页面")
             } else {
-                bitmap.recycle()
+                shot.bitmap.recycle()
             }
         }
         if (!FrameLoop.requestSnapshot(callback)) {
