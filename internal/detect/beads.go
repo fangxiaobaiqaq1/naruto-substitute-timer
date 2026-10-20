@@ -167,6 +167,8 @@ func DuelBeads() []Bead {
 type BeadPosition struct {
 	Bead
 	X, Y int
+	// Cal is this side's player calibration in this frame; nil = automatic.
+	Cal *SideCalibration
 }
 
 // Layout 计算所有豆子在实际客户区内的屏幕坐标。

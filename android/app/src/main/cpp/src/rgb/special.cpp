@@ -38,11 +38,25 @@ std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::strin
             // integer-rounded bean centers may alternate 15/16px; their first
             // interval must not accidentally stretch all of the name lettering.
             // Use the same fitted HUD scale as the centers and sampling cores.
-            double scale = area.HUDScale(960, 540);
+            double scale = detect::RowHUDScale(row, area, 960, 540);
             Point first = Pt(row[0].X, row[0].Y);
-            identified[index] = nameTracker_[profileIndex][index].ReadWithAvatar(
-                names_.get(), &avatarTracker_[profileIndex][index], img, ninja::NameRegion(first, scale, index == 0),
-                ninja::AvatarRegion(first, scale, index == 0), scale, at);
+            const detect::SideCalibrationPtr cal = row[0].Cal;
+            const Rect nameROI = ninja::NameRegion(first, scale, index == 0);
+            Rect avatarROI = ninja::AvatarRegion(first, scale, index == 0);
+            double avatarScale = scale;
+            ninja::Tracker& tracker = nameTracker_[profileIndex][index];
+            ninja::AvatarTracker* avatar = &avatarTracker_[profileIndex][index];
+            if (cal != nullptr) {
+                // A drawn portrait box wins over the bead-derived window.
+                if (cal->Portrait()) {
+                    avatarROI = ninja::AvatarRegionFromBox(cal->Avatar.X, cal->Avatar.Y, cal->Avatar.W, cal->Avatar.H,
+                                                           index == 0, avatarScale);
+                }
+                identified[index] = tracker.ReadCalibrated(names_.get(), avatar, img, nameROI, avatarROI, scale,
+                                                           avatarScale, index == 1, at);
+            } else {
+                identified[index] = tracker.ReadWithAvatar(names_.get(), avatar, img, nameROI, avatarROI, scale, at);
+            }
             // Only a recognized six-slot NAME permits usable slots five and six.
             // A brief label gap retains six UNKNOWN placeholders, never extra votes.
             if (row.size() == 4 && identified[index].Slots == 6) {
@@ -51,8 +65,11 @@ std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::strin
                 const BeadPosition& last = row.back();
                 const double dx = (last.LX - row[0].LX) / double(row.size() - 1);
                 const double dy = (last.LY - row[0].LY) / double(row.size() - 1);
-                const int xOffset = row[0].X - area.MapHUDPixel(row[0].LX, row[0].LY, name == "right",
-                                                               detect::HUDReferenceWidth, detect::HUDReferenceHeight).X;
+                int xOffset = 0;
+                if (!detect::CalBeads(cal)) {
+                    xOffset = row[0].X - area.MapHUDPixel(row[0].LX, row[0].LY, name == "right",
+                                                         detect::HUDReferenceWidth, detect::HUDReferenceHeight).X;
+                }
                 for (int i = 4; i < 6; i++) {
                     double lx = row[0].LX + double(i) * dx, ly = row[0].LY + double(i) * dy;
                     detect::Bead bead;
@@ -60,9 +77,18 @@ std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::strin
                     bead.Idx = i;
                     bead.LX = lx;
                     bead.LY = ly;
-                    const Point mapped = area.MapHUDPixel(lx, ly, name == "right", detect::HUDReferenceWidth,
-                                                           detect::HUDReferenceHeight);
-                    row.push_back(BeadPosition(bead, mapped.X + xOffset, mapped.Y));
+                    Point mapped;
+                    if (detect::CalBeads(cal)) {
+                        // Calibrated rows extrapolate their own pixel pitch.
+                        mapped = cal->Map(lx, ly);
+                    } else {
+                        mapped = area.MapHUDPixel(lx, ly, name == "right", detect::HUDReferenceWidth,
+                                                  detect::HUDReferenceHeight);
+                        mapped.X += xOffset;
+                    }
+                    BeadPosition extra(bead, mapped.X, mapped.Y);
+                    extra.Cal = cal;
+                    row.push_back(std::move(extra));
                 }
             }
             // Some exact variants have an extra energy bar above their ordinary
@@ -72,8 +98,12 @@ std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::strin
             if (double offset = identified[index].RowOffsetY; offset != 0) {
                 for (BeadPosition& p : row) {
                     p.LY += offset * detect::HUDReferenceHeight / 540;
-                    p.Y = area.MapHUDPixel(p.LX, p.LY, name == "right", detect::HUDReferenceWidth,
-                                           detect::HUDReferenceHeight).Y;
+                    if (detect::CalBeads(cal)) {
+                        p.Y = cal->Map(p.LX, p.LY).Y;
+                    } else {
+                        p.Y = area.MapHUDPixel(p.LX, p.LY, name == "right", detect::HUDReferenceWidth,
+                                               detect::HUDReferenceHeight).Y;
+                    }
                 }
             }
         }
@@ -112,7 +142,7 @@ bool energyGaugeBand(const RGBA* img, const std::vector<BeadPosition>& row, cons
         int r = c.R, g = c.G, b = c.B;
         return r >= 190 && g >= 110 && r - b >= 80 && g - b >= 70;
     };
-    const int d = std::max(2, static_cast<int>(std::round(4 * area.HUDScale(960, 540))));
+    const int d = std::max(2, static_cast<int>(std::round(4 * detect::RowHUDScale(row, area, 960, 540))));
     bool continuous = true;
     for (size_t i = 0; i < row.size(); i++) {
         const BeadPosition& p = row[i];

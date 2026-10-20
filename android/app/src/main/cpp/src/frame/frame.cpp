@@ -236,4 +236,23 @@ void Pipeline::ResetDelivery() {
     dedupe_ = DedupedAnalysis{};
 }
 
+// Go 在运行中的引擎里替换校准、把校准版本混入帧指纹；这里重建引擎并清空交付状态，
+// 对 UI 的效果相同：同一画面不复用旧结果、不算重复观测。
+bool Pipeline::Rebuild(const config::Config& cfg, std::string* err) {
+    std::string e;
+    std::shared_ptr<engine::Engine> next = factory::New(factory::FromApp(cfg), &e);
+    if (next == nullptr) {
+        if (err != nullptr) *err = e.empty() ? std::string("engine build failed") : e;
+        return false;
+    }
+    cfg_ = cfg;
+    detect::ContentMode mode = detect::ModeAuto;
+    if (!detect::ParseMode(cfg_.Layout.ContentMode, mode)) mode = detect::ModeAuto;
+    mode_ = mode;
+    engine_ = std::move(next);
+    error_.clear();
+    ResetDelivery();
+    return true;
+}
+
 }  // namespace nt::frame

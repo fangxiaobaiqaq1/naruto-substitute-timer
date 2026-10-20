@@ -62,6 +62,8 @@ func main() {
 	defer closeCapture()
 	executable, _ := os.Executable()
 	if err := ui.Run(cfg, provider,
+		// Live region calibration (docs/区域校准.md): new boxes apply from the next frame.
+		ui.WithCalibrationApply(eng.SetCalibration),
 		ui.WithTextRecognitionControl(eng.SetEnabled),
 		ui.WithCaptureConfigSelection(controlCapture),
 		ui.WithCaptureState(captureState),

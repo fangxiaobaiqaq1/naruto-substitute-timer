@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -90,12 +91,47 @@ std::string BeadStateString(BeadState s);
 std::vector<Bead> DefaultBeads();
 std::vector<Bead> DuelBeads();
 
+// PixelBox is an unrounded rectangle in frame pixels.
+struct PixelBox {
+    double X = 0, Y = 0, W = 0, H = 0;
+    bool Empty() const { return !(W > 0 && H > 0); }
+};
+
+// SideCalibration is one side's player-drawn geometry in one frame
+// (docs/区域校准.md). Positions of a calibrated side carry it; null keeps the
+// automatic layout for that side.
+struct SideCalibration {
+    // Bead row: 1600x900 reference (x, y) maps to
+    // (X0+Scale·(x−RefX), Y0+Scale·(y−RefY)). Scale 0 = automatic beads.
+    double X0 = 0, Y0 = 0, Scale = 0, RefX = 0, RefY = 0;
+    // Avatar is the portrait box in frame pixels for this frame's profile;
+    // an empty box keeps the automatic portrait window.
+    PixelBox Avatar;
+
+    bool Beads() const { return Scale > 0; }
+    bool Portrait() const { return !Avatar.Empty(); }
+    // Map maps a 1600x900 HUD reference point of a calibrated bead row.
+    Point Map(double x, double y) const;
+};
+using SideCalibrationPtr = std::shared_ptr<const SideCalibration>;
+
+// Go (*SideCalibration).Beads()/Portrait() on a possibly nil pointer.
+inline bool CalBeads(const SideCalibrationPtr& c) { return c != nullptr && c->Beads(); }
+inline bool CalPortrait(const SideCalibrationPtr& c) { return c != nullptr && c->Portrait(); }
+
 // BeadPosition 是豆子在屏幕上的实际位置（Go 内嵌 Bead → C++ 继承，字段访问同名）。
 struct BeadPosition : Bead {
     int X = 0, Y = 0;
+    // Cal is this side's player calibration in this frame; null = automatic.
+    SideCalibrationPtr Cal;
     BeadPosition() = default;
     BeadPosition(const Bead& b, int x, int y) : Bead(b), X(x), Y(y) {}
 };
+
+// RowHUDScale is a side's HUD scale for a reference size: the calibrated
+// bead scale on a calibrated row, else the content-area fit.
+double RowHUDScale(const std::vector<BeadPosition>& row, const ContentArea& ca, double referenceWidth,
+                   double referenceHeight);
 
 // Layout 计算所有豆子在实际客户区内的屏幕坐标。
 std::vector<BeadPosition> Layout(int clientW, int clientH, ContentMode mode, const std::vector<Bead>& beads);

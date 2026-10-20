@@ -62,7 +62,6 @@ func nameRegions(img *image.RGBA, cfg config.LayoutConfig, profile string) ([2]i
 		return out, false
 	}
 	// OCR offsets must use the same fitted HUD scale and safe-area anchors.
-	scale := ca.HUDScale(960, 540)
 	for i := range 2 {
 		first := positions[i*cfg.BeadsPerSide]
 		center := image.Pt(first.X, first.Y)
@@ -70,7 +69,14 @@ func nameRegions(img *image.RGBA, cfg config.LayoutConfig, profile string) ([2]i
 		if i == 1 {
 			x0, x1 = -330., 4.
 		}
-		out[i] = image.Rect(center.X+int(math.Round(x0*scale)), ca.Y+int(math.Round(.020*540*scale)), center.X+int(math.Round(x1*scale)), ca.Y+int(math.Round(.073*540*scale))).Intersect(img.Bounds())
+		scale := ca.HUDScale(960, 540)
+		y0, y1 := ca.Y+int(math.Round(.020*540*scale)), ca.Y+int(math.Round(.073*540*scale))
+		if c := first.Cal; c.Beads() {
+			// A calibrated row carries its own scale and vertical placement.
+			scale = c.Scale * detect.HUDReferenceWidth / 960
+			y0, y1 = c.Map(first.LX, .020*detect.HUDReferenceHeight).Y, c.Map(first.LX, .073*detect.HUDReferenceHeight).Y
+		}
+		out[i] = image.Rect(center.X+int(math.Round(x0*scale)), y0, center.X+int(math.Round(x1*scale)), y1).Intersect(img.Bounds())
 		if out[i].Dx() < 80 || out[i].Dy() < 10 {
 			return out, false
 		}

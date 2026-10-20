@@ -108,7 +108,9 @@ Readout Reader::Read(const RGBA* img, Rect roi, double scale) {
     return static_cast<const Readout&>(e);
 }
 
-evidence Reader::read(const RGBA* img, Rect roi, double scale) {
+evidence Reader::read(const RGBA* img, Rect roi, double scale) { return readAnchored(img, roi, scale, portraitAnchor{}); }
+
+evidence Reader::readAnchored(const RGBA* img, Rect roi, double scale, const portraitAnchor& anchor) {
     if (img == nullptr || scale <= 0 || std::isnan(scale) || std::isinf(scale)) return evidence{};
     std::vector<scaledName> preparedCopy;
     {
@@ -219,7 +221,7 @@ evidence Reader::read(const RGBA* img, Rect roi, double scale) {
     // the evidence so the Tracker's fast path can re-check it on later frames.
     if (best.Name == ItachiHyakusen) {
         scaledName t = scaledNameForEvidence(templates, best);
-        if (!itachiPortraitEvidence(img, scale, t.portrait.get(), t.portraitSize)) return evidence{};
+        if (!itachiPortraitEvidenceAt(img, scale, t.portrait.get(), t.portraitSize, anchor)) return evidence{};
         best.portrait = t.portrait;
         best.portraitSize = t.portraitSize;
     }
@@ -337,8 +339,23 @@ bool itachiPortraitScore(const RGBA* img, const Rect& rect, const match::Prepare
 }  // namespace
 
 bool itachiPortraitEvidence(const RGBA* img, double scale, const match::PreparedNCC* portrait, Point size) {
+    return itachiPortraitEvidenceAt(img, scale, portrait, size, portraitAnchor{});
+}
+
+bool itachiPortraitEvidenceAt(const RGBA* img, double scale, const match::PreparedNCC* portrait, Point size,
+                              const portraitAnchor& anchor) {
     if (portrait == nullptr || size.X <= 0 || size.Y <= 0) return false;
     Rect bounds = img->Bounds();
+    if (anchor.scale > 0) {
+        // The fixed rect below is (8, 9) units inside the camp right window;
+        // a hand-drawn calibration may be off by up to 2 units.
+        const Point at = anchor.window.Min.Add(Pt(iround(8 * anchor.scale), iround(9 * anchor.scale)));
+        const Rect rect = Rect{at, at.Add(size)}.Inset(-std::max(1, iround(2 * anchor.scale))).Intersect(bounds);
+        if (rect.Dx() < size.X || rect.Dy() < size.Y) return false;
+        double score = 0;
+        bool ok = itachiPortraitScore(img, rect, portrait, score);
+        return ok && score >= .78;
+    }
     // The supplied portrait is a right-HUD visual anchor. Do not mirror it to
     // the left: insufficient evidence must remain unknown, never a guessed
     // special offset. Coordinates are normalized to the 960-wide HUD reference.

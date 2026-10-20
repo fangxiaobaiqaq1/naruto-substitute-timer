@@ -12,6 +12,7 @@ import (
 	"image"
 	"time"
 
+	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 )
 
@@ -66,6 +67,15 @@ type Result struct {
 // LayoutPreferrer receives only a template's explicit camp/duel binding.
 type LayoutPreferrer interface {
 	Prefer(kind string)
+}
+
+// Calibrator replaces the player's region calibration in a running engine
+// (docs/区域校准.md); the next frame uses it. CalibrationRevision changes
+// with every replacement, so caches keyed on pixels analyse an identical
+// screen again.
+type Calibrator interface {
+	SetCalibration(*config.RegionCalibration)
+	CalibrationRevision() uint64
 }
 
 // Engine 是检测引擎接口：输入一张客户区截图，输出画面与豆状态。

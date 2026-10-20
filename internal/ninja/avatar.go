@@ -826,6 +826,30 @@ func AvatarRegion(first image.Point, scale float64, left bool) image.Rectangle {
 	return image.Rect(first.X+int(math.Round(x0*scale)), first.Y-int(math.Round(62*scale)), first.X+int(math.Round(x1*scale)), first.Y+int(math.Round(38*scale)))
 }
 
+// Player-drawn portrait box (docs/区域校准.md): the bounding box of the
+// visible diamond portrait, frame included. Measured on 13 native portraits
+// (1280x720..2880x1800, camp and duel): its side is 68.5 reference units
+// (960-wide) and its centre sits at (42, 49.5) / (36, 49.5) inside the
+// automatic left / right AvatarRegion window.
+const (
+	avatarBoxSide    = 68.5
+	avatarBoxLeftX   = 42.0
+	avatarBoxRightX  = 36.0
+	avatarBoxCentreY = 49.5
+)
+
+// AvatarRegionFromBox converts a calibrated portrait box (frame pixels) into
+// the AvatarRegion window and the 960-wide scale the matcher expects.
+func AvatarRegionFromBox(x, y, w, h float64, left bool) (image.Rectangle, float64) {
+	scale := (w + h) / 2 / avatarBoxSide
+	cx := avatarBoxLeftX
+	if !left {
+		cx = avatarBoxRightX
+	}
+	x0, y0 := x+w/2-cx*scale, y+h/2-avatarBoxCentreY*scale
+	return image.Rect(int(math.Round(x0)), int(math.Round(y0)), int(math.Round(x0+70*scale)), int(math.Round(y0+100*scale))), scale
+}
+
 // canonicalAvatarName maps only documented historical spellings onto a current
 // canonical catalog title. It deliberately does not collapse distinct forms.
 func canonicalAvatarName(s string) string {

@@ -140,6 +140,16 @@ struct AvatarCatalogStats {
 
 class AvatarCatalog;  // 完整定义见 nt/ninja_internal.h（cpp-ninja 内部）
 
+// portraitAnchor places 百战鼬's fixed right-HUD portrait check on a
+// calibrated right side: relative to its avatar window instead of the 16:9
+// frame origin. The zero value keeps the built-in frame-origin rect.
+struct portraitAnchor {
+    Rect window;
+    double scale = 0;
+    bool operator==(const portraitAnchor& o) const { return window == o.window && scale == o.scale; }
+    bool operator!=(const portraitAnchor& o) const { return !(*this == o); }
+};
+
 // 内置 A/S 图鉴（AssetStore "avatars/index.json"），进程内只加载一次（sync.OnceValues）。
 // 失败返回 nullptr（Reader 此时 AvatarEnabled()==false，等价 Go）。
 std::shared_ptr<AvatarCatalog> LoadEmbeddedAvatarCatalog(std::string* err = nullptr);
@@ -184,6 +194,7 @@ public:
     // nominal slot pitch), never the arbitrary width of a tightly cropped image.
     Readout Read(const RGBA* img, Rect roi, double scale);
     evidence read(const RGBA* img, Rect roi, double scale);
+    evidence readAnchored(const RGBA* img, Rect roi, double scale, const portraitAnchor& anchor);
 
     // ResolveEvidence decides identity from two independent CURRENT-frame sources.
     Readout ResolveEvidence(const RGBA* img, Rect titleROI, Rect avatarROI, double scale, const Readout& title,
@@ -205,12 +216,20 @@ public:
     // frame resolves them.
     Readout ReadWithAvatar(Reader* reader, AvatarTracker* avatar, const RGBA* img, Rect titleROI, Rect avatarROI,
                            double scale, TimeNs now);
+    // ReadCalibrated is ReadWithAvatar for a player-calibrated side: the portrait
+    // window has its own scale, and on the right side 百战鼬's fixed portrait
+    // check follows that window instead of the 16:9 frame origin.
+    Readout ReadCalibrated(Reader* reader, AvatarTracker* avatar, const RGBA* img, Rect titleROI, Rect avatarROI,
+                           double scale, double avatarScale, bool right, TimeNs now);
 
 private:
+    Readout read(Reader* reader, const RGBA* img, Rect roi, double scale, const portraitAnchor& anchor, TimeNs now);
+
     Reader* reader_ = nullptr;
     evidence hint_;
     Rect bounds_, roi_;
     double scale_ = 0;
+    portraitAnchor anchor_;
     TimeNs retryAfter_ = 0;
     TimeNs lastAt_ = 0;
     TimeNs verifiedAt_ = 0;
@@ -220,6 +239,9 @@ private:
 Rect NameRegion(Point first, double scale, bool left);
 // AvatarRegion maps one normalized 960-wide reference ROI from an existing first-bead anchor.
 Rect AvatarRegion(Point first, double scale, bool left);
+// AvatarRegionFromBox converts a calibrated portrait box (frame pixels) into
+// the AvatarRegion window; outScale receives the 960-wide scale (Go returns both).
+Rect AvatarRegionFromBox(double x, double y, double w, double h, bool left, double& outScale);
 
 // reader.go 内部 helper（跨 .cpp 共享，故在此声明）。
 scaledName scaledNameForEvidence(const std::vector<scaledName>& prepared, const evidence& found);
@@ -227,6 +249,8 @@ bool sameAvatarEvidence(const std::string& title, const AvatarMatch& m);
 std::string avatarTitleRole(const std::string& title);
 Readout avatarReadout(const AvatarMatch& m);
 bool itachiPortraitEvidence(const RGBA* img, double scale, const match::PreparedNCC* portrait, Point size);
+bool itachiPortraitEvidenceAt(const RGBA* img, double scale, const match::PreparedNCC* portrait, Point size,
+                              const portraitAnchor& anchor);
 
 // avatar.go 名字 helper。
 std::string canonicalAvatarName(const std::string& s);

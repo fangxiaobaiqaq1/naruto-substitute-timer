@@ -240,9 +240,10 @@ Go → C++ 翻译规则：
 | `nativeInit()` | `()Z` | 清空 AssetStore、释放引擎 |
 | `nativeAddImage(path, w, h, rgba, rowStride)` | `(String,int,int,ByteBuffer,int)Z` | direct ByteBuffer，非预乘 RGBA8；会复制 |
 | `nativeAddText(path, text)` | `(String,String)Z` | UTF-16 → 严格 UTF-8（非 modified UTF-8） |
-| `nativeFinishAssets()` | `()Z` | `config::Default()` + playerNames → `frame::Pipeline`（engine 构建）；失败看 `nativeLastError` |
+| `nativeFinishAssets()` | `()Z` | `config::Default()` + playerNames + 区域校准 → `frame::Pipeline`（engine 构建）；失败看 `nativeLastError` |
 | `nativeLastError()` | `()String` | |
 | `nativeSetPlayerNames(names)` | `([String)V` | → `identity::SetMineNames`（Guesser 按 revision 重载名册） |
+| `nativeSetCalibration(profile, rects)` | `(String,float[])Z` | 区域校准（docs/区域校准.md）：`profile` camp/duel，`rects` 16 个整帧比例，按 `Settings.KEY_CALIB_RECTS`（左豆、右豆、左头像、右头像）各 x,y,w,h，含 NaN 的框 = 自动。存在 `g_calibration`（跨 `nativeInit` 保留）；引擎已建好时 `Pipeline::Rebuild`（新引擎 + 清空去重/交付状态，序号继续），同一画面下一帧即按新框识别且不算 Duplicate；重建失败保留旧引擎并返回 false。Kotlin：`NativeCore.setCalibration(settings)` |
 | `nativeAnalyzeHardwareBuffer(hb, capturedAtNanos, method, out)` | `(HardwareBuffer,long,int,ByteBuffer)I` | `AHardwareBuffer_lock(CPU_READ_OFTEN)` 零拷贝，格式须为 RGBA_8888/RGBX_8888 |
 | `nativeAnalyzeBuffer(pixels, w, h, rowStride, capturedAtNanos, method, out)` | `(ByteBuffer,int,int,int,long,int,ByteBuffer)I` | direct RGBA8 |
 | `nativeTakeOppCrop()` | `()[I` | `[w, h, argb...]` 或 null |
@@ -278,7 +279,7 @@ Kotlin `NativeCore.Decoder` 每线程复用缓冲，字节相同的字符串复�
 `AnalysisResult`（engine.Result 全字段 + frame.Frame 元数据）。`AnalysisResult.frameBeads` = Go `fillFromEngine` 的
 `frame.Bead` 换算；`slots(left, fallback)` = Go `Frame.Slots`。采集失败用 `AnalysisResult.failure(...)`。
 
-全局锁：jni.cpp 的 `g_mu` 串行化 `nativeFinishAssets/nativeAnalyze*/nativeSetPlayerNames/nativeTakeOppCrop`，
+全局锁：jni.cpp 的 `g_mu` 串行化 `nativeFinishAssets/nativeAnalyze*/nativeSetPlayerNames/nativeSetCalibration/nativeTakeOppCrop`，
 所以识别核心只在一个线程上被调用（帧内并行另见 nt/parallel.h）。
 
 ---
@@ -303,7 +304,7 @@ Gradle 任务 `syncRecognitionAssets`（app/build.gradle.kts）把仓库资源�
    （Go image/png 不做色彩管理）→ `BitmapFactory`（`inPremultiplied=false`, ARGB_8888, `inScaled=false`）→
    `copyPixelsToBuffer`（内存序 R,G,B,A）→ `nativeAddImage`；
 3. 每个 .json：UTF-8 文本 → `nativeAddText`；
-4. 用户 identity 图片；`setPlayerNames`；`nativeFinishAssets()`。READY 之前 FrameLoop 丢弃所有帧。
+4. 用户 identity 图片；`setPlayerNames`；`setCalibration(settings)`；`nativeFinishAssets()`。READY 之前 FrameLoop 丢弃所有帧。
 
 C++ 从不解码 PNG。图鉴/模板全部是 8 位 PNG（灰度 / RGB / RGBA，无调色板、无 16 位），因此
 BitmapFactory 的非预乘输出与 Go 解码逐字节一致；灰度转换用 `match::ToGrayAsset` 复刻 Go 预乘路径。
@@ -334,6 +335,8 @@ MediaProjection VirtualDisplay(1280×720) ─▶ ImageReader(RGBA_8888, maxImage
   HardwareBuffer 不可 CPU 映射时改走 `Bitmap.wrapHardwareBuffer → copy → analyzeBuffer(METHOD_SCREENSHOT)`。
 - 采集源切换/几何变化：native 指纹与 Gated 自动重同步；Kotlin 侧调用 `NativeCore.nativeResetDelivery()` 与
   `session.resyncObservation()`（Go ObservationSpace 变化）。
+- 区域校准保存：TimerApp 的 Settings 监听把 `calib*` 键的连写合并（100ms），在单线程 "nt-calibration" 上
+  `NativeCore.setCalibration(settings)`，再 `session.resyncGeometry()`（同采集源切换：只作废视觉基线）。
 - 悬浮窗：`TYPE_ACCESSIBILITY_OVERLAY`（无障碍服务的 WindowManager），无需 SYSTEM_ALERT_WINDOW。
 - 设置：从计时条操作栏直接打开第三个 `TYPE_ACCESSIBILITY_OVERLAY` 窗口；面板覆盖安全显示区域，
   保存、保存并退出、输入法、内容滚动、返回键和录屏授权都在悬浮窗生命周期内处理，不启动 `MainActivity`。

@@ -17,9 +17,11 @@
 // 一律走 nt/parallel.h 的 ParallelFor/ParallelInvoke，结果必须与串行逐位一致。
 #pragma once
 
+#include <array>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -83,6 +85,8 @@ private:
 };
 
 // ConfiguredLayout is immutable after construction and shared by both engines.
+// The player's region calibration (cfg.Calibration) is fixed here too: Android
+// rebuilds the pipeline to replace it (Go swaps it in place).
 class ConfiguredLayout final : public ProfiledLayout {
 public:
     // NewConfiguredLayout
@@ -99,9 +103,14 @@ public:
     // Align built-in rows to current image anchors; explicit calibration remains authoritative.
     std::vector<detect::BeadPosition> PositionsInImage(const std::string& name, const RGBA* img,
                                                      const detect::ContentArea& ca) const;
+    // PositionsIn is the automatic mapping only; calibrated sides need the frame.
     std::vector<detect::BeadPosition> PositionsIn(const std::string& name, const detect::ContentArea& ca) const;
 
 private:
+    // Each side's calibrated geometry for one frame and profile (null = automatic).
+    std::array<detect::SideCalibrationPtr, 2> sideCalibrations(const std::string& name, const Rect& frame,
+                                                               const detect::ContentArea& ca) const;
+
     detect::ContentMode mode_;
     std::string preferred_;
     std::map<std::string, config::LayoutProfile> profiles_;  // "camp", "duel"
@@ -109,6 +118,9 @@ private:
     Point reference_;
     double tolerance_ = 0;
     bool autoAnchor_ = false;
+    // Go calibrationState: "" profile = automatic; rects validated like config.
+    std::string calProfile_;
+    std::array<std::optional<config::NormalizedRect>, 2> calBeads_, calAvatars_;
 };
 
 // GateKind 是场景门闩的四种结论。场景名本身来自资源，不写死在代码里。

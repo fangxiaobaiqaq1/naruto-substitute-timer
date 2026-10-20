@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 )
 
@@ -114,6 +115,20 @@ func (nopEngine) Analyze(*image.RGBA) Result { return Result{Name: "nop"} }
 
 func (g *Gated) Analyze(img *image.RGBA) Result {
 	return g.AnalyzeAt(img, time.Now())
+}
+
+// SetCalibration forwards a live region calibration to the inner engine.
+func (g *Gated) SetCalibration(c *config.RegionCalibration) {
+	if inner, ok := g.Inner.(Calibrator); ok {
+		inner.SetCalibration(c)
+	}
+}
+
+func (g *Gated) CalibrationRevision() uint64 {
+	if inner, ok := g.Inner.(Calibrator); ok {
+		return inner.CalibrationRevision()
+	}
+	return 0
 }
 
 const profileSwitchConfirmation = 300 * time.Millisecond

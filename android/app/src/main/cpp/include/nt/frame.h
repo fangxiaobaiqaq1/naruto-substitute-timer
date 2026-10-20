@@ -90,6 +90,10 @@ public:
     // 交付层状态复位（采集源切换 / 服务重启）。
     void ResetDelivery();
 
+    // Rebuild 用新配置（例如区域校准）重建引擎并 ResetDelivery：同一画面下一帧重新识别、
+    // 不算 Duplicate；序号继续递增。失败时保留旧引擎并返回 false（err 可为空）。
+    bool Rebuild(const config::Config& cfg, std::string* err);
+
 private:
     config::Config cfg_;
     detect::ContentMode mode_ = detect::ModeAuto;

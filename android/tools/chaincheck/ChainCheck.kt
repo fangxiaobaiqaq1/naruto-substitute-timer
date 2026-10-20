@@ -223,6 +223,37 @@ private fun syntheticFixture(repo: String, background: Pixels, firstX: Int, spec
     return p
 }
 
+// Region calibration (docs/区域校准.md) through production Settings -> NativeCore
+// -> nativeSetCalibration: an identical screen is re-read with the new boxes
+// at once (no reuse, no duplicate), and clearing them restores the automatic row.
+private fun calibrationChecks(frame: Pixels) {
+    val run = Run("region calibration applies live to an identical screen")
+    val auto = run.feed(frame, 0, "automatic layout").frame
+    fight(auto, 2, 4)
+    run.feed(frame, 16, "identical pixels reuse the analysis", duplicate = true)
+    val left = auto.frameBeads.filter { it.label.startsWith('L') }
+    val pitch = (left[3].x - left[0].x) / 3f
+    val box = floatArrayOf(
+        (left[0].x - pitch / 2) / frame.width, (left[0].y - pitch / 2) / frame.height,
+        4 * pitch / frame.width, pitch / frame.height,
+    )
+    run.settings.calibProfile = auto.layoutProfile
+    // A box over empty background moves the left row there on the SAME pixels.
+    run.settings.setCalibRect(Settings.KEY_CALIB_LEFT_BEADS, floatArrayOf(box[0], box[1] + 0.3f, box[2], box[3]))
+    verify(NativeCore.setCalibration(run.settings), "nativeSetCalibration: ${NativeCore.lastError()}")
+    val moved = run.feed(frame, 32, "same pixels, left box moved").frame
+    verify(moved.frameBeads.filter { it.label.startsWith('L') }.all { !it.lit && it.y > left[0].y + 100 },
+        "left row must follow the new box: ${moved.frameBeads}")
+    equal(ready(moved, 'R'), 4, "uncalibrated right row unchanged")
+    // The box around the real row reads it like the automatic layout.
+    run.settings.setCalibRect(Settings.KEY_CALIB_LEFT_BEADS, box)
+    verify(NativeCore.setCalibration(run.settings), "nativeSetCalibration: ${NativeCore.lastError()}")
+    fight(run.feed(frame, 48, "same pixels, box on the real row").frame, 2, 4)
+    run.settings.setCalibRect(Settings.KEY_CALIB_LEFT_BEADS, null)
+    verify(NativeCore.setCalibration(run.settings), "nativeSetCalibration: ${NativeCore.lastError()}")
+    fight(run.feed(frame, 64, "calibration cleared").frame, 2, 4)
+}
+
 private fun specialChecks(repo: String, path: String) {
     println("\nSPECIAL: real PNG + controlled edits; all other ninja HUDs below are SYNTHETIC, not gameplay.")
     val original = Pixels.read(path)
@@ -528,6 +559,7 @@ fun main(args: Array<String>) {
     val afterBlackout = noPixels.feed(confirm, 1056, "second fresh frame cannot prove when the hidden drop happened")
     fight(afterBlackout.frame, 1, 4)
     display(afterBlackout.overlay, 0, "待替身")
+    calibrationChecks(before)
     specialChecks(repo, args[2])
     matrixChecks(args[3])
     NativeCore.nativeRelease()
