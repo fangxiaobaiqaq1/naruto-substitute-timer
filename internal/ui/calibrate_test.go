@@ -19,7 +19,10 @@ import (
 	fynetest "fyne.io/fyne/v2/test"
 
 	"narutotimer/internal/config"
+	"narutotimer/internal/detect"
 	"narutotimer/internal/draw"
+	"narutotimer/internal/engine"
+	"narutotimer/internal/engine/rgb"
 	"narutotimer/internal/frame"
 )
 
@@ -291,10 +294,12 @@ func TestCalibrationSaveNeedsMatchOrTrainingFrame(t *testing.T) {
 				t.Fatalf("config written: %v", err)
 			}
 			// An unsupported resolution may never be recognised as a match:
-			// the player names the layout and the boxes save.
+			// the player names the layout and the boxes save. (The redraw
+			// starts off the box: a drag on the selected box adjusts it.)
 			c.layout.SetSelected("决斗场")
-			dragSurface(c.surface, at(150, 100), at(250, 124))
-			if err := c.save(); err != nil || s.cfg.Layout.Calibration == nil || s.cfg.Layout.Calibration.Profile != "duel" || calls != 1 {
+			dragSurface(c.surface, at(300, 100), at(400, 124))
+			if err := c.save(); err != nil || s.cfg.Layout.Calibration == nil || s.cfg.Layout.Calibration.Profile != "duel" || calls != 1 ||
+				!nearRect(s.cfg.Layout.Calibration.LeftBeads, config.NormalizedRect{X: 300.0 / 1920, Y: 100.0 / 1080, Width: 100.0 / 1920, Height: 24.0 / 1080}, 1e-6) {
 				t.Fatalf("save with a picked layout: %v %+v", err, s.cfg.Layout.Calibration)
 			}
 			// A recognised match frame overrides the pick.
@@ -567,39 +572,58 @@ func TestSettingsOpensOneCalibrationWindow(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
-// calibrationPreviewFrame is a synthetic HUD: avatars, bars and four beads per
-// side at the positions of the example in docs/区域校准.md.
-func calibrationPreviewFrame(w, h int) *image.RGBA {
+// calibrationPreviewHUD is a synthetic HUD (NOT a capture) painted where
+// the real engine looks on a w×h duel frame: avatars, names, health bars and
+// beads (the last one of each row dark). It returns the frame and the
+// geometry the engine reports on it with calibration cal.
+func calibrationPreviewHUD(size image.Point, cal *config.RegionCalibration) (*image.RGBA, [2]frame.SideGeometry) {
+	w, h := size.X, size.Y
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			img.SetRGBA(x, y, color.RGBA{R: uint8(30 + 40*y/h), G: uint8(60 + 60*x/w), B: uint8(90 + 50*y/h), A: 255})
 		}
 	}
-	fill := func(r config.NormalizedRect, c color.RGBA) {
-		for y := int(r.Y * float64(h)); y < int((r.Y+r.Height)*float64(h)); y++ {
-			for x := int(r.X * float64(w)); x < int((r.X+r.Width)*float64(w)); x++ {
+	cfg := config.Default()
+	analyse := func(cal *config.RegionCalibration) engine.Result {
+		layout := cfg.Layout
+		layout.Calibration = cal
+		eng := rgb.NewConfigured(engine.NewConfiguredLayout(detect.ModeAuto, layout), cfg.Vision)
+		eng.Prefer("duel")
+		return eng.AnalyzeAt(img, time.Unix(1700000000, 0))
+	}
+	fill := func(r image.Rectangle, c color.RGBA) {
+		r = r.Intersect(img.Bounds())
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			for x := r.Min.X; x < r.Max.X; x++ {
 				img.SetRGBA(x, y, c)
 			}
 		}
 	}
-	avatar := color.RGBA{R: 210, G: 170, B: 120, A: 255}
-	fill(config.NormalizedRect{X: 0.004, Y: 0.006, Width: 0.072, Height: 0.128}, avatar)
-	fill(config.NormalizedRect{X: 0.924, Y: 0.006, Width: 0.072, Height: 0.128}, avatar)
-	fill(config.NormalizedRect{X: 0.081, Y: 0.05, Width: 0.3, Height: 0.03}, color.RGBA{R: 240, G: 200, B: 40, A: 255})
-	fill(config.NormalizedRect{X: 0.619, Y: 0.05, Width: 0.3, Height: 0.03}, color.RGBA{R: 240, G: 200, B: 40, A: 255})
-	beadW, beadH := int(0.009*float64(w)), int(0.02*float64(h))
-	for _, side := range []struct {
-		box  config.NormalizedRect
-		left bool
-	}{{config.NormalizedRect{X: 0.081, Y: 0.104, Width: 0.052, Height: 0.022}, true}, {config.NormalizedRect{X: 0.867, Y: 0.104, Width: 0.052, Height: 0.022}, false}} {
-		for i, c := range calibrationBeadCenters(side.box, side.left) {
+	for side, g := range analyse(nil).Geometry {
+		if len(g.Beads) < 4 {
+			continue
+		}
+		W, H := float64(w), float64(h)
+		a := g.AvatarBox
+		draw.FillDiamond(img, int((a.X+a.Width/2)*W), int((a.Y+a.Height/2)*H), int(a.Width*W), int(a.Height*H), color.RGBA{R: 120, G: 40, B: 40, A: 255})
+		draw.FillDiamond(img, int((a.X+a.Width/2)*W), int((a.Y+a.Height/2)*H), int(a.Width*W)-8, int(a.Height*H)-8, color.RGBA{R: 210, G: 170, B: 120, A: 255})
+		first, pitch := g.Beads[0], int(math.Abs(float64(g.Beads[1].X-g.Beads[0].X)))
+		bar := image.Rect(first.X-pitch/2, first.Y-2*pitch, first.X-pitch/2+w*3/10, first.Y-pitch)
+		name := image.Rect(first.X, first.Y-3*pitch-pitch/2, first.X+w/10, first.Y-2*pitch-pitch/3)
+		if side == 1 {
+			bar = image.Rect(first.X+pitch/2-w*3/10, bar.Min.Y, first.X+pitch/2, bar.Max.Y)
+			name = image.Rect(first.X-w/10, name.Min.Y, first.X, name.Max.Y)
+		}
+		fill(bar, color.RGBA{R: 240, G: 200, B: 40, A: 255})
+		fill(name, color.RGBA{R: 235, G: 235, B: 225, A: 255})
+		for i, p := range g.Beads {
 			col := color.RGBA{R: 90, G: 230, B: 255, A: 255}
-			if i == 3 {
+			if i == len(g.Beads)-1 {
 				col = color.RGBA{R: 30, G: 70, B: 90, A: 255}
 			}
-			draw.FillDiamond(img, int(c.X*float64(w)), int(c.Y*float64(h)), beadW, beadH, col)
+			draw.FillDiamond(img, p.X, p.Y, pitch*7/10, pitch*9/10, col)
 		}
 	}
-	return img
+	return img, analyse(cal).Geometry
 }
