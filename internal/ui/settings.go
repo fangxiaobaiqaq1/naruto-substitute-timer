@@ -224,7 +224,7 @@ func (s *session) buildSettings(tab int) {
 	nameEntry := widget.NewEntry()
 	nameEntry.SetPlaceHolder("自己的账号名，用来自动认边；多个用逗号分隔")
 	nameEntry.SetText(name)
-	ninjaEntry := widget.NewSelectEntry([]string{"", ninja.FifthMizukage, ninja.Hashirama, ninja.Madara, ninja.Obito, ninja.Naruto})
+	ninjaEntry := widget.NewSelectEntry([]string{"", ninja.FifthMizukage, ninja.Hashirama, ninja.Madara, ninja.Obito, ninja.Naruto, ninja.HanzoEdo})
 	ninjaEntry.SetPlaceHolder("留空自动；或选择完整忍者版本")
 	ninjaEntry.SetText(ninjaText)
 	textCheck := widget.NewCheck("后台识别名字（内置本地 OCR）", nil)
@@ -347,7 +347,7 @@ func (s *session) buildSettings(tab int) {
 		sectionCard("名字与对面忍者", container.NewVBox(
 			widget.NewLabel("我的名字"), nameEntry, textCheck, s.textStatusLabel, gpuChk,
 			widget.NewLabel("指定对面忍者（留空自动识别）"), ninjaEntry,
-			wrapped("仅照美冥［五代目水影］同时显示 15 秒 / 10 秒。名字和忍者点下方按钮保存。"),
+			wrapped("照美冥［五代目水影］和半藏［秽土转生］同时显示 15 秒 / 10 秒。名字和忍者点下方按钮保存。"),
 			save)),
 		sectionCard("浮窗显示", container.NewVBox(miniSel, bothChk, topChk, autoScaleChk,
 			wrapped("Ctrl+M 随时切换仅计时器；点击仅计时器展开设置、换边、两边计时和退出，拖动可移动。"))),

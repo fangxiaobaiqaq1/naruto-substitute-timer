@@ -8,7 +8,7 @@ package com.narutotimer.tracker
 
 /**
  * The current policy is user-confirmed: all primary clocks are 15 seconds.
- * Only 照美冥[五代目水影] additionally displays a simultaneous 10-second estimate.
+ * Only 照美冥[五代目水影] and 半藏[秽土转生] also display a simultaneous 10-second estimate.
  */
 object NinjaRules {
     const val NARUTO_STUDENT = "漩涡鸣人[忍者学员]"
@@ -27,6 +27,8 @@ object NinjaRules {
     const val ITACHI_HYAKUSEN = "宇智波鼬[百战]"
     const val MINATO_KYUBI = "波风水门[九喇嘛连结]"
     const val HASHIRAMA_EDO = "千手柱间[秽土转生]"
+    /** Substitutes on its own like FIFTH_MIZUKAGE: 15 s and 10 s. */
+    const val HANZO_EDO = "半藏[秽土转生]"
 
     /** Go ninja.DefaultCooldown = 15 * time.Second。 */
     const val DEFAULT_COOLDOWN_NANOS = 15_000_000_000L
@@ -37,7 +39,7 @@ object NinjaRules {
     /** strings.ContainsRune("[]【】()（）·・", r) 的字符集（全部在 BMP 内）。 */
     private const val IGNORED_RUNES = "[]【】()（）·・"
 
-    private val normalizedFifthMizukage = normalize(FIFTH_MIZUKAGE)
+    private val dualCooldownNames = setOf(normalize(FIFTH_MIZUKAGE), normalize(HANZO_EDO))
 
     /** normalize(名字常量) → 短名；顺序与 Go switch 相同（键互不相同，顺序不影响结果）。 */
     private val shortLabels: Map<String, String> = linkedMapOf(
@@ -52,13 +54,14 @@ object NinjaRules {
         normalize(ITACHI_HYAKUSEN) to "鼬·百战",
         normalize(MINATO_KYUBI) to "水门·九喇嘛连结",
         normalize(HASHIRAMA_EDO) to "柱间·秽土转生",
+        normalize(HANZO_EDO) to "半藏·秽土转生",
     )
 
     /**
      * DualCooldown matches the full version, never a bare name or an ambiguous
      * numeric ID from the old extracted table. Bracket typography is insignificant.
      */
-    fun dualCooldown(name: String): Boolean = normalize(name) == normalizedFifthMizukage
+    fun dualCooldown(name: String): Boolean = normalize(name) in dualCooldownNames
 
     /** 去掉空白（unicode.IsSpace）与 "[]【】()（）·・"（按 code point，Go strings.Map 返回 -1 即删除）。 */
     fun normalize(s: String): String {

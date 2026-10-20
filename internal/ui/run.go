@@ -465,7 +465,7 @@ func (s *session) toggleMini() {
 }
 
 // The current policy is user-confirmed: all primary clocks are 15 seconds.
-// Only 照美冥[五代目水影] additionally displays a simultaneous 10-second estimate.
+// Only 照美冥[五代目水影] and 半藏[秽土转生] also display a simultaneous 10-second estimate.
 func (s *session) cooldown() time.Duration { return ninja.DefaultCooldown }
 
 func (s *session) opponentNinja() string {
@@ -1254,7 +1254,7 @@ func (s *session) refreshClockAt(now time.Time) {
 		dual: dual, altText: altText, altColor: altColor,
 		leftText: leftText, rightText: rightText, leftColor: leftColor, rightColor: rightColor,
 		miniText: miniText, miniCaption: miniCaption,
-		scale:    s.cfg.UI.FontScale}
+		scale: s.cfg.UI.FontScale}
 	// Offer under s.mu so the coalescer always holds the highest revision;
 	// Offer is only atomic stores.
 	schedule := s.clockPending.Offer(update)

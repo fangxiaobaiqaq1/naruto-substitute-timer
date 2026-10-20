@@ -28,7 +28,10 @@ bool ignoredRune(char32_t r) {
 
 // DualCooldown matches the full version, never a bare name or an ambiguous
 // numeric ID from the old extracted table. Bracket typography is insignificant.
-bool DualCooldown(const std::string& name) { return normalize(name) == normalize(FifthMizukage); }
+bool DualCooldown(const std::string& name) {
+    const std::string n = normalize(name);
+    return n == normalize(FifthMizukage) || n == normalize(HanzoEdo);
+}
 
 // Go: strings.Map —— 空白与括号/间隔号被丢弃；非法 UTF-8 字节按 Go 写成 U+FFFD。
 std::string normalize(const std::string& s) {
@@ -56,6 +59,7 @@ std::string ShortLabel(const std::string& name) {
         {normalize(ItachiHyakusen), "鼬·百战"},
         {normalize(MinatoKyubi), "水门·九喇嘛连结"},
         {normalize(HashiramaEdo), "柱间·秽土转生"},
+        {normalize(HanzoEdo), "半藏·秽土转生"},
     };
     const std::string key = normalize(name);
     for (const auto& [norm, label] : labels) {
