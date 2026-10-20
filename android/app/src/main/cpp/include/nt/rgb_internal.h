@@ -50,6 +50,8 @@ BeadState voteBead(const RGBA* img, int cx, int cy);
 
 // special.go
 void applyNames(engine::Result& res, const std::array<ninja::Readout, 2>& readouts);
+bool energyGaugeBand(const RGBA* img, const std::vector<BeadPosition>& row, const detect::ContentArea& area,
+                     const std::vector<BeadState>& states);
 BeadState specialPixel(ninja::Palette palette, int r, int g, int b);
 bool specialWash(const RGBA* img, const BeadPosition& p, ninja::Palette palette, int guard);
 bool redLowerBody(const RGBA* img, const BeadPosition& p, int w, int h);

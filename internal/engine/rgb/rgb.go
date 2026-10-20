@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -249,6 +250,16 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 					if !allUnknownStates(rowStates) {
 						break
 					}
+				}
+			}
+			// Without an identity offset, an energy gauge may still cover the
+			// default row. Re-read the 13px@540 row; keep it only when complete
+			// and legal. Special palettes and offset identities are excluded.
+			if identified[index].RowOffsetY == 0 && palette == "" && !xiayin && len(row) == 4 && energyGaugeBand(img, row, area, rowStates) {
+				dy := int(math.Round(ninja.EnergyGaugeRowOffset * area.HUDScale(960, 540)))
+				candidateInfos, candidateStates := sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], image.Pt(0, dy))
+				if detect.IsLegalPrefix(candidateStates) && !slices.Contains(candidateStates, detect.StateUnknown) {
+					rowInfos, rowStates = candidateInfos, candidateStates
 				}
 			}
 			out = append(out, rowInfos...)

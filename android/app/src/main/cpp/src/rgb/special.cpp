@@ -98,6 +98,34 @@ void applyNames(engine::Result& res, const std::array<ninja::Readout, 2>& readou
     }
 }
 
+// energyGaugeBand is the unidentified energy-gauge signature on the default
+// row: a THIN gold band through every slot center (not gold 4px@540 above and
+// below, unlike real gold diamonds or a broad wash) that blanks all cores or
+// also fills every slot midpoint. It only permits a re-read; never a vote.
+bool energyGaugeBand(const RGBA* img, const std::vector<BeadPosition>& row, const detect::ContentArea& area,
+                     const std::vector<BeadState>& states) {
+    auto gold = [&](int x, int y) {
+        if (!Pt(x, y).In(img->Bounds())) {
+            return false;
+        }
+        Color c = img->RGBAAt(x, y);
+        int r = c.R, g = c.G, b = c.B;
+        return r >= 190 && g >= 110 && r - b >= 80 && g - b >= 70;
+    };
+    const int d = std::max(2, static_cast<int>(std::round(4 * area.HUDScale(960, 540))));
+    bool continuous = true;
+    for (size_t i = 0; i < row.size(); i++) {
+        const BeadPosition& p = row[i];
+        if (!gold(p.X, p.Y) || gold(p.X, p.Y - d) || gold(p.X, p.Y + d)) {
+            return false;
+        }
+        if (i > 0 && !gold((row[i - 1].X + p.X) / 2, (row[i - 1].Y + p.Y) / 2)) {
+            continuous = false;
+        }
+    }
+    return !row.empty() && (continuous || allUnknownStates(states));
+}
+
 BeadState specialPixel(ninja::Palette palette, int r, int g, int b) {
     switch (palette) {
         case ninja::Palette::Warm:
