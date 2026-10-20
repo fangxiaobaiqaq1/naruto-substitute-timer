@@ -235,9 +235,7 @@ std::unique_ptr<avatarEntry> loadAvatarEntry(const avatarIndexEntry& item, const
     e->name = avatarName(item);
     e->baseName = avatarBaseName(item);
     e->data = img;
-    e->thumbGray = match::ScaleGray(&gray, 16, 16);
-    e->thumbMask = match::ScaleGray(&mask, 16, 16);
-    e->thumb = match::PrepareNCC(&e->thumbGray, &e->thumbMask);
+    // Go also builds a 16² thumb that nothing reads; it is not kept here.
     e->coarseGray = match::ScaleGray(&gray, 36, 36);
     e->coarseMask = match::ScaleGray(&mask, 36, 36);
     // The full-resolution gray/mask are exactly what matchEntries would
@@ -404,6 +402,15 @@ AvatarMatch AvatarCatalog::matchEntries(const RGBA& view, const Gray* grayIn, do
         owned = match::ToGray(&view);
         gray = &owned;
     }
+    // Every job scans the whole view: build its prefix sums once and share them
+    // (read-only) instead of rebuilding them in each of up to ~130 NCC calls.
+    // One buffer per calling thread; the two sides may run concurrently.
+    thread_local match::grayPrefix viewPrefix;
+    const match::grayPrefix* prefix = nullptr;
+    if (gray->Bounds().Dx() <= match::maxDotRun) {
+        match::newGrayPrefix(viewPrefix, *gray, 0, 0, gray->Bounds().Dx(), gray->Bounds().Dy());
+        prefix = &viewPrefix;
+    }
     // Keep the best score per identity before calculating the runner-up. A
     // single identity is evaluated at several display scales; treating its
     // second scale as a different candidate can reject an otherwise unambiguous
@@ -413,7 +420,7 @@ AvatarMatch AvatarCatalog::matchEntries(const RGBA& view, const Gray* grayIn, do
     const Rect bounds = view.Bounds();
     auto scoreAll = [&](std::vector<avatarJob>& jobs) {
         ParallelFor(static_cast<int>(jobs.size()),
-                    [&](int i) { jobs[i].score = avatarJobScore(view, gray, jobs[i].prepared.get()); });
+                    [&](int i) { jobs[i].score = avatarJobScore(view, gray, jobs[i].prepared.get(), prefix); });
         for (const auto& job : jobs) {
             double& b = bestByID[job.entry->id];  // Go map 读缺省 0
             if (job.score > b) b = job.score;
@@ -421,7 +428,6 @@ AvatarMatch AvatarCatalog::matchEntries(const RGBA& view, const Gray* grayIn, do
     };
     std::vector<avatarJob> jobs;
     std::unique_lock<std::mutex> lk(mu);
-    evictTemplates(scale);
     for (avatarEntry* entry : list) {
         if (!decode(entry)) continue;
         out.ids.push_back(entry->id);
@@ -460,7 +466,6 @@ AvatarMatch AvatarCatalog::matchEntries(const RGBA& view, const Gray* grayIn, do
         // score never wins the strict '>', so the fine sweep skips it.
         jobs.clear();
         lk.lock();
-        evictTemplates(scale);
         for (avatarEntry* entry : list) {
             if (entry != nullptr && fine.count(entry->id)) appendJobs(jobs, entry, scale, bounds, avatarFactorsFine);
         }
@@ -526,13 +531,15 @@ void AvatarCatalog::appendJobs(std::vector<avatarJob>& jobs, avatarEntry* entry,
 
 // avatarJobScore only reads the immutable template and the caller's pixels,
 // so jobs may be scored concurrently.
-double avatarJobScore(const RGBA& view, const Gray* gray, const match::PreparedNCC* prepared) {
+double avatarJobScore(const RGBA& view, const Gray* gray, const match::PreparedNCC* prepared,
+                      const match::grayPrefix* prefix) {
     if (prepared == nullptr) return 0;
     match::Query q;
     q.Image = &view;
     q.Gray = gray;
     q.ROI = view.Bounds();
     q.Prepared = prepared;
+    q.Prefix = prefix;
     match::Score score;
     if (!match::NCC{}.Match(q, score)) return 0;
     return score.Value;
@@ -568,52 +575,47 @@ void avatarFactorSize(const avatarEntry* entry, double scale, double factor, int
     h = std::max(12, static_cast<int>(std::round(static_cast<double>(entry->gray.Bounds().Dy()) * scale * factor)));
 }
 
-// evictTemplates clears the per-entry scaled template cache whenever the HUD
-// scale changes; cached templates are only valid for one capture geometry.
-void AvatarCatalog::evictTemplates(double scale) {
-    if (cacheScale != scale) {
-        cacheScale = scale;
-        for (auto& e : entries) {
-            e->scaled.clear();
-            e->scaledValid = false;
-        }
-        cachedEntries = 0;
-    }
-}
-
 // prepared returns the cached scaled template for the entry at this size,
 // preparing it on first use. All catalog template state lives under the
-// catalog lock; the cache only ever holds templates at the current scale.
+// catalog lock. The template depends only on (entry, w, h), so the cache is
+// keyed by size, not by one global scale: a calibrated left/right pair with
+// different portrait scales no longer wipes and rebuilds every call. Memory is
+// bounded by templateCacheCap bytes, evicting least recently used templates;
+// a job keeps its own reference, so eviction never affects a running scan.
 PreparedPtr AvatarCatalog::prepared(avatarEntry* entry, int w, int h) {
-    avatarSize key{w, h};
-    if (!entry->scaledValid) {
-        entry->scaled.clear();
-        entry->scaledValid = true;
-    } else {
-        auto it = entry->scaled.find(key);
-        if (it != entry->scaled.end()) return it->second;
+    const avatarTemplateKey key{entry, w, h};
+    const uint64_t now = ++templateClock;
+    auto it = templates.find(key);
+    if (it != templates.end()) {
+        it->second.used = now;
+        return it->second.prepared;
     }
     Gray g = match::ScaleGray(&entry->gray, w, h);
     Gray m = match::ScaleGray(&entry->mask, w, h);
     PreparedPtr p = match::PrepareNCC(&g, &m);
-    entry->scaled[key] = p;
-    cachedEntries++;
-    if (cachedEntries > templateCacheCap()) {
-        for (auto& e : entries) {
-            e->scaled.clear();
-            e->scaledValid = false;
+    cachedTemplate c;
+    c.prepared = p;
+    c.bytes = p != nullptr ? p->bytes() + 64 : 64;
+    c.used = now;
+    templateBytes += c.bytes;
+    templates.emplace(key, std::move(c));
+    if (templateBytes > templateCacheCap) {
+        // Evict down to 3/4 of the cap so a full working set does not evict on
+        // every miss; the newest templates (this scan) are kept.
+        std::vector<std::pair<uint64_t, avatarTemplateKey>> order;
+        order.reserve(templates.size());
+        for (const auto& kv : templates) order.emplace_back(kv.second.used, kv.first);
+        std::sort(order.begin(), order.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& o : order) {
+            if (templateBytes <= templateCacheCap / 4 * 3 || o.first == now) break;
+            auto victim = templates.find(o.second);
+            templateBytes -= victim->second.bytes;
+            templates.erase(victim);
+            templateEvictions++;
         }
-        cachedEntries = 0;
-        cacheWipes++;
     }
     return p;
-}
-
-// templateCacheCap covers every size of one complete scan (each entry at
-// every display factor) plus headroom, so a scan never wipes its own cache.
-// Sizes depend only on the scale, which evictTemplates already keys.
-int AvatarCatalog::templateCacheCap() const {
-    return static_cast<int>(entries.size() * avatarFactorsFull.size()) + 64;
 }
 
 AvatarMatch AvatarTracker::Read(AvatarCatalog* c, const RGBA* img, Rect roi, double scale, TimeNs now) {

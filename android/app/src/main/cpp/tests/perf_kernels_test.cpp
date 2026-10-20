@@ -333,6 +333,85 @@ void testMatch(std::mt19937& rng) {
     check(nt::match::SetNCCKernel(original), "restore kernel");
 }
 
+// refScaleGray is the original per-pixel ScaleGray (GrayAt/SetGray, weights recomputed per pixel).
+nt::Gray refScaleGray(const nt::Gray* src, int w, int h) {
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    const nt::Rect sb = src->Bounds();
+    const int sw = sb.Dx(), sh = sb.Dy();
+    nt::Gray dst = nt::Gray::New(nt::MakeRect(0, 0, w, h));
+    if (sw < 1 || sh < 1) return dst;
+    for (int y = 0; y < h; ++y) {
+        double fy = (static_cast<double>(y) + 0.5) * static_cast<double>(sh) / static_cast<double>(h) - 0.5;
+        if (fy < 0) fy = 0;
+        int y0 = static_cast<int>(fy);
+        int y1 = y0 + 1;
+        if (y0 >= sh) y0 = sh - 1;
+        if (y1 >= sh) y1 = sh - 1;
+        const double wy = fy - static_cast<double>(y0);
+        for (int x = 0; x < w; ++x) {
+            double fx = (static_cast<double>(x) + 0.5) * static_cast<double>(sw) / static_cast<double>(w) - 0.5;
+            if (fx < 0) fx = 0;
+            int x0 = static_cast<int>(fx);
+            int x1 = x0 + 1;
+            if (x0 >= sw) x0 = sw - 1;
+            if (x1 >= sw) x1 = sw - 1;
+            const double wx = fx - static_cast<double>(x0);
+            const double v00 = static_cast<double>(src->GrayAt(sb.Min.X + x0, sb.Min.Y + y0));
+            const double v10 = static_cast<double>(src->GrayAt(sb.Min.X + x1, sb.Min.Y + y0));
+            const double v01 = static_cast<double>(src->GrayAt(sb.Min.X + x0, sb.Min.Y + y1));
+            const double v11 = static_cast<double>(src->GrayAt(sb.Min.X + x1, sb.Min.Y + y1));
+            const double v = (1 - wx) * (1 - wy) * v00 + wx * (1 - wy) * v10 + (1 - wx) * wy * v01 + wx * wy * v11;
+            dst.SetGray(x, y, static_cast<uint8_t>(v + 0.5));
+        }
+    }
+    return dst;
+}
+
+bool sameGray(const nt::Gray& a, const nt::Gray& b) {
+    if (a.Bounds() != b.Bounds()) return false;
+    for (int y = a.Bounds().Min.Y; y < a.Bounds().Max.Y; ++y)
+        for (int x = a.Bounds().Min.X; x < a.Bounds().Max.X; ++x)
+            if (a.GrayAt(x, y) != b.GrayAt(x, y)) return false;
+    return true;
+}
+
+void testScaleAndGray(std::mt19937& rng) {
+    for (int iter = 0; iter < 3000; ++iter) {
+        const int pw = 1 + static_cast<int>(rng() % 90), ph = 1 + static_cast<int>(rng() % 90);
+        nt::Gray parent = nt::Gray::New(nt::MakeRect(-7, 4, -7 + pw, 4 + ph));
+        fillGray(parent, rng, iter % 5 == 0 ? 2 : 0);
+        // A subimage keeps the parent stride and a non-zero origin.
+        const int x0 = -7 + static_cast<int>(rng() % pw), y0 = 4 + static_cast<int>(rng() % ph);
+        const nt::Gray src = parent.SubImage(nt::MakeRect(x0, y0, x0 + 1 + static_cast<int>(rng() % pw),
+                                                          y0 + 1 + static_cast<int>(rng() % ph)));
+        int w = static_cast<int>(rng() % 200) - 2, h = static_cast<int>(rng() % 200) - 2;
+        if (iter % 9 == 0) {
+            w = src.Bounds().Dx();
+            h = src.Bounds().Dy();
+        }
+        check(sameGray(nt::match::ScaleGray(&src, w, h), refScaleGray(&src, w, h)),
+              "ScaleGray " + std::to_string(src.Bounds().Dx()) + "x" + std::to_string(src.Bounds().Dy()) + " -> " +
+                  std::to_string(w) + "x" + std::to_string(h));
+    }
+    for (int iter = 0; iter < 300; ++iter) {
+        const int pw = 1 + static_cast<int>(rng() % 70), ph = 1 + static_cast<int>(rng() % 50);
+        nt::RGBA parent = nt::RGBA::New(nt::MakeRect(3, -5, 3 + pw, -5 + ph));
+        for (int i = 0; i < 4 * pw * ph; ++i) parent.Pix[i] = static_cast<uint8_t>(rng());
+        const int x0 = 3 + static_cast<int>(rng() % pw), y0 = -5 + static_cast<int>(rng() % ph);
+        const nt::RGBA sub = parent.SubImage(nt::MakeRect(x0, y0, x0 + 1 + static_cast<int>(rng() % pw),
+                                                          y0 + 1 + static_cast<int>(rng() % ph)));
+        const nt::Gray g = nt::match::ToGray(&sub);
+        bool ok = g.Bounds() == nt::MakeRect(0, 0, sub.Bounds().Dx(), sub.Bounds().Dy());
+        for (int y = 0; ok && y < sub.Bounds().Dy(); ++y)
+            for (int x = 0; ok && x < sub.Bounds().Dx(); ++x) {
+                const nt::Color c = sub.RGBAAt(sub.Bounds().Min.X + x, sub.Bounds().Min.Y + y);
+                ok = g.GrayAt(x, y) == nt::GoLumaRGBA(c.R, c.G, c.B);
+            }
+        check(ok, "ToGray");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -342,6 +421,7 @@ int main() {
     std::printf(" (active: %s)\n", nt::match::NCCKernel());
     testDotKernels(rng);
     testMatch(rng);
+    testScaleAndGray(rng);
     std::printf("perf_kernels_test: %d checks passed\n", checks);
     return 0;
 }

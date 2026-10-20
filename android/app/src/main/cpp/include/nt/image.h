@@ -146,19 +146,9 @@ struct RGBA {
         : Pix(pix), Stride(stride), Rect_(r), Owner(std::move(owner)) {}
 
     // image.NewRGBA(r)：零初始化、紧凑 stride = 4*Dx。
-    static RGBA New(const Rect& r) {
-        RGBA img;
-        img.Rect_ = r;
-        int w = std::max(0, r.Dx()), h = std::max(0, r.Dy());
-        img.Stride = 4 * w;
-        size_t n = static_cast<size_t>(img.Stride) * static_cast<size_t>(h);
-        if (n > 0) {
-            std::shared_ptr<uint8_t> buf(new uint8_t[n](), std::default_delete<uint8_t[]>());
-            img.Pix = buf.get();
-            img.Owner = std::move(buf);
-        }
-        return img;
-    }
+    static RGBA New(const Rect& r) { return alloc(r, true); }
+    // NewUninit：同 New 但不清零（调用方会写满每个像素，例如 CropRGBA）。
+    static RGBA NewUninit(const Rect& r) { return alloc(r, false); }
 
     bool Nil() const { return Pix == nullptr && Rect_.Empty(); }
     const Rect& Bounds() const { return Rect_; }
@@ -190,10 +180,25 @@ struct RGBA {
 
     // 深拷贝成紧凑、自持有的图（保留原点）。
     RGBA Clone() const {
-        RGBA out = New(Rect_);
+        RGBA out = NewUninit(Rect_);
         int row = 4 * Rect_.Dx();
         for (int y = 0; y < Rect_.Dy(); ++y) std::memcpy(out.Pix + y * out.Stride, Pix + static_cast<ptrdiff_t>(y) * Stride, row);
         return out;
+    }
+
+private:
+    static RGBA alloc(const Rect& r, bool zero) {
+        RGBA img;
+        img.Rect_ = r;
+        int w = std::max(0, r.Dx()), h = std::max(0, r.Dy());
+        img.Stride = 4 * w;
+        size_t n = static_cast<size_t>(img.Stride) * static_cast<size_t>(h);
+        if (n > 0) {
+            std::shared_ptr<uint8_t> buf(zero ? new uint8_t[n]() : new uint8_t[n], std::default_delete<uint8_t[]>());
+            img.Pix = buf.get();
+            img.Owner = std::move(buf);
+        }
+        return img;
     }
 };
 
@@ -209,19 +214,9 @@ struct Gray {
         : Pix(pix), Stride(stride), Rect_(r), Owner(std::move(owner)) {}
 
     // image.NewGray(r)：零初始化、紧凑 stride = Dx。
-    static Gray New(const Rect& r) {
-        Gray img;
-        img.Rect_ = r;
-        int w = std::max(0, r.Dx()), h = std::max(0, r.Dy());
-        img.Stride = w;
-        size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
-        if (n > 0) {
-            std::shared_ptr<uint8_t> buf(new uint8_t[n](), std::default_delete<uint8_t[]>());
-            img.Pix = buf.get();
-            img.Owner = std::move(buf);
-        }
-        return img;
-    }
+    static Gray New(const Rect& r) { return alloc(r, true); }
+    // NewUninit：同 New 但不清零——只给会写满每个像素的调用方（ToGray / ScaleGray）省一次 memset。
+    static Gray NewUninit(const Rect& r) { return alloc(r, false); }
 
     bool Nil() const { return Pix == nullptr && Rect_.Empty(); }
     const Rect& Bounds() const { return Rect_; }
@@ -243,9 +238,24 @@ struct Gray {
         return Gray(Pix + PixOffset(r.Min.X, r.Min.Y), Stride, r, Owner);
     }
     Gray Clone() const {
-        Gray out = New(Rect_);
+        Gray out = NewUninit(Rect_);
         for (int y = 0; y < Rect_.Dy(); ++y) std::memcpy(out.Pix + y * out.Stride, Pix + static_cast<ptrdiff_t>(y) * Stride, Rect_.Dx());
         return out;
+    }
+
+private:
+    static Gray alloc(const Rect& r, bool zero) {
+        Gray img;
+        img.Rect_ = r;
+        int w = std::max(0, r.Dx()), h = std::max(0, r.Dy());
+        img.Stride = w;
+        size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
+        if (n > 0) {
+            std::shared_ptr<uint8_t> buf(zero ? new uint8_t[n]() : new uint8_t[n], std::default_delete<uint8_t[]>());
+            img.Pix = buf.get();
+            img.Owner = std::move(buf);
+        }
+        return img;
     }
 };
 

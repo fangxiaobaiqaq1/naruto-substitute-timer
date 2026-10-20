@@ -166,17 +166,30 @@ bool matchIn(const Catalog& c, const RGBA& img, const Gray& gray, const Rect& ro
     if (!c.matcher.Match(q, s)) return false;
     if (!t.spec.ContinuationOnly || t.spec.Anchor != "screen" || s.Value < .65 || s.Value >= t.spec.Threshold) return true;
     const Point peak = s.Peak;
+    // The +/-2px size variants are pure functions of the prepared template, so
+    // they are scaled and prepared once per geometry (refineVariants) instead
+    // of on every refinement; Match with Prepared == PrepareNCC(g, mask) is
+    // exactly Match with Template = g, Mask = mask.
+    const refineVariants* variants = t.refine ? &t.refine->get(t) : nullptr;
     for (int dw = -2; dw <= 2; ++dw) {
         for (int dh = -2; dh <= 2; ++dh) {
             const int w = t.gray.Bounds().Dx() + dw, h = t.gray.Bounds().Dy() + dh;
             if ((dw == 0 && dh == 0) || w < 4 || h < 4) continue;
-            Gray g = match::ScaleGray(&t.gray, w, h);
-            Gray mask;
-            if (!t.mask.Nil()) mask = match::ScaleGray(&t.mask, w, h);
+            Gray g, mask;
+            std::shared_ptr<const match::PreparedNCC> owned;
+            const match::PreparedNCC* variant = nullptr;
+            if (variants != nullptr) {
+                variant = variants->at(dw, dh).get();
+            } else {
+                g = match::ScaleGray(&t.gray, w, h);
+                if (!t.mask.Nil()) mask = match::ScaleGray(&t.mask, w, h);
+                owned = match::PrepareNCC(&g, maskOrNull(mask));
+                variant = owned.get();
+            }
             q.ROI = Rect{peak, peak.Add(Pt(w, h))}.Inset(-2).Intersect(roi);
-            q.Template = &g;
-            q.Mask = maskOrNull(mask);
-            q.Prepared = nullptr;
+            q.Template = nullptr;
+            q.Mask = nullptr;
+            q.Prepared = variant;
             match::Score candidate;
             if (c.matcher.Match(q, candidate) && candidate.Value > s.Value) s = candidate;
         }
@@ -184,19 +197,21 @@ bool matchIn(const Catalog& c, const RGBA& img, const Gray& gray, const Rect& ro
     return true;
 }
 
-// scoreHinted searches the whole ROI and remembers the peak when the template
-// is present, or clears a stale hint. Every value is a real NCC score on this
-// frame; the diagnostics path (scoreOne) never touches hints.
-Hit scoreHinted(Catalog& c, const RGBA& img, const Gray& gray, const preparedTemplate& t) {
+// scoreHinted searches roi (t.roi, or a remembered peak window when windowed)
+// and remembers the peak when the template is present, or clears a stale hint.
+// Every value is a real NCC score on this frame; the diagnostics path
+// (scoreOne) never touches hints.
+Hit scoreHinted(Catalog& c, const RGBA& img, const Gray& gray, const Rect& roi, bool windowed,
+                const preparedTemplate& t) {
     if (t.gray.Nil()) return Hit{t.spec.ID, t.spec.Scene, 0};
     match::Score s;
-    if (!matchIn(c, img, gray, t.roi, t, s)) {
-        if (!t.windowed) c.setHint(t.index, Point{}, false);
+    if (!matchIn(c, img, gray, roi, t, s)) {
+        if (!windowed) c.setHint(t.index, Point{}, false);
         return Hit{t.spec.ID, t.spec.Scene, 0};
     }
     if (s.Value >= t.spec.Threshold) {
         c.setHint(t.index, s.Peak, true);
-    } else if (!t.windowed) {
+    } else if (!windowed) {
         c.setHint(t.index, Point{}, false);  // Only a full-ROI miss forgets the peak.
     }
     return Hit{t.spec.ID, t.spec.Scene, s.Value, Rect{s.Peak, s.Peak.Add(t.gray.Bounds().Size())}};
@@ -210,6 +225,21 @@ Hit scoreOne(const Catalog& c, const RGBA& img, const Gray& gray, const prepared
     return Hit{t.spec.ID, t.spec.Scene, s.Value, Rect{s.Peak, s.Peak.Add(t.gray.Bounds().Size())}};
 }
 
+// grayView is one searched rectangle converted to gray, shared by every
+// template on that rectangle. (Prefix sums stay per NCC call in a reused
+// per-thread buffer: per-view prefixes would allocate megabytes per frame.)
+struct grayView {
+    RGBA img;
+    Gray gray;
+};
+
+std::shared_ptr<grayView> newGrayView(const RGBA* img, const Rect& roi) {
+    auto v = std::make_shared<grayView>();
+    v->img = img->SubImage(roi);
+    v->gray = match::ToGray(&v->img);
+    return v;
+}
+
 // scorer converts only searched rectangles, not the animation/background of
 // an entire frame. Variants with the same ROI share one gray image. Every view
 // belongs to this call; concurrent catalogs cannot race on reused pixel buffers.
@@ -219,40 +249,43 @@ class Scorer {
 public:
     Scorer(Catalog& c, const RGBA* img) : c_(c), img_(img) {}
 
-    Hit operator()(const preparedTemplate& t) {
-        Rect roi = t.roi.Intersect(img_->Bounds());
+    // window (optional) narrows the search to a remembered peak window.
+    Hit operator()(const preparedTemplate& t, const Rect* window = nullptr) {
+        Rect roi = (window != nullptr ? *window : t.roi).Intersect(img_->Bounds());
         if (roi.Empty() || t.gray.Nil()) return Hit{t.spec.ID, t.spec.Scene, 0};
         std::shared_ptr<const grayView> view;
         {
             std::lock_guard<std::mutex> lk(mu_);
-            auto it = views_.find(roi);
-            if (it != views_.end()) view = it->second;
-        }
-        if (!view) {
-            auto v = std::make_shared<grayView>();
-            v->img = img_->SubImage(roi);
-            v->gray = match::ToGray(&v->img);
-            std::lock_guard<std::mutex> lk(mu_);
-            auto it = views_.find(roi);
-            if (it != views_.end()) {
-                view = it->second;
-            } else {
-                views_[roi] = v;
-                view = v;
+            for (const auto& kv : views_) {
+                if (kv.first == roi) {
+                    view = kv.second;
+                    break;
+                }
             }
         }
-        return scoreHinted(c_, view->img, view->gray, t);
+        if (!view) {
+            std::shared_ptr<grayView> v = newGrayView(img_, roi);
+            std::lock_guard<std::mutex> lk(mu_);
+            for (const auto& kv : views_) {
+                if (kv.first == roi) {
+                    view = kv.second;
+                    break;
+                }
+            }
+            if (!view) {
+                views_.emplace_back(roi, v);
+                view = std::move(v);
+            }
+        }
+        return scoreHinted(c_, view->img, view->gray, roi, window != nullptr, t);
     }
 
 private:
-    struct grayView {
-        RGBA img;
-        Gray gray;
-    };
     Catalog& c_;
     const RGBA* img_;
     std::mutex mu_;
-    std::map<Rect, std::shared_ptr<const grayView>, RectLess> views_;
+    // A handful of rectangles per frame: a flat list beats a tree here.
+    std::vector<std::pair<Rect, std::shared_ptr<const grayView>>> views_;
 };
 
 // scoreAtHint checks only the remembered peak window. A template that still
@@ -268,10 +301,7 @@ bool scoreAtHint(Catalog& c, const RGBA* img, Scorer& score, const preparedTempl
                        hint.peak.Add(Point(hintRadius, hintRadius)).Add(size))
                       .Intersect(roi);
     if (window.Dx() < size.X || window.Dy() < size.Y) return false;
-    preparedTemplate windowed = t;
-    windowed.roi = window;
-    windowed.windowed = true;
-    Hit hit = score(windowed);
+    Hit hit = score(t, &window);
     if (hit.Value < t.spec.Threshold) return false;
     out = hit;
     return true;
@@ -503,11 +533,7 @@ std::vector<Hit> Catalog::ScoreAll(const RGBA* img) {
     if (img == nullptr) return {};
     auto [ca, supported] = contentArea(img);
     if (!supported) return {};
-    struct view {
-        RGBA img;
-        Gray gray;
-    };
-    std::map<Rect, std::shared_ptr<view>, RectLess> views;
+    std::map<Rect, std::shared_ptr<grayView>, RectLess> views;
     std::vector<Hit> out;
     out.reserve(templates.size());
     for (const preparedTemplate& t : prepare(ca)) {
@@ -517,11 +543,9 @@ std::vector<Hit> Catalog::ScoreAll(const RGBA* img) {
             continue;
         }
         auto it = views.find(roi);
-        std::shared_ptr<view> v;
+        std::shared_ptr<grayView> v;
         if (it == views.end()) {
-            v = std::make_shared<view>();
-            v->img = img->SubImage(roi);
-            v->gray = match::ToGray(&v->img);
+            v = newGrayView(img, roi);
             views[roi] = v;
         } else {
             v = it->second;
@@ -678,7 +702,27 @@ preparedTemplate prepareOne(const detect::ContentArea& ca, const template_& t) {
     out.gray = match::ScaleGray(&t.gray, tw, th);
     if (!t.mask.Nil()) out.mask = match::ScaleGray(&t.mask, tw, th);
     out.ncc = match::PrepareNCC(&out.gray, maskOrNull(out.mask));
+    // Only continuation-only screen templates refine their size (matchIn).
+    if (out.spec.ContinuationOnly && out.spec.Anchor == "screen") out.refine = std::make_shared<refineCache>();
     return out;
+}
+
+// get builds the +/-2px size variants of t once (first refinement); they are
+// exactly what matchIn used to scale and prepare on every refinement.
+const refineVariants& refineCache::get(const preparedTemplate& t) {
+    std::call_once(once, [&] {
+        for (int dw = -2; dw <= 2; ++dw) {
+            for (int dh = -2; dh <= 2; ++dh) {
+                const int w = t.gray.Bounds().Dx() + dw, h = t.gray.Bounds().Dy() + dh;
+                if ((dw == 0 && dh == 0) || w < 4 || h < 4) continue;
+                Gray g = match::ScaleGray(&t.gray, w, h);
+                Gray mask;
+                if (!t.mask.Nil()) mask = match::ScaleGray(&t.mask, w, h);
+                variants.v[static_cast<size_t>((dw + 2) * 5 + dh + 2)] = match::PrepareNCC(&g, maskOrNull(mask));
+            }
+        }
+    });
+    return variants;
 }
 
 // scoreAll scores every primary template for one frame. Templates with a

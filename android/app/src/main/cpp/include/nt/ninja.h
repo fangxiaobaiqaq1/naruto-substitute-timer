@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "nt/image.h"
@@ -201,8 +202,10 @@ public:
                             AvatarTracker* avatar, TimeNs now);
 
     std::vector<nameTemplate> source;
-    double scale = 0;
-    std::vector<scaledName> prepared;  // Go: nil 时需要重新准备（empty == nil）
+    // Go 只缓存一个 scale（prepared + scale）；这里按 scale 缓存最近 maxPreparedScales 组不可变
+    // 模板（最近使用在前），校准后左右/camp/duel 各自的 scale 不再互相清空、每次重建。
+    static constexpr size_t maxPreparedScales = 4;
+    std::vector<std::pair<double, std::shared_ptr<const std::vector<scaledName>>>> prepared;
     std::shared_ptr<AvatarCatalog> avatars;
     std::mutex mu;  // Go r.mu
 };

@@ -8,6 +8,7 @@
 // Android 上永远是「内置清单」路径（cfg.Scene.Manifest 被忽略，等价 Go embedded 分支）。
 #pragma once
 
+#include <array>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -57,6 +58,25 @@ struct template_ {
     int refH = 0;
 };
 
+struct preparedTemplate;
+
+// refineVariants are the +/-2px size variants matchIn tries around the peak of
+// a continuation-only screen template (index (dw+2)*5 + dh+2; null = skipped).
+struct refineVariants {
+    std::array<std::shared_ptr<const match::PreparedNCC>, 25> v;
+    const std::shared_ptr<const match::PreparedNCC>& at(int dw, int dh) const {
+        return v[static_cast<size_t>((dw + 2) * 5 + dh + 2)];
+    }
+};
+
+// refineCache scales and prepares the variants once per geometry, on the first
+// refinement (thread-safe); they are pure functions of the prepared template.
+struct refineCache {
+    const refineVariants& get(const preparedTemplate& t);
+    std::once_flag once;
+    refineVariants variants;
+};
+
 // Prepared images are immutable after construction. Only the current content
 // geometry is retained so resizing cannot grow the cache indefinitely.
 struct preparedTemplate {
@@ -64,8 +84,9 @@ struct preparedTemplate {
     Rect roi;
     Gray gray, mask;  // gray.Nil() == Go t.gray == nil（模板太小/ROI 太小，不参与匹配）
     std::shared_ptr<const match::PreparedNCC> ncc;
-    int index = 0;          // Position in Catalog.templates; keys the peak hint.
-    bool windowed = false;  // ROI narrowed to the remembered peak; a miss keeps the hint.
+    int index = 0;  // Position in Catalog.templates; keys the peak hint.
+    // Continuation-only screen templates: lazily built refinement variants.
+    std::shared_ptr<refineCache> refine;
 };
 
 struct templateHint {
