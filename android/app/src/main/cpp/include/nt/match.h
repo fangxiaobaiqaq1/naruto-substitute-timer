@@ -25,6 +25,7 @@ struct Score {
 };
 
 class PreparedNCC;
+struct grayPrefix;
 
 // Query 描述一次匹配。ROI 已是截图像素；Template / Mask 为灰度。
 struct Query {
@@ -34,6 +35,9 @@ struct Query {
     const nt::Gray* Template = nullptr;
     const nt::Gray* Mask = nullptr;               // 可选，0 = 忽略
     const PreparedNCC* Prepared = nullptr;        // Optional immutable template+mask snapshot; authoritative when set.
+    // 可选（性能）：同一张 *Gray 的前缀和（newGrayPrefix），只要覆盖 ROI 就直接复用，不再逐次重算。
+    // 前缀和是精确整数，任何覆盖矩形得到的分数都逐位相同。必须由 Gray 本身构建（调用方保证）。
+    const grayPrefix* Prefix = nullptr;
 };
 
 // Matcher 把一块图和一张模板比出分数。返回 false 等价于 Go 的 err != nil。
@@ -49,17 +53,24 @@ public:
     bool Match(const Query& q, Score& out) const override;
 };
 
+// maxDotRun bounds one uint32 dot accumulation: 255*255*maxDotRun < 2^32.
+constexpr int maxDotRun = 66051;
+
 // grayPrefix holds per-row prefix sums of gray and gray² over one rectangle
 // of a Gray image, in Pix offsets relative to Bounds().Min. Row r has w+1
 // entries; entry k is the sum of the first k pixels. Built once per Match call
-// (Go 用 sync.Pool 复用；C++ 用 thread_local 复用缓冲)。
+// (Go 用 sync.Pool 复用；C++ 用 thread_local 复用缓冲)，或由调用方对同一搜索区建一次
+// 通过 Query::Prefix 共享。uint32 对 w <= maxDotRun 的行是精确的（65025*w < 2^32）；
+// 更宽的 ROI（实际不存在）由 Match 走不用前缀和的直接路径。
 struct grayPrefix {
-    int x0 = 0, y0 = 0, w = 0;
-    std::vector<uint64_t> sum, square;
-};
+    int x0 = 0, y0 = 0, w = 0, h = 0;
+    std::vector<uint32_t> sum, square;
 
-// maxDotRun bounds one uint32 dot accumulation: 255*255*maxDotRun < 2^32.
-constexpr int maxDotRun = 66051;
+    // covers 报告列 [x0,x1)、行 [y0,y1)（相对 Gray.Bounds().Min）是否在本前缀和内。
+    bool covers(int cx0, int cy0, int cx1, int cy1) const {
+        return w > 0 && h > 0 && x0 <= cx0 && y0 <= cy0 && cx1 <= x0 + w && cy1 <= y0 + h;
+    }
+};
 
 // PreparedNCC owns a snapshot of one template and its binary mask. It is
 // immutable and safe to share between matchers.
@@ -77,13 +88,27 @@ public:
     // at scores the template at (ox, oy) (offsets relative to img.Bounds().Min).
     // pre must cover the template footprint. Bit-identical to Go.
     double at(const nt::Gray& img, const grayPrefix& pre, int ox, int oy) const;
+    // atDirect：同一分数，不用前缀和（逐像素标量累加）。超宽 ROI 的回退路径与测试参考。
+    double atDirect(const nt::Gray& img, int ox, int oy) const;
+    // score 是 Go 的浮点公式（输入为精确整数和）。count_ < 8 时调用方已返回 0。
+    double score(uint64_t sum, uint64_t squares, uint64_t product) const;
+    // bytes 估算持有的堆内存（模板缓存的字节上限用）。
+    size_t bytes() const { return sizeof(*this) + data_.capacity() + runs_.capacity() * sizeof(nccRun); }
 
     // 内部数据（PrepareNCC 填充）。
     Rect rect_;
-    std::vector<uint8_t> data_;  // w*h 模板像素拷贝
+    std::vector<uint8_t> data_;  // 掩膜内（各 run）的模板像素，按 run 顺序紧凑存放
     std::vector<nccRun> runs_;
     double count_ = 0, sum_ = 0, variance_ = 0;
 };
+
+// NCC 点积内核（全部精确整数，结果与标量逐位相同）："scalar"、"sse2"、"avx2"、"neon"、"dotprod"。
+// 进程启动后按 CPU 特性选最快的可用内核。
+const char* NCCKernel();
+// 本机可用的内核名（测试 / hostcheck --ncc-kernel 用）。
+std::vector<std::string> NCCKernels();
+// 强制使用某个内核（仅测试/诊断）；不可用时返回 false 且不改变当前内核。
+bool SetNCCKernel(const std::string& name);
 
 // PrepareNCC precomputes template statistics and contiguous mask runs. Mask
 // origins/strides need not match the template; a smaller mask omits its missing
@@ -95,7 +120,7 @@ std::shared_ptr<const PreparedNCC> PrepareNCC(const nt::Gray* templ, const nt::G
 int coarseStep(int tw, int th);
 int refineStep(int step);
 
-// newGrayPrefix covers columns [x0,x0+w) and rows [y0,y0+h) of img.
+// newGrayPrefix covers columns [x0,x0+w) and rows [y0,y0+h) of img (w <= maxDotRun).
 void newGrayPrefix(grayPrefix& g, const nt::Gray& img, int x0, int y0, int w, int h);
 
 // ToGray 把采集帧（*image.RGBA，不预乘）转成灰度；输出原点 (0,0)。
