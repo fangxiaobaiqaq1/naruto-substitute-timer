@@ -283,3 +283,81 @@ avx2done:
 	VMOVQ X12, sq+64(FP)
 	VZEROUPPER
 	RET
+
+// Luma constants for grayRowsSSE2: words (299, 587, 114, 0) per pixel, the
+// +500 rounding term, the exact reciprocal M = ceil(2^32/1000) = 4294968
+// (floor(n*M / 2^32) == n/1000 for every n <= 255500) and a high-dword mask.
+DATA lumaw<>+0x00(SB)/8, $0x00000072024b012b
+DATA lumaw<>+0x08(SB)/8, $0x00000072024b012b
+GLOBL lumaw<>(SB), RODATA|NOPTR, $16
+DATA luma500<>+0x00(SB)/8, $0x000001f4000001f4
+DATA luma500<>+0x08(SB)/8, $0x000001f4000001f4
+GLOBL luma500<>(SB), RODATA|NOPTR, $16
+DATA lumam<>+0x00(SB)/8, $0x0000000000418938
+DATA lumam<>+0x08(SB)/8, $0x0000000000418938
+GLOBL lumam<>(SB), RODATA|NOPTR, $16
+DATA lumahi<>+0x00(SB)/8, $0xffffffff00000000
+DATA lumahi<>+0x08(SB)/8, $0xffffffff00000000
+GLOBL lumahi<>(SB), RODATA|NOPTR, $16
+
+// func grayRowsSSE2(dst *byte, dstStride int, src *byte, srcStride int, w4, h int)
+// Writes (299R + 587G + 114B + 500) / 1000 for w4 (a positive multiple of 4)
+// RGBA pixels per row, h rows: exactly ToGray's integer luma, 4 pixels per
+// step. The caller checks both rectangles against their buffers.
+TEXT ·grayRowsSSE2(SB), NOSPLIT, $0-48
+	MOVQ dst+0(FP), DI
+	MOVQ dstStride+8(FP), R8
+	MOVQ src+16(FP), SI
+	MOVQ srcStride+24(FP), R9
+	MOVQ w4+32(FP), R10
+	MOVQ h+40(FP), R11
+	PXOR X15, X15
+	MOVOU lumaw<>(SB), X14
+	MOVOU luma500<>(SB), X13
+	MOVOU lumam<>(SB), X12
+	MOVOU lumahi<>(SB), X11
+	TESTQ R11, R11
+	JEQ graydone
+	TESTQ R10, R10
+	JEQ graydone
+
+grayrow:
+	MOVQ SI, AX
+	MOVQ DI, BX
+	MOVQ R10, CX
+
+graypx:
+	MOVOU (AX), X0           // 4 RGBA pixels
+	MOVO X0, X1
+	PUNPCKLBW X15, X0        // pixels 0, 1 as words
+	PUNPCKHBW X15, X1        // pixels 2, 3
+	PMADDWL X14, X0          // [299R0+587G0, 114B0, 299R1+587G1, 114B1]
+	PMADDWL X14, X1
+	MOVO X0, X2
+	SHUFPS $0x88, X1, X0     // [a0 a1 a2 a3]
+	SHUFPS $0xdd, X1, X2     // [b0 b1 b2 b3]
+	PADDL X2, X0
+	PADDL X13, X0            // n = 299R + 587G + 114B + 500
+	MOVO X0, X3
+	PSRLQ $32, X3            // n1, n3 in the even lanes
+	PMULULQ X12, X0          // n0*M, n2*M
+	PMULULQ X12, X3          // n1*M, n3*M
+	PSRLQ $32, X0            // [q0 0 q2 0]
+	PAND X11, X3             // [0 q1 0 q3]
+	POR X3, X0
+	PACKSSLW X0, X0
+	PACKUSWB X0, X0
+	MOVQ X0, DX
+	MOVL DX, (BX)
+	ADDQ $16, AX
+	ADDQ $4, BX
+	SUBQ $4, CX
+	JNE graypx
+
+	ADDQ R9, SI
+	ADDQ R8, DI
+	DECQ R11
+	JNE grayrow
+
+graydone:
+	RET

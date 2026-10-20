@@ -15,7 +15,14 @@ func nccSpansSSE2(img *byte, stride, avail int, spans *nccSpan, nspans int, tpl 
 //go:noescape
 func nccSpansAVX2(img *byte, stride, avail int, spans *nccSpan, nspans int, tpl *byte) (dot, sum, sq uint64)
 
+//go:noescape
+func grayRowsSSE2(dst *byte, dstStride int, src *byte, srcStride int, w4, h int)
+
 var nccKernel, nccKernelName = pickKernel()
+
+// grayRows converts RGBA rows to ToGray's luma, w4 (multiple of 4) pixels per
+// row; nil means the portable loop only.
+var grayRows = grayRowsSSE2
 
 func pickKernel() (nccKernelFunc, string) {
 	if cpu.X86.HasAVX2 {
