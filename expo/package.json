@@ -14,18 +14,20 @@
     "build:ios:device": "eas build --platform ios --profile preview"
   },
   "dependencies": {
-    "@expo/metro-runtime": "~3.2.3",
-    "expo": "~51.0.39",
-    "expo-build-properties": "~0.12.5",
-    "expo-status-bar": "~1.12.1",
-    "@react-native-async-storage/async-storage": "~1.23.1",
-    "react": "18.2.0",
-    "react-dom": "18.2.0",
-    "react-native": "0.74.5",
-    "react-native-web": "~0.19.10"
+    "@expo/metro-runtime": "~58.0.14",
+    "expo": "~58.0.16",
+    "expo-build-properties": "~58.0.11",
+    "expo-splash-screen": "~58.0.10",
+    "expo-status-bar": "~58.0.3",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.0",
+    "react-native-safe-area-context": "~5.10.1",
+    "react-native-web": "~0.21.4"
   },
   "devDependencies": {
-    "@types/react": "~18.2.79",
-    "typescript": "~5.3.3"
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
   }
 }

@@ -5,10 +5,6 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "splash": {
-      "resizeMode": "contain",
-      "backgroundColor": "#10131a"
-    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.narutotimer.mobile"
@@ -21,10 +17,16 @@
     },
     "plugins": [
       [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#10131a"
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "13.4"
+            "deploymentTarget": "16.4"
           }
         }
       ],

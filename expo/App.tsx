@@ -4,7 +4,6 @@ import {
   Alert,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -14,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { initialWindowMetrics, SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { getReplayKitState, prepareReplayKitBroadcast } from './replayKit';
 import { useCountdownNow } from './ios-compat/useCountdownNow';
 
@@ -184,6 +184,14 @@ function ValueStepper({ label, value, minimum, maximum, step, onChange }: { labe
 }
 
 export default function App() {
+  return (
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <TimerScreen />
+    </SafeAreaProvider>
+  );
+}
+
+function TimerScreen() {
   const { fontScale: systemFontScale } = useWindowDimensions();
   const [settings, setSettings] = useState<MobileSettings>(DEFAULT_SETTINGS);
   const [settingsVisible, setSettingsVisible] = useState(false);
@@ -342,48 +350,51 @@ export default function App() {
       </ScrollView>
 
       <Modal animationType="slide" presentationStyle="pageSheet" visible={settingsVisible} onRequestClose={() => setSettingsVisible(false)}>
-        <SafeAreaView style={styles.modalSafeArea}>
-          <ScrollView automaticallyAdjustKeyboardInsets keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled" contentContainerStyle={styles.settingsPanel}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>替身设置</Text>
-              <Pressable accessibilityRole="button" accessibilityLabel="完成设置" style={styles.closeButton} onPress={saveSettings}><Text style={styles.closeText}>完成</Text></Pressable>
-            </View>
-            <SettingRow label="我方边">
-              <View style={styles.segmented}>
-                {([['auto', '自动认边'], ['left', '左边'], ['right', '右边']] as const).map(([value, label]) => (
-                  <Pressable key={value} accessibilityRole="button" accessibilityLabel={`我方边：${label}`} accessibilityState={{ selected: settings.playerSide === value }} onPress={() => { if (value === 'auto') setDetectedSide(''); setSettings((current) => ({ ...current, playerSide: value })); }} style={[styles.segment, settings.playerSide === value && styles.segmentSelected]}>
-                    <Text style={styles.segmentText}>{label}</Text>
-                  </Pressable>
-                ))}
+        {/* A page sheet has its own insets; do not seed it with the main window metrics. */}
+        <SafeAreaProvider>
+          <SafeAreaView style={styles.modalSafeArea}>
+            <ScrollView automaticallyAdjustKeyboardInsets keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled" contentContainerStyle={styles.settingsPanel}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>替身设置</Text>
+                <Pressable accessibilityRole="button" accessibilityLabel="完成设置" style={styles.closeButton} onPress={saveSettings}><Text style={styles.closeText}>完成</Text></Pressable>
               </View>
-            </SettingRow>
-            <SettingRow label="记住认边">
-              <Switch accessibilityLabel="记住认边" style={styles.switch} hitSlop={7} value={settings.rememberSide} onValueChange={(value) => { if (!value) setDetectedSide(''); setSettings((current) => ({ ...current, rememberSide: value, playerSide: value ? current.playerSide : 'auto' })); }} />
-            </SettingRow>
-            <SettingRow label="我的名字">
-              <TextInput accessibilityLabel="我的名字" returnKeyType="done" value={settings.playerName} onChangeText={(value) => setSettings((current) => ({ ...current, playerName: value }))} placeholder="可留空自动识别" placeholderTextColor="#71819a" style={styles.input} />
-            </SettingRow>
-            <SettingRow label="对面忍者">
-              <TextInput accessibilityLabel="对面忍者" returnKeyType="done" value={settings.opponentNinja} onChangeText={(value) => setSettings((current) => ({ ...current, opponentNinja: value }))} placeholder="如：照美冥" placeholderTextColor="#71819a" style={styles.input} />
-            </SettingRow>
-            <SettingRow label="两边计时">
-              <Switch accessibilityLabel="两边计时" style={styles.switch} hitSlop={7} value={settings.showBothSides} onValueChange={(value) => setSettings((current) => ({ ...current, showBothSides: value }))} />
-            </SettingRow>
-            <SettingRow label="迷你模式">
-              <Switch accessibilityLabel="迷你模式" style={styles.switch} hitSlop={7} value={settings.miniMode} onValueChange={(value) => setSettings((current) => ({ ...current, miniMode: value }))} />
-            </SettingRow>
-            <SettingRow label="完整浮窗透明度">
-              <ValueStepper label="完整浮窗透明度" value={settings.windowOpacity} minimum={0.4} maximum={1} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, windowOpacity: value }))} />
-            </SettingRow>
-            <SettingRow label="迷你浮窗透明度">
-              <ValueStepper label="迷你浮窗透明度" value={settings.miniOpacity} minimum={0.2} maximum={1} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, miniOpacity: value }))} />
-            </SettingRow>
-            <SettingRow label="字号">
-              <ValueStepper label="字号" value={settings.fontScale} minimum={0.55} maximum={1.2} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, fontScale: value }))} />
-            </SettingRow>
-            <Text style={styles.settingsNote}>透明度和字号沿用 Android 的语义，并保留系统字体缩放。这些设置仅影响前台界面，不会启用跨 App 悬浮窗或系统录屏扩展。</Text>
-          </ScrollView>
-        </SafeAreaView>
+              <SettingRow label="我方边">
+                <View style={styles.segmented}>
+                  {([['auto', '自动认边'], ['left', '左边'], ['right', '右边']] as const).map(([value, label]) => (
+                    <Pressable key={value} accessibilityRole="button" accessibilityLabel={`我方边：${label}`} accessibilityState={{ selected: settings.playerSide === value }} onPress={() => { if (value === 'auto') setDetectedSide(''); setSettings((current) => ({ ...current, playerSide: value })); }} style={[styles.segment, settings.playerSide === value && styles.segmentSelected]}>
+                      <Text style={styles.segmentText}>{label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </SettingRow>
+              <SettingRow label="记住认边">
+                <Switch accessibilityLabel="记住认边" style={styles.switch} hitSlop={7} value={settings.rememberSide} onValueChange={(value) => { if (!value) setDetectedSide(''); setSettings((current) => ({ ...current, rememberSide: value, playerSide: value ? current.playerSide : 'auto' })); }} />
+              </SettingRow>
+              <SettingRow label="我的名字">
+                <TextInput accessibilityLabel="我的名字" returnKeyType="done" value={settings.playerName} onChangeText={(value) => setSettings((current) => ({ ...current, playerName: value }))} placeholder="可留空自动识别" placeholderTextColor="#71819a" style={styles.input} />
+              </SettingRow>
+              <SettingRow label="对面忍者">
+                <TextInput accessibilityLabel="对面忍者" returnKeyType="done" value={settings.opponentNinja} onChangeText={(value) => setSettings((current) => ({ ...current, opponentNinja: value }))} placeholder="如：照美冥" placeholderTextColor="#71819a" style={styles.input} />
+              </SettingRow>
+              <SettingRow label="两边计时">
+                <Switch accessibilityLabel="两边计时" style={styles.switch} hitSlop={7} value={settings.showBothSides} onValueChange={(value) => setSettings((current) => ({ ...current, showBothSides: value }))} />
+              </SettingRow>
+              <SettingRow label="迷你模式">
+                <Switch accessibilityLabel="迷你模式" style={styles.switch} hitSlop={7} value={settings.miniMode} onValueChange={(value) => setSettings((current) => ({ ...current, miniMode: value }))} />
+              </SettingRow>
+              <SettingRow label="完整浮窗透明度">
+                <ValueStepper label="完整浮窗透明度" value={settings.windowOpacity} minimum={0.4} maximum={1} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, windowOpacity: value }))} />
+              </SettingRow>
+              <SettingRow label="迷你浮窗透明度">
+                <ValueStepper label="迷你浮窗透明度" value={settings.miniOpacity} minimum={0.2} maximum={1} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, miniOpacity: value }))} />
+              </SettingRow>
+              <SettingRow label="字号">
+                <ValueStepper label="字号" value={settings.fontScale} minimum={0.55} maximum={1.2} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, fontScale: value }))} />
+              </SettingRow>
+              <Text style={styles.settingsNote}>透明度和字号沿用 Android 的语义，并保留系统字体缩放。这些设置仅影响前台界面，不会启用跨 App 悬浮窗或系统录屏扩展。</Text>
+            </ScrollView>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
     </SafeAreaView>
   );

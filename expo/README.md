@@ -1,69 +1,58 @@
-# Expo 移动端
+# Expo iOS 前台版
 
-这是替身计时器的 Expo iOS 前台版。SDK 固定在 51，iOS deployment target 为 13.4，以覆盖 Inferno 当前可启动的 iOS 14 环境。
+优先兼容当前高版本 iOS，使用稳定版 **Expo SDK 58 / React Native 0.88 / React 19.3**，不再为了 iOS 13/14 固定老 SDK。当前最低系统为 **iOS 16.4**；重点验收 iOS 18、iOS 26 系列，具体系统是否可用仍以自签真机测试为准。
 
 ## GitHub Actions 未签名 IPA（用户自行签名）
 
-`.github/workflows/ios-unsigned.yml` 在标准 `macos-15` runner 上使用 Xcode 16.2 / Node 22 编译 Release 真机包，再打包成 `Payload/*.app` 格式的未签名 IPA。不需要 Apple 开发者会员、证书、Expo 账号或仓库 Secrets；安装时由用户用爱思助手等工具重新签名。
+`.github/workflows/ios-unsigned.yml` 使用标准 `macos-26` runner、Xcode 26.6 和 Node 22 编译 Release 真机包，再打包成 `Payload/*.app` 格式的未签名 IPA。不需要 Apple 开发者会员、证书、Expo 账号或仓库 Secrets；安装时由用户用爱思助手等工具重新签名。
 
-工作流不会在普通提交或 `v*` 发布标签上自动运行，也不影响现有 Android / Windows 发布。有两个入口：
+普通提交和现有 `v*` 发布标签不会触发此工作流，不影响 Android / Windows 发布。有两个入口：
 
-- **当前分支首次构建**：先将 `expo/` 源码、`package-lock.json` 和工作流一起提交（不要只上传工作流），然后在该提交上创建并推送专用标签：
+- **构建当前分支**：先提交 `expo/` 源码、锁文件和工作流，然后在该提交上推送一个未使用的专用标签：
 
   ```bash
-  # 在已经提交上述文件的 v0.23beta 分支运行；后续构建换一个新标签。
   git push origin v0.23beta
-  git tag ios-unsigned-v0.23beta-1
-  git push origin ios-unsigned-v0.23beta-1
+  tag="ios-unsigned-$(date +%Y%m%d-%H%M%S)"
+  git tag "$tag"
+  git push origin "$tag"
   ```
 
-  标签指向哪个提交，就构建哪个提交，不需要先合并默认分支。
-- **网页手动运行**：工作流进入仓库默认分支后，在 Actions → **iOS unsigned IPA** → **Run workflow** 选择 `v0.23beta` 或其他包含 `expo/` 源码和该工作流的分支。
+  标签指向哪个提交，就构建哪个提交，无需先合并默认分支。
+- **网页手动运行**：工作流进入仓库默认分支后，在 Actions → **iOS unsigned IPA** → **Run workflow** 选择包含该工作流和 `expo/` 的分支。
 
-成功后，在该次运行的 **Artifacts** 下载 `naruto-timer-ios-unsigned-<运行编号>`，解压外层 ZIP，得到 `naruto-timer-unsigned.ipa`，交给用户自签。Artifact 保留 7 天，单次任务最多运行 60 分钟。工作流会检查真机平台、arm64 架构、内置 JS bundle 和 IPA 压缩包完整性，避免把模拟器包或依赖 Metro 的开发包当成 IPA。
+成功后，在该次运行的 **Artifacts** 下载 `naruto-timer-ios-unsigned-<运行编号>`，解压外层 ZIP，得到 `naruto-timer-unsigned.ipa`。Artifact 保留 7 天，任务最多运行 60 分钟。
 
-这只打包当前前台计时版，不会自动补齐 ReplayKit、屏幕识别或跨应用悬浮窗。免费 Apple 账号自签通常需要每 7 天续签，也不支持后续方案中的 App Groups；实际安装和运行仍需用户设备验收。
+CI 执行 TypeScript 和生命周期检查，并验证真机平台、arm64 主程序、内置 JS bundle、App/framework 的最低系统版本声明以及 ZIP 完整性。不会把模拟器 `.app` 或需要 Metro 的开发包当作 IPA。
 
-iOS 13.4+ / arm64 兼容目标、后台恢复计时、小屏/键盘适配及真机检查清单见 [ios-compat/README.md](ios-compat/README.md)。CI 会运行 `npm test` 并检查产物声明的最低系统版本，不能以云端构建成功代替真机验收。
+## 兼容性与边界
 
-## 本地开发与 EAS 签名构建
+- 专门适配放在 [ios-compat/](ios-compat/README.md)：前后台切换计时、小屏布局、键盘和安全区，以及真机验收清单。
+- 使用新 SDK 的原生启动页插件与 `react-native-safe-area-context`，不再维护旧 iOS 14 / Inferno 运行目标。
+- 当前仅有前台手动计时、迷你 pill、左右/双边计时、照美冥 15/10 秒倒计时和设置持久化。
+- ReplayKit / 游戏画面识别仍未接入；`plugins/withReplayKitPlaceholder` 仅写入占位状态，不会创建 Broadcast Upload Extension。界面不会把占位状态误报成采集成功。
+- iOS 不允许普通 App 像 Android 系统悬浮窗一样覆盖第三方游戏。真实跨 App 识别需另行设计 ReplayKit 原生扩展和结果展示。
+- 免费 Apple 账号签名通常每 7 天需要续签，不支持规划中的 App Groups；编译成功也不代表任意签名工具、证书和系统组合均已验证。
+
+## 本地开发与检查
+
+使用 Node 22.13+（22.x）或 24.3+（24.x）：
 
 ```bash
-npm install
+npm ci --include=dev
+npm run typecheck
+npm test
 npm run start
 ```
 
-在 macOS + Xcode 的 iOS Simulator 中验收前台界面：
+macOS / Xcode 下可运行 `npm run ios` 验证前台界面。iOS 原生目录由 prebuild 生成，长期原生修改应写成 config plugin，不要只修改被忽略的 `ios/` 目录。Linux 可做 TypeScript、JS 打包及 prebuild 检查，但不能执行 Xcode 真机编译。
+
+如选择 EAS：
 
 ```bash
-npm install --include=dev
-npx expo start --ios
-```
-
-这条路径可以验证 pill、操作栏、设置持久化和前台倒计时；ReplayKit 占位状态会按预期显示。当前 Linux 工作区没有 `xcrun` 或 Xcode，无法在这里启动 Apple Simulator。
-
-日常开发优先使用真实手机或 Android；Inferno 用于最后的 iOS 14 IPA 验收。当前 Expo Go 不适合直接作为 Inferno 客户端，后续需要用 EAS 或 macOS 构建自定义 development client / device IPA。
-
-构建给 Inferno 的包使用 device profile，而不是 iOS Simulator `.app`：
-
-```bash
-npx eas build --platform ios --profile preview
-```
-
-如果目标是 iOS Simulator，使用专门的 simulator profile；EAS 会返回包含完整 `.app` 的压缩包，模拟器安装的不是设备 IPA：
-
-```bash
+npx eas login
 npm run build:ios:simulator
+# 或：需要 Apple Developer 签名凭据的真机包，与未签名 Actions 路线不同。
+npm run build:ios:device
 ```
 
-需要 EAS 签名设备包时使用 `npm run build:ios:device`，它与上面的未签名 GitHub Actions 路线不同。两种 EAS 构建都需要先执行 `eas login`；设备包安装到兼容设备，模拟器包安装到 macOS/Xcode 的 iOS Simulator。
-
-EAS 真机 `preview` 构建需要配置 Apple Developer 签名凭据；`simulator` 构建不需要苹果签名。Inferno 侧的 IPA 安装和系统恢复仍需单独验证。
-
-当前前台版已经对齐 Android 的计时语义：迷你 pill、点击操作栏、自动/左右认边、双边计时、照美冥 15/10 秒双倒计时、设置持久化和透明度/字号参数。左侧掉落和右侧掉落按钮用于在没有识别输入时验收计时状态。
-
-截图识别和 ReplayKit Broadcast Upload Extension 尚未接入。它们需要 Expo config plugin、App Group 和 Xcode 原生 target，不能依赖 Expo Go 的纯 JS 运行时。iOS 也不允许普通 App 像 Android `TYPE_ACCESSIBILITY_OVERLAY` 一样覆盖第三方游戏；跨 App 识别必须由用户在系统录屏控件中显式启动广播，计时结果再通过 App Group 回传。当前 UI 会明确显示这一状态，不会把前台演示误报成已连接识别。
-
-工程中的 `plugins/withReplayKitPlaceholder` 只会在生成的 iOS `Info.plist` 中写入占位状态，不会自动创建 ReplayKit Broadcast Upload Extension，也不会提供实际屏幕采集原生模块。`replayKit.ts` 提供兼容 API；没有原生桥接时返回 `status: "placeholder"`，因此 Expo Go 和 Android 开发仍可运行前台演示计时。
-
-要接入真实画面采集，需要在 macOS/Xcode 中手动添加并签名 Broadcast Upload Extension，实现 `NarutoReplayKit` 原生模块，再通过 development client 或 EAS device 构建验证。普通 Expo Go 运行时不会加载该扩展。
+模拟器产物是 `.app` 压缩包，不能装到 iPhone。EAS 模拟器构建不需要苹果签名，真机 `preview` 构建需要匹配的签名凭据。

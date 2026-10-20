@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState } from 'react-native';
 
 /** Wake only while a deadline is pending and the app is active. */
 export function useCountdownNow(latestDeadline: number): number {
@@ -11,7 +11,7 @@ export function useCountdownNow(latestDeadline: number): number {
       if (timer !== undefined) clearTimeout(timer);
       timer = undefined;
     };
-    const refresh = (state: AppStateStatus | null = AppState.currentState) => {
+    const refresh = (state = AppState.currentState) => {
       stop();
       if (state !== 'active') return;
       const time = Date.now();

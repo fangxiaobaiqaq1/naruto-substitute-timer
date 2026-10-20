@@ -1,4 +1,4 @@
-const { withInfoPlist } = require('@expo/config-plugins');
+const { withInfoPlist } = require('expo/config-plugins');
 
 function withReplayKitPlaceholder(config) {
   return withInfoPlist(config, (configWithInfoPlist) => {

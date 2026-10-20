@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     defaults:
       run:
@@ -24,8 +24,8 @@ jobs:
     env:
       CI: "1"
       EXPO_NO_TELEMETRY: "1"
-      # Expo 51 / React Native 0.74 use the older Xcode toolchain, not macos-latest.
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      # Stable toolchain for current iOS; do not follow the Xcode 27 preview.
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,12 +33,11 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: expo/package-lock.json
-      - name: Install matching iOS platform for Xcode
+      - name: Check current iOS toolchain
         run: |
           xcodebuild -version
-          xcrun simctl list > /dev/null
-          # ibtool needs this runtime even for a device-only storyboard build.
-          xcodebuild -downloadPlatform iOS -buildVersion 18.2
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun simctl list runtimes
       - name: Install dependencies and check TypeScript
         run: |
           npm ci --include=dev
