@@ -27,6 +27,8 @@ data class OverlayState(
     val mini: Boolean,
     val fontScale: Float,
     val opacity: Float,
+    val cardWidth: Float,
+    val cardHeight: Float,
 )
 
 /** Shared with internal/ui/theme.go: cyan = cooling down, amber = last 3 s. */
@@ -244,6 +246,7 @@ class Session(
             }}  豆 左${visibleReady(currentBeads, true)}/右${visibleReady(currentBeads, false)}",
             settings.showBothSides, settings.overlayMode == "mini", settings.fontScale,
             if (settings.overlayMode == "mini") settings.miniOpacity else settings.windowOpacity,
+            settings.cardWidth, settings.cardHeight,
         )
     }
 

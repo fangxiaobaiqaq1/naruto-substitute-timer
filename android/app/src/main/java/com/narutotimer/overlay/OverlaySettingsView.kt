@@ -67,9 +67,13 @@ class OverlaySettingsView(
     private val fullOpacity = SeekBar(context)
     private val miniOpacity = SeekBar(context)
     private val sizeBar = SeekBar(context)
+    private val widthBar = SeekBar(context)
+    private val heightBar = SeekBar(context)
     private val fullOpacityText = Ui.text(context, "", 13f, Ui.TEXT_2)
     private val miniOpacityText = Ui.text(context, "", 13f, Ui.TEXT_2)
     private val sizeText = Ui.text(context, "", 13f, Ui.TEXT_2)
+    private val widthText = Ui.text(context, "", 13f, Ui.TEXT_2)
+    private val heightText = Ui.text(context, "", 13f, Ui.TEXT_2)
     private val positionText = Ui.note(context, "")
     private val projection = CheckBox(context)
     private val debug = CheckBox(context)
@@ -102,6 +106,8 @@ class OverlaySettingsView(
             setBar(fullOpacity, settings.windowOpacity, FULL_OPACITY_MIN, OPACITY_STEP)
             setBar(miniOpacity, settings.miniOpacity, MINI_OPACITY_MIN, OPACITY_STEP)
             setBar(sizeBar, settings.fontScale, Settings.FONT_SCALE_MIN, Settings.FONT_SCALE_STEP)
+            setBar(widthBar, settings.cardWidth, 1f, Settings.CARD_STRETCH_STEP)
+            setBar(heightBar, settings.cardHeight, 1f, Settings.CARD_STRETCH_STEP)
             projection.isChecked = settings.preferProjection
             debug.isChecked = settings.debug
             updateLabels()
@@ -243,13 +249,19 @@ class OverlaySettingsView(
         Ui.add(p, fullOpacityText, 10f); Ui.add(p, fullOpacity, 0f)
         Ui.add(p, miniOpacityText, 8f); Ui.add(p, miniOpacity, 0f)
         Ui.add(p, sizeText, 8f); Ui.add(p, sizeBar, 0f)
+        Ui.add(p, widthText, 8f); Ui.add(p, widthBar, 0f)
+        Ui.add(p, heightText, 8f); Ui.add(p, heightBar, 0f)
         configureBar(fullOpacity, FULL_OPACITY_MIN, 1f, OPACITY_STEP) { settings.windowOpacity = it }
         configureBar(miniOpacity, MINI_OPACITY_MIN, 1f, OPACITY_STEP) { settings.miniOpacity = it }
         configureBar(sizeBar, Settings.FONT_SCALE_MIN, Settings.FONT_SCALE_MAX, Settings.FONT_SCALE_STEP) { settings.fontScale = it }
+        configureBar(widthBar, 1f, Settings.CARD_STRETCH_MAX, Settings.CARD_STRETCH_STEP) { settings.cardWidth = it }
+        configureBar(heightBar, 1f, Settings.CARD_STRETCH_MAX, Settings.CARD_STRETCH_STEP) { settings.cardHeight = it }
         Ui.add(p, Ui.button(context, "恢复默认外观") {
             settings.windowOpacity = 1f
             settings.miniOpacity = DEFAULT_MINI_OPACITY
             settings.fontScale = Settings.DEFAULT_FONT_SCALE
+            settings.cardWidth = 1f
+            settings.cardHeight = 1f
             refresh()
         }, 12f)
         return p
@@ -258,7 +270,7 @@ class OverlaySettingsView(
     private fun buildPositionPanel(): View {
         val p = panel()
         Ui.add(p, Ui.title(context, "悬浮窗位置"), 0f)
-        Ui.add(p, Ui.note(context, "点「调整位置」后直接拖动计时卡片，点击卡片完成。平时需先点开卡片才能拖动，避免对局中误触移动。"), 4f)
+        Ui.add(p, Ui.note(context, "按住计时卡片直接拖动即可移动。「调整位置」会高亮卡片，方便在游戏画面里找到它。"), 4f)
         Ui.add(p, Ui.row(
             context,
             Ui.button(context, "调整位置", Ui.Kind.PRIMARY) { callbacks.onEditPosition() },
@@ -329,6 +341,8 @@ class OverlaySettingsView(
         fullOpacityText.text = String.format(Locale.ROOT, "完整卡片不透明度：%.0f%%", settings.windowOpacity * 100)
         miniOpacityText.text = String.format(Locale.ROOT, "迷你卡片不透明度：%.0f%%", settings.miniOpacity * 100)
         sizeText.text = String.format(Locale.ROOT, "悬浮窗大小：%.0f%%", settings.fontScale * 100)
+        widthText.text = String.format(Locale.ROOT, "卡片宽度：%.0f%%", settings.cardWidth * 100)
+        heightText.text = String.format(Locale.ROOT, "卡片高度：%.0f%%", settings.cardHeight * 100)
         positionText.text = "当前位置：" + if (settings.overlayX == Int.MIN_VALUE) "默认（屏幕上方居中）" else "${settings.overlayX}, ${settings.overlayY}"
         updateProjectionState()
     }

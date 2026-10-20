@@ -98,6 +98,9 @@ class MainActivity : Activity() {
     private lateinit var opacityBar: SeekBar
     private lateinit var fontScaleText: TextView
     private lateinit var fontScaleBar: SeekBar
+    private lateinit var cardSizeText: TextView
+    private lateinit var cardWidthBar: SeekBar
+    private lateinit var cardHeightBar: SeekBar
     private lateinit var projectionChk: CheckBox
     private lateinit var debugChk: CheckBox
     private lateinit var updateSourceGroup: RadioGroup
@@ -318,12 +321,25 @@ class MainActivity : Activity() {
             updateAppearanceLabels()
         }
         Ui.add(advancedPanel, fontScaleBar, 0f)
+        cardSizeText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(advancedPanel, it, 6f) }
+        cardWidthBar = slider(1.0, Settings.CARD_STRETCH_MAX.toDouble(), Settings.CARD_STRETCH_STEP.toDouble()) { v ->
+            settings.cardWidth = v.toFloat()
+            updateAppearanceLabels()
+        }
+        cardHeightBar = slider(1.0, Settings.CARD_STRETCH_MAX.toDouble(), Settings.CARD_STRETCH_STEP.toDouble()) { v ->
+            settings.cardHeight = v.toFloat()
+            updateAppearanceLabels()
+        }
+        Ui.add(advancedPanel, cardWidthBar, 0f)
+        Ui.add(advancedPanel, cardHeightBar, 0f)
         Ui.add(advancedPanel, Ui.row(
             this,
             Ui.button(this, "默认外观") {
                 settings.windowOpacity = 1f
                 settings.miniOpacity = DEFAULT_MINI_OPACITY.toFloat()
                 settings.fontScale = Settings.DEFAULT_FONT_SCALE
+                settings.cardWidth = 1f
+                settings.cardHeight = 1f
                 loadFromSettings()
             },
             Ui.button(this, "默认位置") {
@@ -461,6 +477,8 @@ class MainActivity : Activity() {
                 Settings.FONT_SCALE_STEP.toDouble(),
                 settings.fontScale.toDouble(),
             )
+            setSlider(cardWidthBar, 1.0, Settings.CARD_STRETCH_STEP.toDouble(), settings.cardWidth.toDouble())
+            setSlider(cardHeightBar, 1.0, Settings.CARD_STRETCH_STEP.toDouble(), settings.cardHeight.toDouble())
             updateAppearanceLabels()
             projectionChk.isChecked = settings.preferProjection
             debugChk.isChecked = settings.debug
@@ -481,6 +499,9 @@ class MainActivity : Activity() {
         opacityText.text = String.format(Locale.ROOT, "完整卡片不透明度：%.0f%%", settings.windowOpacity * 100)
         miniOpacityText.text = String.format(Locale.ROOT, "迷你卡片不透明度：%.0f%%", settings.miniOpacity * 100)
         fontScaleText.text = String.format(Locale.ROOT, "悬浮窗大小：%.0f%%", settings.fontScale * 100)
+        cardSizeText.text = String.format(
+            Locale.ROOT, "卡片宽度 %.0f%% · 高度 %.0f%%（上下两条）", settings.cardWidth * 100, settings.cardHeight * 100,
+        )
     }
 
     private fun syncSide() {
