@@ -35,6 +35,8 @@ inline const std::string Naruto = "漩涡鸣人[暴怒·第六尾]";
 inline const std::string ItachiHyakusen = "宇智波鼬[百战]";
 inline const std::string MinatoKyubi = "波风水门[九喇嘛连结]";
 inline const std::string HashiramaEdo = "千手柱间[秽土转生]";
+// Substitutes on its own like FifthMizukage: 15 s and 10 s.
+inline const std::string HanzoEdo = "半藏[秽土转生]";
 // EnergyGaugeRowOffset is measured from reviewed native HUDs. The energy
 // gauge pushes these ordinary four-diamond rows down 13px at 960x540. It is
 // active only after the complete title template is verified.

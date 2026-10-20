@@ -894,6 +894,7 @@ class MainActivity : Activity() {
         /** Go ninjaEntry 选项（除空串外）。 */
         private val NINJA_CHOICES = arrayOf(
             NinjaRules.FIFTH_MIZUKAGE, NinjaRules.HASHIRAMA, NinjaRules.MADARA, NinjaRules.OBITO, NinjaRules.NARUTO,
+            NinjaRules.HANZO_EDO,
         )
 
         /** Go sideMode。 */
