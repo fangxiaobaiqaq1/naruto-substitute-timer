@@ -344,6 +344,9 @@ type calibrationWindow struct {
 
 	surface *calibrationSurface
 	targets *widget.RadioGroup
+	// layout lets the player name the layout of a frame the engine did not
+	// recognise as a match, which is what an unsupported resolution looks like.
+	layout  *widget.RadioGroup
 	info    *widget.Label
 	status  *widget.Label
 	confirm *dialog.ConfirmDialog // the open confirmation, if any
@@ -377,6 +380,13 @@ func newCalibrationWindow(s *session, w fyne.Window) *calibrationWindow {
 	c.targets.Horizontal, c.targets.Required = true, true
 	c.targets.SetSelected(calibTargetNames[calibLeftBeads])
 	c.targets.OnChanged = c.selectTarget
+	c.layout = widget.NewRadioGroup([]string{"训练场", "决斗场"}, func(string) {
+		if c.snap != nil {
+			c.showSnapshot(c.snap)
+		}
+	})
+	c.layout.Horizontal = true
+	c.layout.Hide()
 	c.info = widget.NewLabel("等待画面…")
 	c.status = widget.NewLabel(calibrationHint)
 	c.status.Wrapping = fyne.TextWrapWord
@@ -388,7 +398,7 @@ func newCalibrationWindow(s *session, w fyne.Window) *calibrationWindow {
 	save.Importance = widget.HighImportance
 	closeButton := widget.NewButtonWithIcon("关闭", theme.CancelIcon(), c.requestClose)
 
-	top := container.NewBorder(nil, nil, widget.NewLabel("框选"), c.info, c.targets)
+	top := container.NewVBox(container.NewBorder(nil, nil, widget.NewLabel("框选"), c.info, c.targets), c.layout)
 	bottom := container.NewVBox(c.status,
 		container.NewHBox(refresh, clearSelected, restore, layout.NewSpacer(), save, closeButton))
 	w.SetContent(container.NewStack(canvas.NewRectangle(panelBG),
@@ -451,22 +461,41 @@ func (c *calibrationWindow) refreshFrame() {
 	c.showSnapshot(snap)
 }
 
+// profile is the frame's recognised layout, else the one the player picked.
+func (c *calibrationWindow) profile() string {
+	if c.snap != nil && c.snap.profile != "" {
+		return c.snap.profile
+	}
+	switch c.layout.Selected {
+	case "训练场":
+		return "camp"
+	case "决斗场":
+		return "duel"
+	}
+	return ""
+}
+
 func (c *calibrationWindow) showSnapshot(snap *calibrationSnapshot) {
 	c.snap = snap
 	b := snap.img.Bounds()
-	name := calibProfileName(snap.profile)
+	if snap.profile == "" {
+		c.layout.Show()
+	} else {
+		c.layout.Hide()
+	}
+	name := calibProfileName(c.profile())
 	if name == "" {
-		name = "非对局画面"
+		name = "未识别的画面"
 	}
 	c.info.SetText(fmt.Sprintf("%s · %d×%d", name, b.Dx(), b.Dy()))
 	c.surface.Refresh()
 	text := calibrationHint
 	switch {
-	case snap.profile == "":
-		text = "当前不是对局或训练场画面，不能确定布局。请在对局或训练场画面上校准：进入后点「刷新画面」。"
-	case c.saved != nil && c.saved.Profile != snap.profile:
+	case c.profile() == "":
+		text = "没认出这是对局画面（分辨率特殊时常见）。如果这是对局或训练场，请在上方选择训练场/决斗场再框选；否则进入对局后点「刷新画面」。"
+	case c.saved != nil && c.saved.Profile != c.profile():
 		text = fmt.Sprintf("已保存的框画在%s画面上，这里是%s，位置会略有偏差；在本画面上保存时，未重画的框恢复自动。",
-			calibProfileName(c.saved.Profile), calibProfileName(snap.profile))
+			calibProfileName(c.saved.Profile), calibProfileName(c.profile()))
 	}
 	c.setStatus(text + c.pendingText())
 }
@@ -527,7 +556,7 @@ func (c *calibrationWindow) finishBox(from, to fyne.Position) {
 	name := calibTargetNames[c.target]
 	r, ok := calibrationBoxFromDrag(c.surface.fit(), from, to)
 	if ok {
-		c.drawn[c.target] = &calibBox{rect: r, profile: c.snap.profile}
+		c.drawn[c.target] = &calibBox{rect: r, profile: c.profile()}
 		c.touched[c.target] = true
 	}
 	c.surface.Refresh()
@@ -539,8 +568,8 @@ func (c *calibrationWindow) finishBox(from, to fyne.Position) {
 	if c.target.beads() {
 		text = name + "已框好，4 个小点应落在每颗豆中间。"
 	}
-	if c.snap.profile == "" {
-		text += "这不是对局或训练场画面，不能保存。"
+	if c.profile() == "" {
+		text += "先在上方选择训练场或决斗场，否则不能保存。"
 	}
 	c.setStatus(text + c.pendingText())
 }
