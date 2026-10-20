@@ -218,7 +218,11 @@ func Guesser(cfg config.Config) func(*image.RGBA, string) Readout {
 		}
 		r := Read(img, book, mode)
 		if r.Side != "" && r.Opp == "" {
-			go saveOppCrop(img, opposite(r.Side), mode)
+			// The frame may be a reused capture buffer: crop (copy) it now and
+			// only encode/write in the background.
+			if crop := oppCrop(img, opposite(r.Side), mode); crop != nil {
+				go saveOppCrop(crop)
+			}
 		}
 		return r
 	}
@@ -414,21 +418,18 @@ func opposite(side string) string {
 var saveMu sync.Mutex
 var lastSave time.Time
 
-func saveOppCrop(img *image.RGBA, side string, mode detect.ContentMode) {
+// oppCrop copies the opponent's footer name strip out of img, synchronously,
+// when a save is due (at most one per 8 s). nil means nothing to save.
+func oppCrop(img *image.RGBA, side string, mode detect.ContentMode) *image.RGBA {
 	saveMu.Lock()
-	defer saveMu.Unlock()
-	if time.Since(lastSave) < 8*time.Second {
-		return
-	}
-	if img == nil {
-		return
-	}
-	if err := os.MkdirAll(SeenDir, 0o755); err != nil {
-		return
+	due := time.Since(lastSave) >= 8*time.Second
+	saveMu.Unlock()
+	if !due || img == nil {
+		return nil
 	}
 	ca, ok := detect.ResolveContentArea(img, mode, detect.LogicWidth, detect.LogicHeight, 0.015)
 	if !ok {
-		return
+		return nil
 	}
 	roi := DefaultROIs.Left
 	if side == "right" {
@@ -436,6 +437,19 @@ func saveOppCrop(img *image.RGBA, side string, mode detect.ContentMode) {
 	}
 	crop := match.CropRGBA(img, mapRect(ca, roi, side))
 	if crop == nil || crop.Bounds().Dx() < 8 {
+		return nil
+	}
+	return crop
+}
+
+// saveOppCrop writes an owned crop (oppCrop) to SeenDir, at most once per 8 s.
+func saveOppCrop(crop *image.RGBA) {
+	saveMu.Lock()
+	defer saveMu.Unlock()
+	if time.Since(lastSave) < 8*time.Second {
+		return
+	}
+	if err := os.MkdirAll(SeenDir, 0o755); err != nil {
 		return
 	}
 	path := filepath.Join(SeenDir, fmt.Sprintf("opp-%s.png", time.Now().Format("20060102-150405")))

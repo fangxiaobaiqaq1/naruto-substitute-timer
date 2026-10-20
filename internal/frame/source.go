@@ -129,6 +129,8 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 
 	mode, _ := detect.ParseMode(cfg.Layout.ContentMode)
 	var analyzed dedupedAnalysis
+	var rowHashes []uint64
+	var printWindowFrames captureRing
 	var client capture.Client
 	var retryAfter time.Time
 	var retryError error
@@ -202,7 +204,17 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 				}
 				started = time.Now()
 				setAttempt(started, method)
-				img, err := client.Capture()
+				// A row-hashing client fingerprints each row while it is in
+				// cache; the fold equals frameFingerprint of the image.
+				var img *image.RGBA
+				var err error
+				hashedRows := false
+				if rows, ok := client.(capture.RowHashClient); ok {
+					img, rowHashes, err = rows.CaptureRowHashes(fingerprintRow, rowHashes)
+					hashedRows = err == nil && img != nil && len(rowHashes) == img.Rect.Dy()
+				} else {
+					img, err = client.Capture()
+				}
 				captured := time.Now()
 				if err != nil {
 					client.Close()
@@ -216,9 +228,14 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 					f = Frame{Hold: true, Err: err, CaptureStarted: started, CaptureMethod: method}
 					continue
 				}
-				f = analyzed.analyze(img, eng, mode, started, captured, client.Source())
+				source := client.Source()
+				if hashedRows {
+					f = analyzed.analyzeFingerprinted(img, frameFingerprintRows(img.Rect, source, rowHashes), eng, mode, started, captured, source)
+				} else {
+					f = analyzed.analyze(img, eng, mode, started, captured, source)
+				}
 			} else if method == capture.MethodPrintWindow {
-				f = snapshotFingerprinted(eng, mode)
+				f = snapshotFingerprinted(eng, mode, &printWindowFrames)
 			} else {
 				f = Frame{Hold: true, Err: fmt.Errorf("unsupported capture method %q", method), CaptureStarted: started, CaptureMethod: method}
 			}
@@ -421,12 +438,7 @@ func frameFingerprint(img *image.RGBA, method string) uint64 {
 		fingerprintHook()
 	}
 	r := img.Rect
-	var header [32]byte
-	for i, value := range []int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} {
-		binary.LittleEndian.PutUint64(header[i*8:], uint64(value))
-	}
-	sum := maphash.Bytes(fingerprintSeed, header[:])
-	sum = mixHash(sum, maphash.String(fingerprintSeed, method))
+	sum := fingerprintHeader(r, method)
 	rowBytes := r.Dx() * 4
 	if rowBytes <= 0 || r.Dy() <= 0 {
 		return sum
@@ -435,7 +447,35 @@ func frameFingerprint(img *image.RGBA, method string) uint64 {
 	// visible pixels produce the same fingerprint.
 	for y := 0; y < r.Dy(); y++ {
 		start := y * img.Stride
-		sum = mixHash(sum, maphash.Bytes(fingerprintSeed, img.Pix[start:start+rowBytes]))
+		sum = mixHash(sum, fingerprintRow(img.Pix[start:start+rowBytes]))
+	}
+	return sum
+}
+
+func fingerprintHeader(r image.Rectangle, method string) uint64 {
+	var header [32]byte
+	for i, value := range []int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} {
+		binary.LittleEndian.PutUint64(header[i*8:], uint64(value))
+	}
+	sum := maphash.Bytes(fingerprintSeed, header[:])
+	return mixHash(sum, maphash.String(fingerprintSeed, method))
+}
+
+// fingerprintRow hashes one row of visible pixels (capture.RowHashClient).
+func fingerprintRow(row []byte) uint64 { return maphash.Bytes(fingerprintSeed, row) }
+
+// frameFingerprintRows is frameFingerprint(img, method) for an image of
+// bounds r whose visible rows hash (fingerprintRow) to rows, top to bottom.
+func frameFingerprintRows(r image.Rectangle, method string, rows []uint64) uint64 {
+	if fingerprintHook != nil {
+		fingerprintHook()
+	}
+	sum := fingerprintHeader(r, method)
+	if r.Dx() <= 0 || r.Dy() <= 0 {
+		return sum
+	}
+	for _, row := range rows {
+		sum = mixHash(sum, row)
 	}
 	return sum
 }
@@ -482,9 +522,9 @@ func engineFingerprint(img *image.RGBA, method string, eng engine.Engine) uint64
 
 // snapshotFingerprinted reads the revision before analysing, so a replacement
 // during the analysis is never attributed to this frame.
-func snapshotFingerprinted(eng engine.Engine, mode detect.ContentMode) Frame {
+func snapshotFingerprinted(eng engine.Engine, mode detect.ContentMode, ring *captureRing) Frame {
 	revision := calibrationRevision(eng)
-	f := snapshot(eng, mode)
+	f := snapshot(eng, mode, ring)
 	if f.Img != nil && !f.fingerprinted {
 		f.fingerprint, f.fingerprinted = withRevision(frameFingerprint(f.Img, f.CaptureMethod), revision), true
 	}
@@ -504,7 +544,16 @@ type dedupedAnalysis struct {
 }
 
 func (d *dedupedAnalysis) analyze(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
-	fingerprint := engineFingerprint(img, source, eng)
+	return d.analyzeWith(img, engineFingerprint(img, source, eng), eng, mode, started, capturedAt, source)
+}
+
+// analyzeFingerprinted is analyze for a capture whose frameFingerprint (base,
+// without the calibration revision) the client already computed.
+func (d *dedupedAnalysis) analyzeFingerprinted(img *image.RGBA, base uint64, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
+	return d.analyzeWith(img, withRevision(base, calibrationRevision(eng)), eng, mode, started, capturedAt, source)
+}
+
+func (d *dedupedAnalysis) analyzeWith(img *image.RGBA, fingerprint uint64, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
 	if d.valid && img != nil && fingerprint == d.fingerprint && d.last.Err == nil {
 		f := d.last
 		f.Img = img
