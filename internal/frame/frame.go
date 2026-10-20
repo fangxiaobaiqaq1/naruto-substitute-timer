@@ -80,11 +80,11 @@ func NewSnapshotter(eng engine.Engine, mode detect.ContentMode) Provider {
 }
 
 // captureRing reuses PrintWindow output images like the MuMu SDK client's
-// ring: a delivered image stays valid while the next two captures run, the
+// ring: a delivered image stays valid while the next capture runs, the
 // contract of the selectable snapshotter's single capture worker (consumers
 // that keep pixels longer copy them). nil allocates every frame.
 type captureRing struct {
-	frames [3]*image.RGBA
+	frames [2]*image.RGBA
 	next   int
 }
 

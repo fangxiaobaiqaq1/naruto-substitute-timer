@@ -5,11 +5,14 @@ import (
 	"unsafe"
 )
 
-// frameRing is how many delivered frames stay valid at once. The capture
-// scheduler hands one frame to the UI and requests the next only after that
-// frame was processed; the extra slots protect consumers that finish slightly
-// later. Anything that keeps pixels longer (replay, dumps, OCR crops) copies.
-const frameRing = 3
+// frameRing is how many delivered frames stay valid at once: the frame being
+// processed plus the one the next capture writes. The capture scheduler hands
+// one frame to the UI and requests the next only after that frame was
+// processed (one capture in flight, the UI consumes each frame synchronously).
+// Anything that keeps pixels longer copies them synchronously: replay and
+// diagnostics, calibration snapshots, dumps, OCR strips and the identity
+// opponent crop.
+const frameRing = 2
 
 // frameRingBuffer reuses output images instead of allocating ~8 MiB per 1080p
 // capture. That allocation stream was a major source of GC work at 60 Hz.
