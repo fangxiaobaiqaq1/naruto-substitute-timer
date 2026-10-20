@@ -87,10 +87,12 @@ type avatarTemplate struct {
 }
 
 // avatarTemplateCacheBytes bounds the prepared-template cache. One full scan
-// prepares at most 24 + 12*9 templates per side; at 1080p both sides' working
-// set is about 3 MiB, so steady state never evicts while the 242-entry
-// catalog at every factor (about 70 MiB at 1080p) can never accumulate.
-const avatarTemplateCacheBytes = 12 << 20
+// prepares at most 24 + 12*9 templates per side; with packed diamond masks
+// both sides' working set is about 1.5 MiB at 1080p (about 6 MiB at
+// 2880x1800), so steady state never evicts, while a long session of
+// different opponents (every catalog entry at every factor is about 70 MiB
+// at 1080p) cannot accumulate beyond the cap.
+const avatarTemplateCacheBytes = 8 << 20
 
 // AvatarMatch is exclusively current-frame portrait evidence. Candidate is
 // diagnostic-only when the strict identity fields are blank.

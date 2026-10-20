@@ -66,6 +66,37 @@ type preparedTemplate struct {
 	ncc        *match.PreparedNCC
 	index      int  // Position in Catalog.templates; keys the peak hint.
 	windowed   bool // ROI narrowed to the remembered peak; a miss keeps the hint.
+	// variants caches the +-2 px sizes the continuation refinement matches
+	// (screen-anchored continuation templates only); shared by value copies.
+	variants *variantCache
+}
+
+// variantCache holds prepared rescaled copies of one prepared template. A
+// variant depends only on the template and its size, so a cached one is
+// exactly what rescaling again would produce.
+type variantCache struct {
+	mu sync.Mutex
+	m  map[image.Point]*match.PreparedNCC
+}
+
+func (v *variantCache) get(t preparedTemplate, w, h int) *match.PreparedNCC {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	key := image.Pt(w, h)
+	if p, ok := v.m[key]; ok {
+		return p
+	}
+	g := match.ScaleGray(t.gray, w, h)
+	var mask *image.Gray
+	if t.mask != nil {
+		mask = match.ScaleGray(t.mask, w, h)
+	}
+	p := match.PrepareNCC(g, mask)
+	if v.m == nil {
+		v.m = make(map[image.Point]*match.PreparedNCC, 24)
+	}
+	v.m[key] = p
+	return p
 }
 
 // Catalog 是已加载的模板库。
@@ -668,6 +699,9 @@ func prepareOne(ca detect.ContentArea, t template) preparedTemplate {
 		out.mask = match.ScaleGray(t.mask, tw, th)
 	}
 	out.ncc = match.PrepareNCC(out.gray, out.mask)
+	if t.spec.ContinuationOnly && t.spec.Anchor == "screen" {
+		out.variants = &variantCache{}
+	}
 	return out
 }
 
@@ -891,13 +925,20 @@ func (c *Catalog) matchIn(img *image.RGBA, gray *image.Gray, roi image.Rectangle
 			if (dw == 0 && dh == 0) || w < 4 || h < 4 {
 				continue
 			}
-			g := match.ScaleGray(t.gray, w, h)
-			var mask *image.Gray
-			if t.mask != nil {
-				mask = match.ScaleGray(t.mask, w, h)
+			// Only the built-in NCC gets here; it scores the prepared variant
+			// exactly as it would prepare ScaleGray(template/mask) itself.
+			var prepared *match.PreparedNCC
+			if t.variants != nil {
+				prepared = t.variants.get(t, w, h)
+			} else {
+				var mask *image.Gray
+				if t.mask != nil {
+					mask = match.ScaleGray(t.mask, w, h)
+				}
+				prepared = match.PrepareNCC(match.ScaleGray(t.gray, w, h), mask)
 			}
 			window := (image.Rectangle{Min: peak, Max: peak.Add(image.Pt(w, h))}).Inset(-2).Intersect(roi)
-			candidate, e := c.matcher.Match(match.Query{Image: img, Gray: gray, ROI: window, Template: g, Mask: mask})
+			candidate, e := c.matcher.Match(match.Query{Image: img, Gray: gray, ROI: window, Prepared: prepared})
 			if e == nil && candidate.Value > best.Value {
 				best = candidate
 			}
