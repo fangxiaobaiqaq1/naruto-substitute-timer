@@ -10,17 +10,28 @@
 //     --calibration：区域校准（docs/区域校准.md），框依次为左豆/右豆/左头像/右头像，
 //       每个 "x,y,w,h"（整帧比例）或 "-"（自动），例如 duel:0.08,0.1,0.05,0.02/-/-/-。
 //
+//   hostcheck --bench N [--perturb] [--serial] [--calibration ...] <png 或目录>...
+//     性能基准（docs/性能优化-android-native.md）：一个 frame::Pipeline，每张图连续分析 N 帧，
+//     采集时间每帧 +16ms。--perturb 每帧翻转稀疏网格像素的 R 通道最低位（确定性，帧帧不同），
+//     让去重/头像记忆不命中，模拟实时采集；--serial 关闭 nt::ParallelFor。输出每张图与总体的
+//     p50/p90 毫秒、每帧 operator new 次数/字节、资源注册/引擎构建/预热后的内存，以及结果哈希
+//     （同参数下前后两个版本必须相同）。
+//
 // 构建见 tools/hostcheck.sh。
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #include "stb_image.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <dirent.h>
+#include <malloc.h>
+#include <new>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -33,7 +44,49 @@
 #include "nt/identity.h"
 #include "nt/image.h"
 #include "nt/ninja.h"
+#include "nt/parallel.h"
 #include "nt/scene.h"
+
+// ---- 分配计数（仅主机工具）：替换全局 operator new/delete，统计次数、字节与存活字节。 ----
+namespace {
+std::atomic<uint64_t> g_newCalls{0}, g_newBytes{0};
+std::atomic<int64_t> g_liveBytes{0};
+
+void* countedNew(size_t n) {
+    void* p = std::malloc(n ? n : 1);
+    if (p != nullptr) {
+        g_newCalls.fetch_add(1, std::memory_order_relaxed);
+        g_newBytes.fetch_add(n, std::memory_order_relaxed);
+        g_liveBytes.fetch_add(static_cast<int64_t>(malloc_usable_size(p)), std::memory_order_relaxed);
+    }
+    return p;
+}
+
+void countedDelete(void* p) {
+    if (p == nullptr) return;
+    g_liveBytes.fetch_sub(static_cast<int64_t>(malloc_usable_size(p)), std::memory_order_relaxed);
+    std::free(p);
+}
+}  // namespace
+
+void* operator new(size_t n) {
+    void* p = countedNew(n);
+    if (p == nullptr) throw std::bad_alloc();
+    return p;
+}
+void* operator new[](size_t n) {
+    void* p = countedNew(n);
+    if (p == nullptr) throw std::bad_alloc();
+    return p;
+}
+void* operator new(size_t n, const std::nothrow_t&) noexcept { return countedNew(n); }
+void* operator new[](size_t n, const std::nothrow_t&) noexcept { return countedNew(n); }
+void operator delete(void* p) noexcept { countedDelete(p); }
+void operator delete[](void* p) noexcept { countedDelete(p); }
+void operator delete(void* p, size_t) noexcept { countedDelete(p); }
+void operator delete[](void* p, size_t) noexcept { countedDelete(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { countedDelete(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { countedDelete(p); }
 
 namespace {
 
@@ -249,11 +302,133 @@ bool parseCalibration(const std::string& arg, nt::config::RegionCalibration& out
     return !std::getline(boxes, box, '/');
 }
 
+// ---- --bench ----
+
+// memLine: C++ 存活堆（operator new）、malloc 在用（uordblks+hblkhd，含 stb 等 C 分配）、VmRSS/VmHWM。
+std::string memLine() {
+    long rss = 0, hwm = 0;
+    if (FILE* f = std::fopen("/proc/self/status", "r")) {
+        char line[256];
+        while (std::fgets(line, sizeof line, f)) {
+            if (std::strncmp(line, "VmRSS:", 6) == 0) rss = std::atol(line + 6);
+            if (std::strncmp(line, "VmHWM:", 6) == 0) hwm = std::atol(line + 6);
+        }
+        std::fclose(f);
+    }
+    struct mallinfo2 mi = mallinfo2();
+    char buf[256];
+    std::snprintf(buf, sizeof buf, "live=%.2fMiB malloc=%.2fMiB rss=%.1fMiB hwm=%.1fMiB",
+                  static_cast<double>(g_liveBytes.load()) / 1048576.0,
+                  static_cast<double>(mi.uordblks + mi.hblkhd) / 1048576.0, static_cast<double>(rss) / 1024.0,
+                  static_cast<double>(hwm) / 1024.0);
+    return buf;
+}
+
+double percentile(std::vector<double> v, double p) {
+    if (v.empty()) return 0;
+    std::sort(v.begin(), v.end());
+    // 最近秩（nearest-rank）。
+    size_t k = static_cast<size_t>(p / 100.0 * static_cast<double>(v.size()) + 0.999999);
+    if (k < 1) k = 1;
+    if (k > v.size()) k = v.size();
+    return v[k - 1];
+}
+
+// perturb 翻转第 k 帧的稀疏网格（8px 步长，相位随 k 变化）上 R 通道的最低位。再调用一次即还原。
+void perturb(nt::RGBA& img, int k) {
+    const nt::Rect b = img.Bounds();
+    const int px = (k * 3) % 8, py = (k * 5 + 1) % 8;
+    for (int y = py; y < b.Dy(); y += 8) {
+        uint8_t* row = img.Pix + static_cast<ptrdiff_t>(y) * img.Stride;
+        for (int x = px; x < b.Dx(); x += 8) row[4 * x] ^= 1;
+    }
+}
+
+uint64_t fnv(uint64_t h, const std::string& s) {
+    for (unsigned char c : s) h = (h ^ c) * 1099511628211ull;
+    return h;
+}
+
+std::string resultLine(const nt::frame::Frame& fr) {
+    const nt::engine::Result& r = fr.Res;
+    char buf[512];
+    std::snprintf(buf, sizeof buf, "%d %d %s %.6f %s %d %d/%d %s %s %s %d %d %s|", r.Fighting, r.Uncertain,
+                  r.Scene.c_str(), r.GateScore, r.LayoutProfile.c_str(), r.RoundOpening, r.LeftSlots, r.RightSlots,
+                  r.LeftNinja.c_str(), r.RightNinja.c_str(), r.Name.c_str(), fr.Duplicate, fr.Reused,
+                  fr.Status.c_str());
+    return std::string(buf) + beadsString(r.Beads) + "|" + geometryString(r.Geometry);
+}
+
+int runBench(const nt::config::Config& cfg, const std::vector<std::string>& files, int frames, bool perturbFrames) {
+    using clock = std::chrono::steady_clock;
+    const auto t0 = clock::now();
+    nt::frame::Pipeline pipe(cfg);
+    const double buildMs = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
+    if (!pipe.Ok()) {
+        std::fprintf(stderr, "pipeline: %s\n", pipe.Error().c_str());
+        return 1;
+    }
+    std::printf("mem pipeline: %s build=%.1fms\n", memLine().c_str(), buildMs);
+    const nt::TimeNs base = 1700000000LL * nt::Second;
+    std::vector<double> all, firsts;
+    uint64_t allCalls = 0, allBytes = 0, hash = 1469598103934665603ull;
+    int64_t at = 0;
+    for (const auto& f : files) {
+        nt::RGBA img;
+        if (!loadFrame(f, img)) {
+            std::fprintf(stderr, "skip %s (decode)\n", f.c_str());
+            continue;
+        }
+        std::vector<double> ms;
+        uint64_t calls = 0, bytes = 0;
+        for (int k = 0; k < frames; ++k) {
+            if (perturbFrames) perturb(img, k);
+            const nt::TimeNs ts = base + at++ * 16 * nt::Millisecond;
+            const uint64_t c0 = g_newCalls.load(), b0 = g_newBytes.load();
+            const auto s = clock::now();
+            nt::frame::Frame fr = pipe.Analyze(&img, ts, ts, nt::frame::MethodBuffer);
+            const double d = std::chrono::duration<double, std::milli>(clock::now() - s).count();
+            const uint64_t c1 = g_newCalls.load(), b1 = g_newBytes.load();
+            if (perturbFrames) perturb(img, k);
+            hash = fnv(hash, resultLine(fr));
+            if (k == 0) {
+                firsts.push_back(d);
+            } else {
+                ms.push_back(d);
+                calls += c1 - c0;
+                bytes += b1 - b0;
+            }
+        }
+        const std::string name = f.substr(f.find_last_of('/') + 1);
+        const double n = static_cast<double>(std::max<size_t>(1, ms.size()));
+        std::printf("file %-36s %4dx%-4d first=%7.2fms p50=%6.2fms p90=%6.2fms new/frame=%6.0f KiB/frame=%7.1f live=%.2fMiB\n",
+                    name.c_str(), img.Bounds().Dx(), img.Bounds().Dy(), firsts.back(), percentile(ms, 50),
+                    percentile(ms, 90), static_cast<double>(calls) / n, static_cast<double>(bytes) / n / 1024.0,
+                    static_cast<double>(g_liveBytes.load()) / 1048576.0);
+        all.insert(all.end(), ms.begin(), ms.end());
+        allCalls += calls;
+        allBytes += bytes;
+        std::fflush(stdout);
+    }
+    double sum = 0;
+    for (double d : all) sum += d;
+    const double n = static_cast<double>(std::max<size_t>(1, all.size()));
+    std::printf("overall frames=%zu p50=%.3fms p90=%.3fms mean=%.3fms first-p50=%.2fms first-max=%.2fms new/frame=%.0f KiB/frame=%.1f\n",
+                all.size(), percentile(all, 50), percentile(all, 90), sum / n, percentile(firsts, 50),
+                firsts.empty() ? 0.0 : *std::max_element(firsts.begin(), firsts.end()),
+                static_cast<double>(allCalls) / n, static_cast<double>(allBytes) / n / 1024.0);
+    std::printf("mem warm: %s\n", memLine().c_str());
+    std::printf("results-hash: %016llx\n", static_cast<unsigned long long>(hash));
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     std::string repo = "/ssd/work/naruto-substitute-timer-v0.2.8";
     bool seq = false;
+    int bench = 0;
+    bool perturbFrames = false;
     std::vector<std::string> inputs;
     std::optional<nt::config::RegionCalibration> calibration;
     for (int i = 1; i < argc; ++i) {
@@ -269,16 +444,40 @@ int main(int argc, char** argv) {
             calibration = c;
         } else if (a == "--repo" && i + 1 < argc) {
             repo = argv[++i];
+        } else if (a == "--bench" && i + 1 < argc) {
+            bench = std::max(1, std::atoi(argv[++i]));
+        } else if (a == "--perturb") {
+            perturbFrames = true;
+        } else if (a == "--serial") {
+            nt::SetParallelEnabled(false);
         } else {
             inputs.push_back(a);
         }
     }
+    if (bench > 0) std::printf("mem start: %s\n", memLine().c_str());
+    const auto regStart = std::chrono::steady_clock::now();
     registerAssets(repo);
+    const double regMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - regStart).count();
     std::fprintf(stderr, "assets: %d images, %d texts\n", g_images, g_texts);
+    if (bench > 0) std::printf("mem assets: %s register=%.1fms\n", memLine().c_str(), regMs);
 
     nt::config::Config cfg = nt::config::Default();
     cfg.Layout.Calibration = calibration;
     nt::identity::SetMineNames(cfg.UI.PlayerNames);
+
+    if (bench > 0) {
+        std::vector<std::string> files;
+        for (const auto& in : inputs) {
+            if (isDir(in)) {
+                for (const auto& n : listDir(in))
+                    if (endsWith(n, ".png")) files.push_back(in + "/" + n);
+            } else {
+                files.push_back(in);
+            }
+        }
+        return runBench(cfg, files, bench, perturbFrames);
+    }
 
     std::string err;
     std::string desc;
