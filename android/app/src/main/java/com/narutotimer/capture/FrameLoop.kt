@@ -14,6 +14,7 @@ import com.narutotimer.FrameGeometry
 import com.narutotimer.NativeCore
 import com.narutotimer.TimerApp
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -71,6 +72,9 @@ object FrameLoop {
     @Volatile private var lastWidth = 0
     @Volatile private var lastHeight = 0
     @Volatile private var lastResult: AnalysisResult? = null
+    /** Staging copy for [analyzeViaBitmap] (analysis thread; dropped by [stop] / a hardware-buffer frame). */
+    @Volatile private var fallbackRgba: ByteBuffer? = null
+    private var fallbackRow = IntArray(0)
 
     /** A calibration snapshot ([requestSnapshot]): one frame and what its analysis used. */
     class Snapshot(
@@ -195,6 +199,7 @@ object FrameLoop {
             snapshot = null // The requester's own timeout reports the failure.
             wake.notifyAll()
         }
+        fallbackRgba = null
         val old = thread
         thread = null
         old?.interrupt()
@@ -353,7 +358,10 @@ object FrameLoop {
         val result = runCatching {
             NativeCore.analyzeHardwareBuffer(frame.buffer, frame.capturedAtNanos, frame.method)
         }.getOrNull()
-        if (result != null) return result
+        if (result != null) {
+            if (fallbackRgba != null) fallbackRgba = null // The source changed; free the staging copy.
+            return result
+        }
 
         // Some emulator images expose a HardwareBuffer that JNI cannot CPU-lock. A
         // software copy keeps capture usable without changing the projection token.
@@ -374,20 +382,52 @@ object FrameLoop {
             val width = bitmap.width
             val height = bitmap.height
             if (width <= 0 || height <= 0) return null
-            val pixels = IntArray(width * height)
-            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-            val rgba = ByteBuffer.allocateDirect(width * height * 4)
-            for (pixel in pixels) {
-                rgba.put((pixel ushr 16).toByte())
-                rgba.put((pixel ushr 8).toByte())
-                rgba.put(pixel.toByte())
-                rgba.put((pixel ushr 24).toByte())
-            }
-            rgba.flip()
+            val rgba = fillRgba(bitmap, width, height)
             return NativeCore.analyzeBuffer(rgba, width, height, width * 4, frame.capturedAtNanos, frame.method)
         } finally {
             bitmap.recycle()
         }
+    }
+
+    /**
+     * Packed R,G,B,A rows of [bitmap] in [fallbackRgba] (reused while the size fits), byte for
+     * byte what Bitmap.getPixels (non-premultiplied sRGB ARGB) reordered to R,G,B,A gives:
+     * one copyPixelsToBuffer of the raw pixels, which equal that wherever alpha is 255 (always,
+     * for a screen frame); a row with any other alpha, or a bitmap that is not tightly packed
+     * ARGB_8888 sRGB, is rewritten from getPixels exactly as before.
+     */
+    private fun fillRgba(bitmap: Bitmap, width: Int, height: Int): ByteBuffer {
+        val need = width * height * 4
+        var rgba = fallbackRgba
+        if (rgba == null || rgba.capacity() != need) {
+            rgba = ByteBuffer.allocateDirect(need).order(ByteOrder.BIG_ENDIAN)
+            fallbackRgba = rgba
+        }
+        if (fallbackRow.size < width) fallbackRow = IntArray(width)
+        val row = fallbackRow
+        rgba.clear()
+        val ints = rgba.asIntBuffer() // Big-endian: R<<24 | G<<16 | B<<8 | A.
+        val raw = bitmap.config == Bitmap.Config.ARGB_8888 && bitmap.rowBytes == width * 4 &&
+            bitmap.colorSpace == ColorSpace.get(ColorSpace.Named.SRGB)
+        if (raw) bitmap.copyPixelsToBuffer(rgba)
+        for (y in 0 until height) {
+            if (raw) {
+                ints.position(y * width)
+                ints.get(row, 0, width)
+                var alpha = 0xFF
+                for (x in 0 until width) alpha = alpha and row[x]
+                if ((alpha and 0xFF) == 0xFF) continue
+            }
+            bitmap.getPixels(row, 0, width, 0, y, width, 1)
+            for (x in 0 until width) {
+                val pixel = row[x]
+                row[x] = (pixel shl 8) or (pixel ushr 24)
+            }
+            ints.position(y * width)
+            ints.put(row, 0, width)
+        }
+        rgba.clear()
+        return rgba
     }
 
     private const val TAG = "FrameLoop"
