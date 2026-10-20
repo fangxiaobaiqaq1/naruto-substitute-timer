@@ -9,9 +9,11 @@
 #include "nt/frame.h"
 
 #include <cstdio>
+#include <vector>
 
 #include "nt/factory.h"
 #include "nt/hash.h"
+#include "nt/parallel.h"
 #include "nt/utf8.h"
 
 namespace nt::frame {
@@ -107,11 +109,23 @@ uint64_t frameFingerprint(const RGBA* img, const std::string& method) {
         return sum;
     }
     // Hash row by row so a padded stride and a packed buffer with the same
-    // visible pixels produce the same fingerprint.
-    for (int y = 0; y < r.Dy(); ++y) {
-        const uint8_t* row = img->Pix + static_cast<ptrdiff_t>(y) * img->Stride;
-        sum = MixHash(sum, HashBytes(seed, row, static_cast<size_t>(rowBytes)));
-    }
+    // visible pixels produce the same fingerprint. Row hashes are independent:
+    // they are computed in parallel bands, then mixed in row order exactly as
+    // the sequential loop did (same value).
+    const int rows = r.Dy();
+    thread_local std::vector<uint64_t> rowHash;
+    rowHash.resize(static_cast<size_t>(rows));
+    uint64_t* hashes = rowHash.data();
+    constexpr int bands = 4;
+    ParallelFor(rows >= 64 ? bands : 1, [&](int band) {
+        const int b = rows >= 64 ? bands : 1;
+        const int y0 = rows * band / b, y1 = rows * (band + 1) / b;
+        for (int y = y0; y < y1; ++y) {
+            const uint8_t* row = img->Pix + static_cast<ptrdiff_t>(y) * img->Stride;
+            hashes[y] = HashBytes(seed, row, static_cast<size_t>(rowBytes));
+        }
+    });
+    for (int y = 0; y < rows; ++y) sum = MixHash(sum, hashes[y]);
     return sum;
 }
 
