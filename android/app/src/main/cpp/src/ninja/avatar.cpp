@@ -125,7 +125,7 @@ bool AvatarStats(AvatarCatalogStats& out, std::string* err) {
     if (!c) return false;
     out.Entries = static_cast<int>(c->entries.size());
     for (const auto& e : c->entries) {
-        if (e->data) out.Bytes += static_cast<int>(e->data->Pixels.size());
+        if (e->data) out.Bytes += static_cast<int>(e->data->Bytes());
         if (e->id.size() == 5) {
             out.Base++;
         } else {
@@ -220,8 +220,8 @@ std::unique_ptr<avatarEntry> loadAvatarEntry(const avatarIndexEntry& item, const
         if (err) *err = "avatar " + item.ID + " sha256 does not match index";
         return nullptr;
     }
-    Gray gray, alphaMask;
-    avatarGrayMask(*img, gray, alphaMask);
+    // The asset's luma is exactly the Go decode() gray; it is shared, not copied.
+    const Gray& gray = img->Luma;
     if (gray.Bounds().Dx() < 16 || gray.Bounds().Dy() < 16) {
         if (err) *err = "avatar " + item.ID + " too small";
         return nullptr;
@@ -229,7 +229,7 @@ std::unique_ptr<avatarEntry> loadAvatarEntry(const avatarIndexEntry& item, const
     // The catalog PNG carries a baked rank badge/frame/background. Those
     // pixels vary in the live HUD, while the face inside the diamond is
     // stable. Recognition uses alpha ∩ inner-diamond only.
-    Gray mask = avatarFaceMask(gray.Bounds(), alphaMask);
+    Gray mask = avatarFaceMask(*img);
     auto e = std::make_unique<avatarEntry>();
     e->id = item.ID;
     e->name = avatarName(item);
@@ -238,10 +238,9 @@ std::unique_ptr<avatarEntry> loadAvatarEntry(const avatarIndexEntry& item, const
     // Go also builds a 16² thumb that nothing reads; it is not kept here.
     e->coarseGray = match::ScaleGray(&gray, 36, 36);
     e->coarseMask = match::ScaleGray(&mask, 36, 36);
-    // The full-resolution gray/mask are exactly what matchEntries would
-    // otherwise re-decode lazily from data; keep them so a PNG is decoded once.
-    e->gray = std::move(gray);
-    e->mask = std::move(mask);
+    // The full-resolution face mask is not kept: the template cache rebuilds it
+    // on a miss from the asset's alpha bits (avatarFaceMask is cheap).
+    e->gray = gray;
     return e;
 }
 
@@ -292,18 +291,33 @@ Gray avatarFaceMask(const Rect& bounds, const Gray& alpha) {
     return mask;
 }
 
+// avatarFaceMask(src) is avatarFaceMask(bounds, alpha) for the asset's own
+// alpha >= 128 bits (AssetImage::Opaque), without materializing the alpha mask.
+Gray avatarFaceMask(const AssetImage& src) {
+    const int w = src.Width, h = src.Height;
+    Gray mask = Gray::New(MakeRect(0, 0, w, h));
+    double cx = static_cast<double>(w - 1) / 2, cy = static_cast<double>(h - 1) / 2;
+    double radius = static_cast<double>(std::min(w, h)) * 0.43;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            if (src.Opaque(x, y) &&
+                std::fabs(static_cast<double>(x) - cx) + std::fabs(static_cast<double>(y) - cy) <= radius) {
+                mask.Pix[y * mask.Stride + x] = 255;
+            }
+        }
+    }
+    return mask;
+}
+
 void avatarGrayMask(const AssetImage& src, Gray& gray, Gray& mask) {
     const int w = src.Width, h = src.Height;
-    gray = Gray::New(MakeRect(0, 0, w, h));
-    mask = Gray::New(MakeRect(0, 0, w, h));
-    // The direct paths reproduce color.NRGBA.RGBA / color.RGBA.RGBA (16-bit
+    // AddImage already computed color.NRGBA.RGBA / color.RGBA.RGBA (16-bit
     // expansion, NRGBA alpha premultiply) and the same >>8 luma byte for byte.
+    gray = src.Luma;
+    mask = Gray::New(MakeRect(0, 0, w, h));
     for (int y = 0; y < h; ++y) {
-        const uint8_t* row = src.Pixels.data() + static_cast<size_t>(y) * 4 * w;
         for (int x = 0; x < w; ++x) {
-            const uint8_t* p = row + 4 * x;
-            gray.Pix[y * gray.Stride + x] = GoLumaFromNRGBA(p[0], p[1], p[2], p[3]);
-            if (GoAlpha16(p[3]) >= 0x8000) mask.Pix[y * mask.Stride + x] = 255;
+            if (src.Opaque(x, y)) mask.Pix[y * mask.Stride + x] = 255;
         }
     }
 }
@@ -548,13 +562,8 @@ double avatarJobScore(const RGBA& view, const Gray* gray, const match::PreparedN
 // decode fills the full-resolution gray/mask lazily for entries that were not
 // built by loadAvatarCatalog (caller holds mu).
 bool AvatarCatalog::decode(avatarEntry* entry) {
-    if (entry == nullptr) return false;
-    if (entry->gray.Nil()) {
-        if (!entry->data) return false;
-        Gray alpha;
-        avatarGrayMask(*entry->data, entry->gray, alpha);
-        entry->mask = avatarFaceMask(entry->gray.Bounds(), alpha);
-    }
+    if (entry == nullptr || !entry->data) return false;
+    if (entry->gray.Nil()) entry->gray = entry->data->Luma;
     return true;
 }
 
@@ -591,7 +600,8 @@ PreparedPtr AvatarCatalog::prepared(avatarEntry* entry, int w, int h) {
         return it->second.prepared;
     }
     Gray g = match::ScaleGray(&entry->gray, w, h);
-    Gray m = match::ScaleGray(&entry->mask, w, h);
+    const Gray face = avatarFaceMask(*entry->data);
+    Gray m = match::ScaleGray(&face, w, h);
     PreparedPtr p = match::PrepareNCC(&g, &m);
     cachedTemplate c;
     c.prepared = p;

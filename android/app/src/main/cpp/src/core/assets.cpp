@@ -29,10 +29,26 @@ void AssetStore::AddImage(const std::string& path, int w, int h, const uint8_t* 
     img->Height = h;
     size_t row = static_cast<size_t>(w) * 4;
     if (rowStride < row) rowStride = row;
-    img->Pixels.resize(row * static_cast<size_t>(h));
+    // Only the derived planes are kept (see assets.h): the Go-path luma that
+    // match::ToGrayAsset returned before, and the alpha >= 128 bits.
+    img->Luma = Gray::NewUninit(MakeRect(0, 0, w, h));
+    const size_t words = img->RowWords();
+    std::vector<uint64_t> bits(words * static_cast<size_t>(h), 0);
+    bool allOpaque = true;
     for (int y = 0; y < h; ++y) {
-        std::memcpy(img->Pixels.data() + row * y, rgba + rowStride * y, row);
+        const uint8_t* p = rgba + rowStride * static_cast<size_t>(y);
+        uint8_t* luma = img->Luma.Pix + static_cast<ptrdiff_t>(y) * img->Luma.Stride;
+        uint64_t* bitRow = bits.data() + words * static_cast<size_t>(y);
+        for (int x = 0; x < w; ++x, p += 4) {
+            luma[x] = GoLumaFromNRGBA(p[0], p[1], p[2], p[3]);
+            if (GoAlpha16(p[3]) >= 0x8000) {
+                bitRow[x / 64] |= uint64_t{1} << (x % 64);
+            } else {
+                allOpaque = false;
+            }
+        }
     }
+    if (!allOpaque) img->OpaqueBits = std::move(bits);
     std::lock_guard<std::mutex> lock(mu_);
     images_[path] = std::move(img);
     revision_++;

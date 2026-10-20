@@ -22,8 +22,10 @@
 #include "neon_emu.h"
 #include "../src/match/ncc_dot.h"
 
+#include "nt/assets.h"
 #include "nt/image.h"
 #include "nt/match.h"
+#include "nt/ninja_internal.h"
 
 namespace {
 
@@ -412,6 +414,52 @@ void testScaleAndGray(std::mt19937& rng) {
     }
 }
 
+// AssetStore keeps only the Go-path luma and the alpha >= 128 bits: both must
+// equal what the RGBA-based code computed (ToGrayAsset / avatarGrayMask+FaceMask).
+void testAssetConversion(std::mt19937& rng) {
+    for (int iter = 0; iter < 400; ++iter) {
+        const int w = 1 + static_cast<int>(rng() % 140), h = 1 + static_cast<int>(rng() % 90);
+        const size_t stride = static_cast<size_t>(4 * w + static_cast<int>(rng() % 9));
+        std::vector<uint8_t> rgba(stride * static_cast<size_t>(h));
+        const int alphaMode = iter % 4;  // 0 opaque, 1 binary, 2 random, 3 around 128
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                uint8_t* p = rgba.data() + stride * static_cast<size_t>(y) + 4 * static_cast<size_t>(x);
+                p[0] = static_cast<uint8_t>(rng());
+                p[1] = static_cast<uint8_t>(rng());
+                p[2] = static_cast<uint8_t>(rng());
+                uint8_t a = 255;
+                if (alphaMode == 1) a = rng() % 2 ? 255 : 0;
+                if (alphaMode == 2) a = static_cast<uint8_t>(rng());
+                if (alphaMode == 3) a = static_cast<uint8_t>(126 + rng() % 4);
+                p[3] = a;
+            }
+        const std::string key = "test/asset" + std::to_string(iter) + ".png";
+        nt::AssetStore::Instance().AddImage(key, w, h, rgba.data(), stride);
+        auto img = nt::AssetStore::Instance().Image(key);
+        check(img && img->Width == w && img->Height == h, "asset size");
+        const nt::Gray luma = nt::match::ToGrayAsset(*img);
+        check(luma.Bounds() == nt::MakeRect(0, 0, w, h), "asset luma bounds");
+        nt::Gray alpha = nt::Gray::New(nt::MakeRect(0, 0, w, h));
+        bool allOpaque = true;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const uint8_t* p = rgba.data() + stride * static_cast<size_t>(y) + 4 * static_cast<size_t>(x);
+                check(luma.GrayAt(x, y) == nt::GoLumaFromNRGBA(p[0], p[1], p[2], p[3]), "asset luma");
+                const bool opaque = nt::GoAlpha16(p[3]) >= 0x8000;
+                allOpaque = allOpaque && opaque;
+                check(img->Opaque(x, y) == opaque, "asset opaque bit");
+                if (opaque) alpha.SetGray(x, y, 255);
+            }
+        check(img->OpaqueBits.empty() == allOpaque, "opaque bits only when needed");
+        check(sameGray(nt::ninja::avatarFaceMask(*img), nt::ninja::avatarFaceMask(alpha.Bounds(), alpha)),
+              "avatar face mask from bits");
+        nt::Gray g, m;
+        nt::ninja::avatarGrayMask(*img, g, m);
+        check(sameGray(g, luma) && sameGray(m, alpha), "avatarGrayMask");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -422,6 +470,7 @@ int main() {
     testDotKernels(rng);
     testMatch(rng);
     testScaleAndGray(rng);
+    testAssetConversion(rng);
     std::printf("perf_kernels_test: %d checks passed\n", checks);
     return 0;
 }

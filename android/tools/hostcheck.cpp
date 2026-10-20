@@ -48,9 +48,13 @@
 #include "nt/scene.h"
 
 // ---- 分配计数（仅主机工具）：替换全局 operator new/delete，统计次数、字节与存活字节。 ----
+// tools/chaincheck/host_pixels.cpp 以 `#define main ...` 包含本文件做 JNI 宿主库：那里不替换分配器。
 namespace {
 std::atomic<uint64_t> g_newCalls{0}, g_newBytes{0};
 std::atomic<int64_t> g_liveBytes{0};
+}  // namespace
+#if !defined(main)
+namespace {
 
 void* countedNew(size_t n) {
     void* p = std::malloc(n ? n : 1);
@@ -87,6 +91,7 @@ void operator delete(void* p, size_t) noexcept { countedDelete(p); }
 void operator delete[](void* p, size_t) noexcept { countedDelete(p); }
 void operator delete(void* p, const std::nothrow_t&) noexcept { countedDelete(p); }
 void operator delete[](void* p, const std::nothrow_t&) noexcept { countedDelete(p); }
+#endif  // !defined(main)
 
 namespace {
 

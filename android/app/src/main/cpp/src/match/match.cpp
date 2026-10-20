@@ -185,19 +185,9 @@ nt::Gray ToGray(const nt::Gray* src) {
 //  * RGB PNG → *image.RGBA 快速路径（不透明，等价于下面 a=255）；
 //  * 灰度 PNG → *image.Gray 复制（BitmapFactory 给出 r=g=b=Y，亮度公式恒等于 Y）；
 //  * 带 alpha 的 PNG → *image.NRGBA 通用路径：At().RGBA() 预乘 16 位 → >>8 → 整数亮度。
-// GoLumaFromNRGBA 对三种情况都与 Go 逐位一致。
-nt::Gray ToGrayAsset(const AssetImage& src) {
-    const int w = src.Width, h = src.Height;
-    nt::Gray out = nt::Gray::NewUninit(MakeRect(0, 0, w, h));
-    for (int y = 0; y < h; ++y) {
-        const uint8_t* p = src.Pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(w) * 4;
-        uint8_t* dst = out.Pix + static_cast<ptrdiff_t>(y) * out.Stride;
-        for (int x = 0; x < w; ++x, p += 4) {
-            dst[x] = GoLumaFromNRGBA(p[0], p[1], p[2], p[3]);
-        }
-    }
-    return out;
-}
+// GoLumaFromNRGBA 对三种情况都与 Go 逐位一致；AssetStore::AddImage 注册时已算好（AssetImage::Luma），
+// 这里直接返回共享视图（只读，不复制）。
+nt::Gray ToGrayAsset(const AssetImage& src) { return src.Luma; }
 
 // ScaleGray 双线性缩放到指定尺寸。
 // 每列的源坐标/权重与每行的源行/权重只算一次（与逐像素写法是同一组 double 运算），
