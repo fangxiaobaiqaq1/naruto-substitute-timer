@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,7 +16,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -27,6 +27,9 @@ import (
 
 // 区域校准（docs/区域校准.md）：玩家在一帧对局画面上框出每侧的豆和头像。
 // 这里只有 Windows 的画框窗口；识别怎么用这些框由引擎决定（WithCalibrationApply）。
+// 窗口先画出这一帧自动识别实际用的区域（引擎报告的每帧几何），没校准的框以
+// 本帧的默认框（自动）为起点；只有玩家动过的框才会保存，没动过的一切照旧。
+// 绘图与拖动见 calibrate_surface.go，方案文件见 calibrate_scheme.go。
 
 // calibTarget is one of the four boxes, in the contract's order.
 type calibTarget int
@@ -55,12 +58,32 @@ var (
 	// Bead-centre dots: white with a dark rim shows on lit and empty beads alike.
 	calibDotFill    = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 	calibDotOutline = color.NRGBA{A: 230}
+	// The automatic analysis is thin, white and dashed over a dark shade (so it
+	// shows on bright HUD parts too); editable boxes are solid and coloured.
+	calibAutoColor = color.NRGBA{R: 240, G: 248, B: 252, A: 235}
+	calibAutoShade = color.NRGBA{A: 110}
+	calibAutoTagBG = color.NRGBA{R: 4, G: 14, B: 20, A: 190}
 )
 
 func (t calibTarget) beads() bool { return t == calibLeftBeads || t == calibRightBeads }
 func (t calibTarget) left() bool  { return t == calibLeftBeads || t == calibLeftAvatar }
 
-const calibrationHint = "选好目标后在画面上按住左键拖出方框：豆框紧贴 4 颗普通豆（柱间第 5、6 颗不框），小点应落在每颗豆中间；头像框只框头像，不含名字和血条。豆请在普通忍者身上框：九喇嘛水门、侠隐佐助、百战鼬的豆比平时低。"
+// side is the target's index in frame.Frame.Geometry (0 left, 1 right).
+func (t calibTarget) side() int {
+	if t.left() {
+		return 0
+	}
+	return 1
+}
+
+// Status line texts.
+const (
+	calibrationHint = "框里拖动可移动，拖边或角调大小，空白处拖动重画；点一下框后用方向键微调 1 像素（按住 Shift 调大小）。豆框紧贴 4 颗普通豆（柱间第 5、6 颗不框），小点落在每颗豆中间；头像框只框头像，不含名字和血条。九喇嘛水门、侠隐佐助、百战鼬的豆偏低，请在普通忍者身上框豆。"
+	// calibrationAutoHint explains the overlay of a frame the engine analysed.
+	calibrationAutoHint      = "白色虚线是这一帧自动识别实际用的区域（十字是豆心）；带「自动」的框是默认方案，不改就保持自动。"
+	calibrationNoGeometry    = "这一帧没有自动识别区域（大厅、结算等画面，或不支持的分辨率），只能直接画框。"
+	calibrationStaleGeometry = "这一帧是保存前分析的，按新设置识别的区域要等下一帧。"
+)
 
 var (
 	errCalibrationProfile = errors.New("请在对局或训练场画面上校准")
@@ -124,6 +147,12 @@ func calibrationBeadCenters(r config.NormalizedRect, left bool) [4]config.Normal
 	return out
 }
 
+// sameCalibrationRect: equal up to float noise (1e-9 of the frame is far
+// below a pixel), as after moving a box away and back by whole pixels.
+func sameCalibrationRect(a, b config.NormalizedRect) bool {
+	return math.Abs(a.X-b.X) <= 1e-9 && math.Abs(a.Y-b.Y) <= 1e-9 && math.Abs(a.Width-b.Width) <= 1e-9 && math.Abs(a.Height-b.Height) <= 1e-9
+}
+
 // calibBox is a box drawn on a snapshot, with the layout of that frame.
 type calibBox struct {
 	rect    config.NormalizedRect
@@ -182,6 +211,23 @@ func mergeCalibration(saved *config.RegionCalibration, drawn [calibTargetCount]*
 	return newRegionCalibration(profile, rects), dropped, nil
 }
 
+// calibBoxState is where a target's editable box comes from.
+type calibBoxState int
+
+const (
+	calibBoxNone    calibBoxState = iota // none: automatic without a frame analysis, or cleared
+	calibBoxAuto                         // the frame's default box: stays automatic, never saved as is
+	calibBoxSaved                        // the saved calibration
+	calibBoxPending                      // drawn, moved, resized or imported since the last save
+)
+
+var calibBoxSuffix = [...]string{"", "（自动）", "（已保存）", "（未保存）"}
+
+type calibShown struct {
+	rect  config.NormalizedRect
+	state calibBoxState
+}
+
 // ---- frame snapshots ----
 
 // calibrationCopyInterval spaces frame copies while the window is open:
@@ -193,6 +239,10 @@ var calibrationCopyInterval = 200 * time.Millisecond
 type calibrationSnapshot struct {
 	img     *image.RGBA // origin (0,0)
 	profile string      // camp/duel on a recognised match frame, else ""
+	// geometry is what the engine used on this frame (pixels in img), zero
+	// when it did not analyse the HUD.
+	geometry [2]frame.SideGeometry
+	gen      uint64 // calibrationFeed.gen when the frame's capture began
 }
 
 func newCalibrationSnapshot(f frame.Frame) *calibrationSnapshot {
@@ -202,7 +252,42 @@ func newCalibrationSnapshot(f frame.Frame) *calibrationSnapshot {
 	if f.Fighting && (f.LayoutProfile == "camp" || f.LayoutProfile == "duel") {
 		snap.profile = f.LayoutProfile
 	}
+	// Pixels follow the copy to (0,0); the boxes are fractions of the bounds.
+	origin := f.Img.Bounds().Min
+	for i, g := range f.Geometry {
+		g.Beads = slices.Clone(g.Beads)
+		for j := range g.Beads {
+			g.Beads[j] = g.Beads[j].Sub(origin)
+		}
+		if !g.NameROI.Empty() {
+			g.NameROI = g.NameROI.Sub(origin)
+		}
+		if !g.AvatarROI.Empty() {
+			g.AvatarROI = g.AvatarROI.Sub(origin)
+		}
+		snap.geometry[i] = g
+	}
 	return snap
+}
+
+func (s *calibrationSnapshot) hasGeometry() bool {
+	for _, g := range s.geometry {
+		if len(g.Beads) > 0 || !g.NameROI.Empty() || !g.AvatarROI.Empty() || g.BeadBox.Width > 0 || g.AvatarBox.Width > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultBox is the frame's default box for t (docs/区域校准.md 每帧几何):
+// saved unchanged it would reproduce this frame's analysis.
+func (s *calibrationSnapshot) defaultBox(t calibTarget) (config.NormalizedRect, bool) {
+	g := s.geometry[t.side()]
+	r := g.AvatarBox
+	if t.beads() {
+		r = g.BeadBox
+	}
+	return r, r.Width > 0 && r.Height > 0
 }
 
 // copyFrameImage deep-copies a captured frame (MuMu reuses a ring buffer).
@@ -224,16 +309,21 @@ func copyFrameImage(src *image.RGBA) *image.RGBA {
 // calibrationFeed hands the open calibration window copies of captured frames.
 // While it is closed the capture loop pays one atomic load per frame.
 type calibrationFeed struct {
-	open   atomic.Bool
-	mu     sync.Mutex
-	latest *calibrationSnapshot
-	copied time.Time
-	notify func() // called once, after the first copy since start
+	open atomic.Bool
+	// gen counts calibrations handed to the engine (setCalibration). A frame
+	// whose capture began at generation g was analysed with calibration g or
+	// a later one.
+	gen       atomic.Uint64
+	mu        sync.Mutex
+	latest    *calibrationSnapshot
+	copied    time.Time
+	notify    func() // called once, after the first copy of generation ≥ notifyGen
+	notifyGen uint64
 }
 
 func (c *calibrationFeed) start(notify func()) {
 	c.mu.Lock()
-	c.latest, c.copied, c.notify = nil, time.Time{}, notify
+	c.latest, c.copied, c.notify, c.notifyGen = nil, time.Time{}, notify, 0
 	c.open.Store(true)
 	c.mu.Unlock()
 }
@@ -252,25 +342,41 @@ func (c *calibrationFeed) snapshot() *calibrationSnapshot {
 	return c.latest
 }
 
-func (c *calibrationFeed) offer(f frame.Frame, now time.Time) {
+// await replaces the pending notification: notify is called once, after
+// the first copy of a frame captured at generation gen or later.
+func (c *calibrationFeed) await(gen uint64, notify func()) {
+	c.mu.Lock()
+	c.notify, c.notifyGen = notify, gen
+	c.mu.Unlock()
+}
+
+func (c *calibrationFeed) offer(f frame.Frame, now time.Time) { c.offerAt(f, now, c.gen.Load()) }
+
+// offerAt copies f, captured at generation gen, when a copy is due: the
+// first one, one per calibrationCopyInterval and the first of a newer
+// generation (the regions after 保存).
+func (c *calibrationFeed) offerAt(f frame.Frame, now time.Time, gen uint64) {
 	if !c.open.Load() || f.Err != nil || f.Img == nil || f.Img.Bounds().Empty() {
 		return
 	}
 	c.mu.Lock()
-	due := c.latest == nil || now.Sub(c.copied) >= calibrationCopyInterval || now.Before(c.copied)
+	due := c.latest == nil || gen > c.latest.gen || now.Sub(c.copied) >= calibrationCopyInterval || now.Before(c.copied)
 	c.mu.Unlock()
 	if !due {
 		return
 	}
 	snap := newCalibrationSnapshot(f) // the copy runs outside the lock
+	snap.gen = gen
 	c.mu.Lock()
-	if !c.open.Load() {
+	if !c.open.Load() || (c.latest != nil && gen < c.latest.gen) {
 		c.mu.Unlock()
 		return
 	}
 	c.latest, c.copied = snap, now
-	notify := c.notify
-	c.notify = nil
+	var notify func()
+	if c.notify != nil && gen >= c.notifyGen {
+		notify, c.notify = c.notify, nil
+	}
 	c.mu.Unlock()
 	if notify != nil {
 		notify()
@@ -278,8 +384,9 @@ func (c *calibrationFeed) offer(f frame.Frame, now time.Time) {
 }
 
 // offerCalibrationFrame runs on the capture goroutine right after the
-// provider returns, while the frame's pixels are still valid.
-func (s *session) offerCalibrationFrame(f frame.Frame) {
+// provider returns, while the frame's pixels are still valid. gen is the
+// calibration generation read before the capture began.
+func (s *session) offerCalibrationFrame(f frame.Frame, gen uint64) {
 	if !s.calibrationFeed.open.Load() {
 		return
 	}
@@ -287,7 +394,7 @@ func (s *session) offerCalibrationFrame(f frame.Frame) {
 	current := f.SourceRevision == s.sourceRevision && !s.stopped()
 	s.mu.Unlock()
 	if current {
-		s.calibrationFeed.offer(f, time.Now())
+		s.calibrationFeed.offerAt(f, time.Now(), gen)
 	}
 }
 
@@ -319,6 +426,8 @@ func (s *session) setCalibration(next *config.RegionCalibration) error {
 		return err
 	}
 	apply(cloneCalibration(next))
+	// Frames whose capture begins from now on show the new regions.
+	s.calibrationFeed.gen.Add(1)
 	// Beads read with the old regions are no baseline for the new ones.
 	s.mu.Lock()
 	s.left.ResyncObservation()
@@ -338,18 +447,22 @@ type calibrationWindow struct {
 	snap    *calibrationSnapshot      // shown frame; nil until one arrives
 	saved   *config.RegionCalibration // as saved; untouched boxes show this
 	drawn   [calibTargetCount]*calibBox
-	touched [calibTargetCount]bool // drawn or cleared since the last save
+	touched [calibTargetCount]bool // drawn, adjusted, imported or cleared since the last save
 	target  calibTarget
 	done    bool
+	// savedText is the last 保存/恢复自动 message, kept when the frame
+	// analysed with the new calibration replaces the shown one.
+	savedText string
 
 	surface *calibrationSurface
 	targets *widget.RadioGroup
 	// layout lets the player name the layout of a frame the engine did not
 	// recognise as a match, which is what an unsupported resolution looks like.
-	layout  *widget.RadioGroup
-	info    *widget.Label
-	status  *widget.Label
-	confirm *dialog.ConfirmDialog // the open confirmation, if any
+	layout   *widget.RadioGroup
+	showAuto *widget.Check
+	info     *widget.Label
+	status   *widget.Label
+	confirm  *dialog.ConfirmDialog // the open confirmation, if any
 }
 
 // openCalibration shows the calibration window; an open one is only brought
@@ -387,20 +500,26 @@ func newCalibrationWindow(s *session, w fyne.Window) *calibrationWindow {
 	})
 	c.layout.Horizontal = true
 	c.layout.Hide()
+	c.showAuto = widget.NewCheck("显示自动识别区域", nil)
+	c.showAuto.SetChecked(true)
+	c.showAuto.OnChanged = func(bool) { c.surface.Refresh() }
 	c.info = widget.NewLabel("等待画面…")
 	c.status = widget.NewLabel(calibrationHint)
-	c.status.Wrapping = fyne.TextWrapWord
+	// Chinese has no spaces to wrap at: wrap anywhere, full lines.
+	c.status.Wrapping = fyne.TextWrapBreak
 
 	refresh := widget.NewButtonWithIcon("刷新画面", theme.ViewRefreshIcon(), c.refreshFrame)
 	clearSelected := widget.NewButtonWithIcon("清除所选", theme.ContentClearIcon(), c.clearSelected)
 	restore := widget.NewButtonWithIcon("全部恢复自动", theme.HistoryIcon(), c.confirmRestoreAuto)
+	importScheme := widget.NewButtonWithIcon("导入方案", theme.DownloadIcon(), c.importScheme)
+	exportScheme := widget.NewButtonWithIcon("导出方案", theme.UploadIcon(), c.exportScheme)
 	save := widget.NewButtonWithIcon("保存", theme.DocumentSaveIcon(), c.confirmSave)
 	save.Importance = widget.HighImportance
 	closeButton := widget.NewButtonWithIcon("关闭", theme.CancelIcon(), c.requestClose)
 
-	top := container.NewVBox(container.NewBorder(nil, nil, widget.NewLabel("框选"), c.info, c.targets), c.layout)
+	top := container.NewVBox(container.NewBorder(nil, nil, widget.NewLabel("框选"), container.NewHBox(c.showAuto, c.info), c.targets), c.layout)
 	bottom := container.NewVBox(c.status,
-		container.NewHBox(refresh, clearSelected, restore, layout.NewSpacer(), save, closeButton))
+		container.NewHBox(refresh, clearSelected, restore, importScheme, exportScheme, layout.NewSpacer(), save, closeButton))
 	w.SetContent(container.NewStack(canvas.NewRectangle(panelBG),
 		container.NewPadded(container.NewBorder(top, bottom, nil, nil, c.surface))))
 	w.SetCloseIntercept(c.requestClose)
@@ -449,6 +568,7 @@ func (c *calibrationWindow) frameArrived() {
 	}
 	if snap := c.s.calibrationFeed.snapshot(); snap != nil {
 		c.showSnapshot(snap)
+		c.awaitFresh() // a save while it was being captured
 	}
 }
 
@@ -459,6 +579,43 @@ func (c *calibrationWindow) refreshFrame() {
 		return
 	}
 	c.showSnapshot(snap)
+}
+
+// fresh reports whether the shown frame was analysed with the calibration
+// the engine has now. After 保存 the old frame's regions are history: its
+// automatic regions and default boxes are hidden until the next frame.
+func (c *calibrationWindow) fresh() bool {
+	return c.snap != nil && c.snap.gen == c.s.calibrationFeed.gen.Load()
+}
+
+// autoShown reports whether the frame's automatic regions are drawn.
+func (c *calibrationWindow) autoShown() bool {
+	return c.showAuto.Checked && c.fresh() && c.snap.hasGeometry()
+}
+
+// awaitFresh shows the first frame analysed with the calibration just
+// applied, so its regions follow what was saved. The shown frame stays if
+// the player started editing again or the new frame has no regions.
+func (c *calibrationWindow) awaitFresh() {
+	if c.snap == nil || c.fresh() {
+		return
+	}
+	c.s.calibrationFeed.await(c.s.calibrationFeed.gen.Load(), func() { fyne.Do(c.freshArrived) })
+}
+
+func (c *calibrationWindow) freshArrived() {
+	snap := c.s.calibrationFeed.snapshot()
+	if c.done || snap == nil || snap == c.snap || snap.gen != c.s.calibrationFeed.gen.Load() || c.dirty() {
+		return
+	}
+	if c.snap != nil && c.snap.hasGeometry() && !snap.hasGeometry() {
+		c.setStatus(c.savedText + "新画面没有自动识别区域：回到对局后点「刷新画面」查看按新设置识别的区域。")
+		return
+	}
+	c.showSnapshot(snap)
+	if c.savedText != "" && snap.hasGeometry() {
+		c.setStatus(c.savedText + "画面已刷新，虚线是按新设置识别的区域。")
+	}
 }
 
 // profile is the frame's recognised layout, else the one the player picked.
@@ -489,15 +646,27 @@ func (c *calibrationWindow) showSnapshot(snap *calibrationSnapshot) {
 	}
 	c.info.SetText(fmt.Sprintf("%s · %d×%d", name, b.Dx(), b.Dy()))
 	c.surface.Refresh()
-	text := calibrationHint
+	c.setStatus(c.frameText() + c.pendingText())
+}
+
+// frameText describes the shown frame: its layout, whether its automatic
+// regions are shown and how to draw.
+func (c *calibrationWindow) frameText() string {
+	regions := calibrationAutoHint
+	switch {
+	case !c.snap.hasGeometry():
+		regions = calibrationNoGeometry
+	case !c.fresh():
+		regions = calibrationStaleGeometry
+	}
 	switch {
 	case c.profile() == "":
-		text = "没认出这是对局画面（分辨率特殊时常见）。如果这是对局或训练场，请在上方选择训练场/决斗场再框选；否则进入对局后点「刷新画面」。"
+		return "没认出这是对局画面（分辨率特殊时常见）。如果这是对局或训练场，请在上方选择训练场/决斗场再框选；否则进入对局后点「刷新画面」。" + regions
 	case c.saved != nil && c.saved.Profile != c.profile():
-		text = fmt.Sprintf("已保存的框画在%s画面上，这里是%s，位置会略有偏差；在本画面上保存时，未重画的框恢复自动。",
-			calibProfileName(c.saved.Profile), calibProfileName(c.profile()))
+		return fmt.Sprintf("已保存的框画在%s画面上，这里是%s，位置会略有偏差；在本画面上保存时，未重画的框恢复自动。",
+			calibProfileName(c.saved.Profile), calibProfileName(c.profile())) + regions
 	}
-	c.setStatus(text + c.pendingText())
+	return regions + calibrationHint
 }
 
 func (c *calibrationWindow) setStatus(text string) { c.status.SetText(text) }
@@ -520,7 +689,8 @@ func (c *calibrationWindow) dirty() bool {
 	return false
 }
 
-// boxes is what the window shows: drawn or cleared boxes over saved ones.
+// boxes is what 保存 would store (before profile checks): drawn, adjusted
+// or cleared boxes over the saved ones. Automatic default boxes are not in it.
 func (c *calibrationWindow) boxes() [calibTargetCount]*config.NormalizedRect {
 	out := calibrationRects(c.saved)
 	for t := range out {
@@ -533,6 +703,57 @@ func (c *calibrationWindow) boxes() [calibTargetCount]*config.NormalizedRect {
 		}
 	}
 	return out
+}
+
+// shown is each target's editable box: the pending edit, else the saved box,
+// else the shown frame's default box (automatic). Cleared boxes show nothing:
+// what automatic uses there is known only from a frame analysed after 保存.
+func (c *calibrationWindow) shown() [calibTargetCount]calibShown {
+	var out [calibTargetCount]calibShown
+	saved := calibrationRects(c.saved)
+	for t := range out {
+		switch {
+		case c.touched[t]:
+			if c.drawn[t] != nil {
+				out[t] = calibShown{c.drawn[t].rect, calibBoxPending}
+			}
+		case saved[t] != nil:
+			out[t] = calibShown{*saved[t], calibBoxSaved}
+		default:
+			if r, ok := c.defaultBox(calibTarget(t)); ok {
+				out[t] = calibShown{r, calibBoxAuto}
+			}
+		}
+	}
+	return out
+}
+
+// defaultBox is the shown frame's default box for t while its analysis is
+// current.
+func (c *calibrationWindow) defaultBox(t calibTarget) (config.NormalizedRect, bool) {
+	if !c.fresh() {
+		return config.NormalizedRect{}, false
+	}
+	return c.snap.defaultBox(t)
+}
+
+// baseline is what t shows without an edit: the saved box, else the default.
+func (c *calibrationWindow) baseline(t calibTarget) (config.NormalizedRect, bool) {
+	if r := calibrationRects(c.saved)[t]; r != nil {
+		return *r, true
+	}
+	return c.defaultBox(t)
+}
+
+// boxProfile is the layout of t's current box ("" for an automatic one).
+func (c *calibrationWindow) boxProfile(t calibTarget) string {
+	if c.touched[t] && c.drawn[t] != nil {
+		return c.drawn[t].profile
+	}
+	if c.saved != nil && calibrationRects(c.saved)[t] != nil {
+		return c.saved.Profile
+	}
+	return ""
 }
 
 func (c *calibrationWindow) pendingText() string {
@@ -574,11 +795,89 @@ func (c *calibrationWindow) finishBox(from, to fyne.Position) {
 	c.setStatus(text + c.pendingText())
 }
 
+// setEdited makes r the pending box of t. Back where it started (the saved
+// or the automatic box) it is no edit at all, so 保存 leaves it alone.
+func (c *calibrationWindow) setEdited(t calibTarget, r config.NormalizedRect) {
+	if base, ok := c.baseline(t); ok && sameCalibrationRect(base, r) {
+		c.drawn[t], c.touched[t] = nil, false
+		return
+	}
+	// The frame's layout; on an unrecognised frame a box keeps its own.
+	profile := c.profile()
+	if profile == "" {
+		profile = c.boxProfile(t)
+	}
+	c.drawn[t], c.touched[t] = &calibBox{rect: r, profile: profile}, true
+}
+
+// finishAdjust stores a moved or resized box of t.
+func (c *calibrationWindow) finishAdjust(t calibTarget, r config.NormalizedRect, grip calibGrip) {
+	if c.snap == nil {
+		return
+	}
+	c.setEdited(t, r)
+	c.surface.Refresh()
+	name := calibTargetNames[t]
+	if !c.touched[t] {
+		c.setStatus(name + "回到了原来的位置，不算改动。" + c.pendingText())
+		return
+	}
+	text := name + "已移动。"
+	if grip != gripMove {
+		text = name + "已调整大小。"
+	}
+	if t.beads() {
+		text += "4 个小点应落在每颗豆中间。"
+	}
+	if c.drawn[t].profile == "" {
+		text += "先在上方选择训练场或决斗场，否则不能保存。"
+	}
+	c.setStatus(text + c.pendingText())
+}
+
+// nudge moves the selected box by whole frame pixels, or with resize moves
+// its right/bottom edge (arrow keys, Shift+arrow keys).
+func (c *calibrationWindow) nudge(dx, dy float64, resize bool) {
+	if c.snap == nil || c.surface.dragging {
+		return
+	}
+	t := c.target
+	box := c.shown()[t]
+	if box.state == calibBoxNone {
+		c.setStatus(calibTargetNames[t] + "还没有框：先在画面上拖出方框。" + c.pendingText())
+		return
+	}
+	grip := gripMove
+	if resize {
+		grip = 0
+		if dx != 0 {
+			grip |= gripRight
+		}
+		if dy != 0 {
+			grip |= gripBottom
+		}
+	}
+	b := c.snap.img.Bounds()
+	c.finishAdjust(t, adjustCalibrationBox(box.rect, grip, dx, dy, b.Dx(), b.Dy()), grip)
+}
+
+// clearSelected returns the selected target to automatic: at once for a box
+// that was never saved, on 保存 for a saved one.
 func (c *calibrationWindow) clearSelected() {
 	t := c.target
 	name := calibTargetNames[t]
-	if c.boxes()[t] == nil {
-		c.setStatus(name + "没有框，已是自动识别。" + c.pendingText())
+	saved := calibrationRects(c.saved)[t] != nil
+	switch {
+	case c.touched[t] && c.drawn[t] == nil:
+		c.setStatus(name + "已清除，保存后恢复自动识别。" + c.pendingText())
+		return
+	case !saved && !c.touched[t]:
+		c.setStatus(name + "没有校准，已是自动识别。" + c.pendingText())
+		return
+	case !saved:
+		c.drawn[t], c.touched[t] = nil, false
+		c.surface.Refresh()
+		c.setStatus(name + "已恢复自动识别。" + c.pendingText())
 		return
 	}
 	c.drawn[t], c.touched[t] = nil, true
@@ -586,9 +885,11 @@ func (c *calibrationWindow) clearSelected() {
 	c.setStatus(name + "已清除，保存后恢复自动识别。" + c.pendingText())
 }
 
+// confirmSave saves the changed boxes. Without changes nothing is written and
+// the engine hook is not called: untouched default boxes stay automatic.
 func (c *calibrationWindow) confirmSave() {
 	if !c.dirty() {
-		c.setStatus("没有改动：先选目标，在画面上拖出方框。")
+		c.setStatus("没有改动：带「自动」的框不改就保持自动识别，不用保存。")
 		return
 	}
 	saved := c.s.calibration()
@@ -610,8 +911,8 @@ func (c *calibrationWindow) confirmSave() {
 		"仍然保存", func() { c.save() })
 }
 
-// save merges the drawn and cleared boxes into the saved calibration, applies
-// it and writes config.json. It returns the error shown to the user.
+// save merges the changed and cleared boxes into the saved calibration,
+// applies it and writes config.json. It returns the error shown to the user.
 func (c *calibrationWindow) save() error {
 	next, _, err := mergeCalibration(c.s.calibration(), c.drawn, c.touched)
 	if err == nil {
@@ -623,14 +924,25 @@ func (c *calibrationWindow) save() error {
 	}
 	c.saved = cloneCalibration(next)
 	c.drawn, c.touched = [calibTargetCount]*calibBox{}, [calibTargetCount]bool{}
-	c.surface.Refresh()
 	if next == nil {
-		c.setStatus("已保存：豆和头像全部自动识别" + c.live() + "。")
+		c.savedText = "已保存：豆和头像全部自动识别" + c.live() + "。"
 	} else {
-		c.setStatus("已保存" + c.live() + "（" + calibProfileName(next.Profile) + "画面上画的框）。")
+		c.savedText = "已保存" + c.live() + "（" + calibProfileName(next.Profile) + "画面上画的框）。"
 	}
+	c.afterSave()
 	showSettingsError(err, c.win)
 	return err
+}
+
+// afterSave shows the saved state and waits for a frame analysed with it.
+func (c *calibrationWindow) afterSave() {
+	c.surface.Refresh()
+	text := c.savedText
+	if c.snap != nil && !c.fresh() {
+		text += "正在等新画面显示按新设置识别的区域…"
+	}
+	c.setStatus(text)
+	c.awaitFresh()
 }
 
 // live says so only when an engine hook applies the change at once.
@@ -641,11 +953,16 @@ func (c *calibrationWindow) live() string {
 	return ""
 }
 
-func (c *calibrationWindow) showSaveError(err error) {
-	text := err.Error()
+// calibrationErrorText words a save (or export) error for the player.
+func calibrationErrorText(err error) string {
 	if errors.Is(err, errCalibrationProfile) {
-		text = "当前画面不是对局或训练场，无法确定布局。" + errCalibrationProfile.Error() + "：进入后点「刷新画面」，再重画这些框。"
+		return "当前画面不是对局或训练场，无法确定布局。" + errCalibrationProfile.Error() + "：进入后点「刷新画面」，再重画这些框。"
 	}
+	return err.Error()
+}
+
+func (c *calibrationWindow) showSaveError(err error) {
+	text := calibrationErrorText(err)
 	c.setStatus("未保存：" + text)
 	dialog.ShowInformation("不能保存", text, c.win)
 }
@@ -667,328 +984,8 @@ func (c *calibrationWindow) restoreAuto() error {
 	}
 	c.saved = nil
 	c.drawn, c.touched = [calibTargetCount]*calibBox{}, [calibTargetCount]bool{}
-	c.surface.Refresh()
-	c.setStatus("已全部恢复自动识别" + c.live() + "。")
+	c.savedText = "已全部恢复自动识别" + c.live() + "。"
+	c.afterSave()
 	showSettingsError(err, c.win)
 	return err
-}
-
-// ---- geometry ----
-
-const (
-	calibMinBoxUnits  = 4 // a smaller drag on screen is a slip, not a box
-	calibMinBoxPixels = 3 // nor can a thinner box hold a bead or an avatar
-)
-
-// calibrationFit places a w×h frame inside the surface: centred, aspect kept.
-type calibrationFit struct {
-	x, y  float64 // top-left of the drawn frame, surface units
-	scale float64 // surface units per frame pixel
-	w, h  int     // frame pixels
-}
-
-func fitCalibrationImage(w, h int, area fyne.Size) calibrationFit {
-	if w <= 0 || h <= 0 || area.Width <= 0 || area.Height <= 0 {
-		return calibrationFit{}
-	}
-	scale := math.Min(float64(area.Width)/float64(w), float64(area.Height)/float64(h))
-	return calibrationFit{x: (float64(area.Width) - scale*float64(w)) / 2, y: (float64(area.Height) - scale*float64(h)) / 2,
-		scale: scale, w: w, h: h}
-}
-
-func (f calibrationFit) ok() bool { return f.scale > 0 }
-
-// pixel maps a surface position to frame pixels, clamped to the frame.
-func (f calibrationFit) pixel(p fyne.Position) (float64, float64) {
-	x := (float64(p.X) - f.x) / f.scale
-	y := (float64(p.Y) - f.y) / f.scale
-	return math.Min(math.Max(x, 0), float64(f.w)), math.Min(math.Max(y, 0), float64(f.h))
-}
-
-// point maps frame fractions to a surface position.
-func (f calibrationFit) point(nx, ny float64) fyne.Position {
-	return fyne.NewPos(float32(f.x+nx*float64(f.w)*f.scale), float32(f.y+ny*float64(f.h)*f.scale))
-}
-
-func (f calibrationFit) rect(r config.NormalizedRect) (fyne.Position, fyne.Size) {
-	at := f.point(r.X, r.Y)
-	end := f.point(r.X+r.Width, r.Y+r.Height)
-	return at, fyne.NewSize(end.X-at.X, end.Y-at.Y)
-}
-
-// calibrationBoxFromDrag maps a drag on the surface to a box: surface units →
-// frame pixels (clamped to the frame, whole pixels) → fractions of the frame.
-func calibrationBoxFromDrag(f calibrationFit, from, to fyne.Position) (config.NormalizedRect, bool) {
-	if !f.ok() {
-		return config.NormalizedRect{}, false
-	}
-	x0, y0 := f.pixel(from)
-	x1, y1 := f.pixel(to)
-	left, right := math.Round(math.Min(x0, x1)), math.Round(math.Max(x0, x1))
-	top, bottom := math.Round(math.Min(y0, y1)), math.Round(math.Max(y0, y1))
-	w, h := right-left, bottom-top
-	if w < calibMinBoxPixels || h < calibMinBoxPixels || w*f.scale < calibMinBoxUnits || h*f.scale < calibMinBoxUnits {
-		return config.NormalizedRect{}, false
-	}
-	fw, fh := float64(f.w), float64(f.h)
-	return frameFraction(left/fw, top/fh, w/fw, h/fh), true
-}
-
-// frameFraction rounds to 6 decimals (far below a pixel even at 4K) and keeps
-// the box inside the frame, as config validation requires.
-func frameFraction(x, y, w, h float64) config.NormalizedRect {
-	round := func(v float64) float64 { return math.Round(v*1e6) / 1e6 }
-	r := config.NormalizedRect{X: round(x), Y: round(y), Width: round(w), Height: round(h)}
-	for r.X+r.Width > 1 {
-		r.Width = math.Nextafter(r.Width, 0)
-	}
-	for r.Y+r.Height > 1 {
-		r.Height = math.Nextafter(r.Height, 0)
-	}
-	return r
-}
-
-// ---- image surface ----
-
-// calibrationSurface shows the snapshot scaled to fit with every box, and
-// turns a drag into a box for the selected target.
-type calibrationSurface struct {
-	widget.BaseWidget
-	c        *calibrationWindow
-	dragging bool
-	from, to fyne.Position // surface coordinates
-}
-
-func newCalibrationSurface(c *calibrationWindow) *calibrationSurface {
-	v := &calibrationSurface{c: c}
-	v.ExtendBaseWidget(v)
-	return v
-}
-
-func (v *calibrationSurface) CreateRenderer() fyne.WidgetRenderer { return newCalibrationRenderer(v) }
-
-func (v *calibrationSurface) Cursor() desktop.Cursor { return desktop.CrosshairCursor }
-
-// fit is where the snapshot is drawn at the surface's current size.
-func (v *calibrationSurface) fit() calibrationFit {
-	if v.c.snap == nil {
-		return calibrationFit{}
-	}
-	b := v.c.snap.img.Bounds()
-	return fitCalibrationImage(b.Dx(), b.Dy(), v.Size())
-}
-
-// MouseDown starts over even if the previous drag never got its DragEnd
-// (button released outside the window).
-func (v *calibrationSurface) MouseDown(*desktop.MouseEvent) { v.dragging = false }
-func (v *calibrationSurface) MouseUp(*desktop.MouseEvent)   {}
-
-// Dragged follows Fyne's desktop driver: Position is the pointer relative to
-// the surface and Dragged the movement since the previous event, so the drag
-// started at the first event's Position − Dragged.
-func (v *calibrationSurface) Dragged(ev *fyne.DragEvent) {
-	if v.c.snap == nil {
-		return
-	}
-	if !v.dragging {
-		v.dragging = true
-		v.from = ev.Position.Subtract(ev.Dragged)
-	}
-	v.to = ev.Position
-	v.Refresh()
-}
-
-func (v *calibrationSurface) DragEnd() {
-	if !v.dragging {
-		return
-	}
-	v.dragging = false
-	v.c.finishBox(v.from, v.to)
-}
-
-type calibrationRenderer struct {
-	v       *calibrationSurface
-	bg      *canvas.Rectangle
-	img     *canvas.Image
-	empty   *canvas.Text
-	boxes   [calibTargetCount]*canvas.Rectangle
-	tagBG   [calibTargetCount]*canvas.Rectangle
-	tags    [calibTargetCount]*canvas.Text
-	dots    [2][4]*canvas.Circle // implied bead centres of the two bead boxes
-	band    *canvas.Rectangle    // the box being dragged
-	objects []fyne.CanvasObject
-}
-
-func newCalibrationRenderer(v *calibrationSurface) *calibrationRenderer {
-	r := &calibrationRenderer{v: v, bg: canvas.NewRectangle(calibSurfaceBG),
-		img: &canvas.Image{FillMode: canvas.ImageFillStretch, ScaleMode: canvas.ImageScaleSmooth}}
-	r.bg.StrokeColor, r.bg.StrokeWidth = panelBorder, 1
-	r.empty = canvas.NewText("等待画面…", tagIdle)
-	r.empty.Alignment = fyne.TextAlignCenter
-	r.objects = []fyne.CanvasObject{r.bg, r.img, r.empty}
-	for t := range r.boxes {
-		r.boxes[t] = canvas.NewRectangle(transparentColor)
-		r.boxes[t].StrokeColor = calibTargetColors[t]
-		r.objects = append(r.objects, r.boxes[t])
-	}
-	for t := range r.dots {
-		for i := range r.dots[t] {
-			dot := canvas.NewCircle(calibDotFill)
-			dot.StrokeColor, dot.StrokeWidth = calibDotOutline, 1
-			r.dots[t][i] = dot
-			r.objects = append(r.objects, dot)
-		}
-	}
-	// Names above every outline, so a neighbouring box never crosses a name.
-	for t := range r.tags {
-		r.tagBG[t] = canvas.NewRectangle(calibTagBG)
-		r.tagBG[t].CornerRadius = 3
-		r.tags[t] = canvas.NewText(calibTargetNames[t], calibTargetColors[t])
-		r.tags[t].TextSize = 12
-		r.objects = append(r.objects, r.tagBG[t], r.tags[t])
-	}
-	r.band = canvas.NewRectangle(transparentColor)
-	r.band.StrokeWidth = 1.5
-	r.objects = append(r.objects, r.band)
-	r.update()
-	return r
-}
-
-func (r *calibrationRenderer) Destroy()                     {}
-func (r *calibrationRenderer) Objects() []fyne.CanvasObject { return r.objects }
-func (r *calibrationRenderer) MinSize() fyne.Size           { return fyne.NewSize(320, 180) }
-
-// update applies the window state that is not geometry.
-func (r *calibrationRenderer) update() {
-	c := r.v.c
-	var img image.Image
-	if c.snap != nil {
-		img = c.snap.img
-	}
-	if r.img.Image != img {
-		r.img.Image = img
-		r.img.Refresh() // re-rasterise only when the frame changes
-	}
-	for t, box := range r.boxes {
-		box.StrokeWidth = 2
-		if calibTarget(t) == c.target {
-			box.StrokeWidth = 3
-		}
-	}
-	col := calibTargetColors[c.target]
-	r.band.StrokeColor = col
-	r.band.FillColor = color.NRGBA{R: col.R, G: col.G, B: col.B, A: 48}
-}
-
-func (r *calibrationRenderer) Refresh() {
-	r.update()
-	r.Layout(r.v.Size())
-	canvas.Refresh(r.v) // the image is not re-rasterised by this
-}
-
-func (r *calibrationRenderer) Layout(size fyne.Size) {
-	r.bg.Move(fyne.NewPos(0, 0))
-	r.bg.Resize(size)
-	hide := func() {
-		for t := range r.boxes {
-			r.boxes[t].Hide()
-			r.tagBG[t].Hide()
-			r.tags[t].Hide()
-		}
-		for t := range r.dots {
-			for _, dot := range r.dots[t] {
-				dot.Hide()
-			}
-		}
-		r.band.Hide()
-	}
-	c := r.v.c
-	if c.snap == nil {
-		hide()
-		r.img.Hide()
-		r.empty.Show()
-		text := r.empty.MinSize()
-		r.empty.Move(fyne.NewPos(0, (size.Height-text.Height)/2))
-		r.empty.Resize(fyne.NewSize(size.Width, text.Height))
-		return
-	}
-	r.empty.Hide()
-	b := c.snap.img.Bounds()
-	fit := fitCalibrationImage(b.Dx(), b.Dy(), size)
-	if !fit.ok() {
-		hide()
-		r.img.Hide()
-		return
-	}
-	r.img.Show()
-	at, area := fit.rect(config.NormalizedRect{Width: 1, Height: 1})
-	r.img.Move(at)
-	r.img.Resize(area)
-	for t, rect := range c.boxes() {
-		r.layoutBox(calibTarget(t), rect, fit, size)
-	}
-	if !r.v.dragging {
-		r.band.Hide()
-		return
-	}
-	x0, y0 := fit.pixel(r.v.from)
-	x1, y1 := fit.pixel(r.v.to)
-	band := config.NormalizedRect{X: math.Min(x0, x1) / float64(fit.w), Y: math.Min(y0, y1) / float64(fit.h),
-		Width: math.Abs(x1-x0) / float64(fit.w), Height: math.Abs(y1-y0) / float64(fit.h)}
-	pos, bandSize := fit.rect(band)
-	r.band.Move(pos)
-	r.band.Resize(bandSize)
-	r.band.Show()
-}
-
-func (r *calibrationRenderer) layoutBox(t calibTarget, rect *config.NormalizedRect, fit calibrationFit, size fyne.Size) {
-	box, tagBG, tag := r.boxes[t], r.tagBG[t], r.tags[t]
-	if t.beads() {
-		for _, dot := range r.dots[t] {
-			dot.Hide()
-		}
-	}
-	if rect == nil {
-		box.Hide()
-		tagBG.Hide()
-		tag.Hide()
-		return
-	}
-	pos, boxSize := fit.rect(*rect)
-	box.Move(pos)
-	box.Resize(boxSize)
-	box.Show()
-	if t.beads() {
-		// Small enough to see the bead around it.
-		d := fyne.Min(boxSize.Width/4, boxSize.Height) * 0.35
-		d = fyne.Max(3.5, fyne.Min(d, 8))
-		for i, centre := range calibrationBeadCenters(*rect, t.left()) {
-			dot := r.dots[t][i]
-			dot.Move(fit.point(centre.X, centre.Y).SubtractXY(d/2, d/2))
-			dot.Resize(fyne.NewSize(d, d))
-			dot.Show()
-		}
-	}
-	// Bead names go above their box (avatars sit at the top edge), avatar
-	// names below, so the two names of one side never overlap.
-	text := tag.MinSize()
-	label := text.AddWidthHeight(8, 2)
-	top, bottom := float32(fit.y), float32(fit.y+float64(fit.h)*fit.scale)
-	above, below := pos.Y-label.Height-2, pos.Y+boxSize.Height+2
-	y := below
-	if (t.beads() && above >= top) || below+label.Height > bottom {
-		y = above
-	}
-	x := pos.X
-	if !t.left() {
-		x = pos.X + boxSize.Width - label.Width
-	}
-	x = fyne.Max(0, fyne.Min(x, size.Width-label.Width))
-	y = fyne.Max(0, fyne.Min(y, size.Height-label.Height))
-	tagBG.Move(fyne.NewPos(x, y))
-	tagBG.Resize(label)
-	tagBG.Show()
-	tag.Move(fyne.NewPos(x+4, y+1))
-	tag.Resize(text)
-	tag.Show()
 }

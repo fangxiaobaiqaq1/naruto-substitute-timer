@@ -730,9 +730,11 @@ func (s *session) captureOnce() {
 	}()
 
 	recorder := s.currentDiagnostics()
+	// Read before the capture: its analysis uses this calibration or a newer one.
+	calibrationGen := s.calibrationFeed.gen.Load()
 	f := s.provider()
 	// One atomic load unless the calibration window is open.
-	s.offerCalibrationFrame(f)
+	s.offerCalibrationFrame(f, calibrationGen)
 	trace := traceRef{recorder: recorder}
 	if recorder != nil {
 		trace.id = recorder.Observe(f, time.Now())

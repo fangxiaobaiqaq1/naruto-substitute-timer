@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -127,32 +126,54 @@ func TestWindowPreviews(t *testing.T) {
 		}
 	}
 
-	// Region calibration on a synthetic 2400×1080 duel frame: two saved boxes,
-	// one drawn but not saved, and a non-16:9 tablet frame.
+	// Region calibration on synthetic HUDs (not captures) with the geometry
+	// the real engine reports on them: the automatic regions and default
+	// boxes; with a saved left avatar and the right beads moved but not saved;
+	// a non-16:9 tablet frame; a frame without an analysis.
 	// The GLFW driver re-lays out a label whose text grew; this canvas does not.
 	relayout := func(w fyne.Window) { w.Content().Refresh() }
-	for _, size := range []image.Point{{2400, 1080}, {2388, 1668}} {
+	for _, view := range []struct {
+		name  string
+		size  image.Point
+		edits bool
+		bare  bool // no analysis: a lobby-like frame
+	}{
+		{"calibration-auto", image.Pt(2400, 1080), false, false},
+		{"calibration-2400x1080", image.Pt(2400, 1080), true, false},
+		{"calibration-2388x1668", image.Pt(2388, 1668), false, false},
+		{"calibration-1280x720-no-geometry", image.Pt(1280, 720), false, true},
+	} {
 		s := newPreviewSession()
 		w := fynetest.NewWindow(nil)
 		s.win = w
 		w.SetContent(s.overlayContent())
-		leftBeads := config.NormalizedRect{X: 0.081, Y: 0.104, Width: 0.052, Height: 0.022}
-		leftAvatar := config.NormalizedRect{X: 0.004, Y: 0.006, Width: 0.072, Height: 0.128}
-		s.cfg.Layout.Calibration = &config.RegionCalibration{Profile: "duel", LeftBeads: &leftBeads, LeftAvatar: &leftAvatar}
+		if view.edits {
+			_, auto := calibrationPreviewHUD(view.size, nil)
+			leftAvatar := auto[0].AvatarBox
+			leftAvatar.X += 6.0 / float64(view.size.X)
+			s.cfg.Layout.Calibration = &config.RegionCalibration{Profile: "duel", LeftAvatar: &leftAvatar}
+		}
 		s.openCalibration()
 		c := s.calibrationWin
-		if size.X == 2400 {
+		if view.edits {
 			save("calibration-waiting", c.win.Canvas().Capture())
 		}
-		s.calibrationFeed.offer(frame.Frame{Img: calibrationPreviewFrame(size.X, size.Y), Fighting: true, LayoutProfile: "duel"}, time.Now())
+		img, geometry := calibrationPreviewHUD(view.size, s.cfg.Layout.Calibration)
+		f := frame.Frame{Img: img, Fighting: true, LayoutProfile: "duel", Geometry: geometry}
+		if view.bare {
+			f.Geometry = [2]frame.SideGeometry{}
+		}
+		s.calibrationFeed.offer(f, time.Now())
 		relayout(c.win)
-		if size.X == 2400 {
+		if view.edits {
 			c.targets.SetSelected("右侧豆")
 			fit := c.surface.fit()
-			dragSurface(c.surface, fit.point(0.867, 0.104), fit.point(0.919, 0.126))
+			box := geometry[1].BeadBox
+			from := fit.point(box.X+box.Width/2, box.Y+box.Height/2)
+			dragSurface(c.surface, from, from.AddXY(float32(9*fit.scale), float32(5*fit.scale)))
 			relayout(c.win)
 		}
-		save(fmt.Sprintf("calibration-%dx%d", size.X, size.Y), c.win.Canvas().Capture())
+		save(view.name, c.win.Canvas().Capture())
 		c.win.Close()
 	}
 }
