@@ -23,6 +23,8 @@ npm test
 
 GitHub Actions 另检查真机平台、arm64 主程序、内置 JS bundle、App/内嵌 framework 的 `MinimumOSVersion` 声明，以及 IPA ZIP 完整性。声明和编译通过**不等于**所有 iOS 版本已通过真机验收。
 
+`macos-15` 镜像虽有 Xcode 16.2 / iOS 18.2 SDK，但不再预装对应模拟器运行时；`ibtool` 编译启动页仍需要它。工作流显式执行 `xcodebuild -downloadPlatform iOS -buildVersion 18.2`，不依赖 SDK 目录存在与否判断。这只是构建机组件，**不会把 App 最低系统从 13.4 提高到 18.2**。参见 [runner-images #13560](https://github.com/actions/runner-images/issues/13560)。
+
 拿到 IPA 后仍需在自签设备上检查：
 
 1. 首次安装、冷启动、关闭网络后启动，无闪退且不请求 Metro。
