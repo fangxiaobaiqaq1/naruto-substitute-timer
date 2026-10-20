@@ -44,6 +44,7 @@
 #include "nt/identity.h"
 #include "nt/image.h"
 #include "nt/ninja.h"
+#include "nt/ninja_internal.h"
 #include "nt/parallel.h"
 #include "nt/scene.h"
 
@@ -374,6 +375,14 @@ int runBench(const nt::config::Config& cfg, const std::vector<std::string>& file
         return 1;
     }
     std::printf("mem pipeline: %s build=%.1fms\n", memLine().c_str(), buildMs);
+    {
+        // Pipeline::Rebuild is what a calibration change runs (jni nativeSetCalibration).
+        std::string err;
+        const auto r0 = clock::now();
+        const bool ok = pipe.Rebuild(cfg, &err);
+        const double rebuildMs = std::chrono::duration<double, std::milli>(clock::now() - r0).count();
+        std::printf("mem rebuild: %s rebuild=%.1fms ok=%d\n", memLine().c_str(), rebuildMs, ok);
+    }
     const nt::TimeNs base = 1700000000LL * nt::Second;
     std::vector<double> all, firsts;
     uint64_t allCalls = 0, allBytes = 0, hash = 1469598103934665603ull;
@@ -406,10 +415,15 @@ int runBench(const nt::config::Config& cfg, const std::vector<std::string>& file
         }
         const std::string name = f.substr(f.find_last_of('/') + 1);
         const double n = static_cast<double>(std::max<size_t>(1, ms.size()));
-        std::printf("file %-36s %4dx%-4d first=%7.2fms p50=%6.2fms p90=%6.2fms new/frame=%6.0f KiB/frame=%7.1f live=%.2fMiB\n",
+        double avatarCache = 0;
+        if (auto c = nt::ninja::LoadEmbeddedAvatarCatalog()) {
+            std::lock_guard<std::mutex> lk(c->mu);
+            avatarCache = static_cast<double>(c->templateBytes) / 1048576.0;
+        }
+        std::printf("file %-36s %4dx%-4d first=%7.2fms p50=%6.2fms p90=%6.2fms new/frame=%6.0f KiB/frame=%7.1f live=%.2fMiB avatar-cache=%.2fMiB\n",
                     name.c_str(), img.Bounds().Dx(), img.Bounds().Dy(), firsts.back(), percentile(ms, 50),
                     percentile(ms, 90), static_cast<double>(calls) / n, static_cast<double>(bytes) / n / 1024.0,
-                    static_cast<double>(g_liveBytes.load()) / 1048576.0);
+                    static_cast<double>(g_liveBytes.load()) / 1048576.0, avatarCache);
         all.insert(all.end(), ms.begin(), ms.end());
         allCalls += calls;
         allBytes += bytes;

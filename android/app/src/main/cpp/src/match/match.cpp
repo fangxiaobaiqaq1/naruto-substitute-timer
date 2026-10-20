@@ -16,6 +16,7 @@ namespace {
 // Go 的 sync.Pool 复用 grayPrefix；Android 上 Match 只在调用线程上同步使用前缀和，
 // 用 thread_local 缓冲等价复用（ParallelFor 的每个工作线程各自一份）。
 thread_local grayPrefix tlsPrefix;
+constexpr size_t kKeepPrefixBytes = static_cast<size_t>(1) << 20;
 }  // namespace
 
 // Match 在 ROI 内滑动模板，返回最高 NCC。
@@ -124,6 +125,12 @@ bool NCC::Match(const Query& q, Score& out) const {
             scan(best.Peak.X - step, best.Peak.Y - step, best.Peak.X + step, best.Peak.Y + step, 1);
         }
     }
+    // A per-thread buffer sized for the largest search area would stay resident
+    // on every pool thread (a 0.45x0.28 screen ROI is ~5 MiB at 2880x1800).
+    // Keep only buffers up to kKeepPrefixBytes between calls.
+    if (pre == &tlsPrefix && tlsPrefix.sum.capacity() * 2 * sizeof(uint32_t) > kKeepPrefixBytes) {
+        tlsPrefix = grayPrefix{};
+    }
     out = std::move(best);
     return true;
 }
@@ -143,6 +150,12 @@ int coarseStep(int tw, int th) {
 // whose correlation lobe is a few pixels wide for HUD text, is not skipped.
 int refineStep(int step) { return step / 4; }
 
+// lumaDiv1000 is x / 1000 for x <= 255500 (= 1000*255 + 500) using only 32-bit
+// lanes, so the conversion loop vectorizes: floor(floor(x/8)/125) == floor(x/1000)
+// and (y * 33555) >> 22 == y / 125 for every y <= 31937 (exhaustively checked
+// in tests/perf_kernels_test.cpp). Bit-identical to the division.
+inline uint8_t lumaDiv1000(uint32_t x) { return static_cast<uint8_t>(((x >> 3) * 33555u) >> 22); }
+
 // ToGray 把采集帧转成灰度。
 // Capture frames are RGBA. The direct path preserves the same integer luma
 // calculation and also handles subimages with a padded stride.
@@ -160,8 +173,8 @@ nt::Gray ToGray(const nt::RGBA* src) {
         uint8_t* dstRow = out.Pix + static_cast<ptrdiff_t>(y) * out.Stride;
         for (int x = 0; x < w; ++x) {
             const int i = x * 4;
-            dstRow[x] = static_cast<uint8_t>((299u * uint32_t(srcRow[i]) + 587u * uint32_t(srcRow[i + 1]) +
-                                              114u * uint32_t(srcRow[i + 2]) + 500u) / 1000u);
+            dstRow[x] = lumaDiv1000(299u * uint32_t(srcRow[i]) + 587u * uint32_t(srcRow[i + 1]) +
+                                    114u * uint32_t(srcRow[i + 2]) + 500u);
         }
     }
     return out;
