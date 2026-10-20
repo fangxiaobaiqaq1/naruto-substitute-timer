@@ -211,3 +211,22 @@ func TestDefaultCaptureKeepsMuMuMethods(t *testing.T) {
 		t.Fatalf("MuMu defaults changed: %+v", cfg.Capture)
 	}
 }
+
+func TestRegionCalibrationIsOptionalAndValidated(t *testing.T) {
+	c := Default()
+	if err := Validate(c); err != nil || c.Layout.Calibration != nil {
+		t.Fatalf("default calibration %+v err %v", c.Layout.Calibration, err)
+	}
+	c.Layout.Calibration = &RegionCalibration{Profile: "duel", LeftBeads: &NormalizedRect{X: 0.08, Y: 0.1, Width: 0.05, Height: 0.02}}
+	if err := Validate(c); err != nil {
+		t.Fatal(err)
+	}
+	c.Layout.Calibration.RightAvatar = &NormalizedRect{X: 0.95, Y: 0, Width: 0.1, Height: 0.1}
+	if Validate(c) == nil {
+		t.Fatal("rect outside the frame accepted")
+	}
+	c.Layout.Calibration = &RegionCalibration{Profile: "lobby"}
+	if Validate(c) == nil {
+		t.Fatal("unknown profile accepted")
+	}
+}
