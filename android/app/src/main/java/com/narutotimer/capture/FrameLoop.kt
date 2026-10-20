@@ -78,6 +78,11 @@ object FrameLoop {
          * 每帧几何); null when there is none (failed analysis, engine rebuilt in between).
          */
         val geometry: FrameGeometry?,
+        /**
+         * Ninjas that same analysis recognised (index 0 left, 1 right: [AnalysisResult.leftNinja] /
+         * [AnalysisResult.rightNinja]); "" = none, and always "" without [geometry].
+         */
+        val ninjas: List<String> = listOf("", ""),
     )
 
     /** A pending one-shot snapshot ([requestSnapshot]); null in normal operation. */
@@ -194,7 +199,7 @@ object FrameLoop {
      * [callback] receives a [Snapshot] on the main thread: the bitmap, that frame's layout profile
      * ("camp" / "duel" when the frame was recognised as a match, otherwise "" — lobby, VS, a
      * non-game screen, native not ready; the engine's camp/duel pick is only a guess there) and
-     * the geometry that same analysis used, read on this thread right after it.
+     * the geometry that same analysis used, read on this thread right after it, with the ninjas it recognised.
      * A frame that cannot be copied is skipped and the next one is tried. A newer request
      * replaces a pending one; [stop] drops it, so callers should apply their own timeout.
      * Returns false when the loop is not running.
@@ -256,13 +261,15 @@ object FrameLoop {
                 .getOrNull()
                 ?.takeIf { it.sequence == a.sequence && it.width == bitmap.width && it.height == bitmap.height }
         }
+        val ninjas = if (geometry != null && analysed != null) listOf(analysed.leftNinja, analysed.rightNinja) else listOf("", "")
         Log.i(
             TAG,
             "snapshot ${bitmap.width}x${bitmap.height} method=${frame.method} " +
                 "${if (frame.image != null) "image" else "buffer"} ${(System.nanoTime() - begin) / 1_000_000}ms " +
-                "profile=$profile geometry=${geometry?.let { "seq ${it.sequence} ${it.layoutProfile}" } ?: "none"}",
+                "profile=$profile geometry=${geometry?.let { "seq ${it.sequence} ${it.layoutProfile}" } ?: "none"} " +
+                "ninjas=${ninjas.joinToString("|")}",
         )
-        val shot = Snapshot(bitmap, profile, geometry)
+        val shot = Snapshot(bitmap, profile, geometry, ninjas)
         mainHandler.post { request.callback(shot) }
     }
 
