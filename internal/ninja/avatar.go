@@ -59,21 +59,38 @@ type avatarIndexEntry struct {
 	SHA256 string `json:"sha256"` // bundled manifest format
 }
 
+// avatarEntry keeps only what recognition reads after loading: the PNG bytes
+// stay in the executable's embedded FS (or on disk), not on the heap.
 type avatarEntry struct {
 	id, name, baseName string
-	data               []byte
-	thumb              *match.PreparedNCC
-	thumbGray          *image.Gray
-	thumbMask          *image.Gray
 	coarseGray         *image.Gray
 	coarseMask         *image.Gray
 	gray               *image.Gray
 	mask               *image.Gray
-	scaled             map[avatarSize]*match.PreparedNCC
 }
 
-// avatarSize keys the per-entry scaled template cache.
-type avatarSize struct{ w, h int }
+// avatarTemplateKey is one entry at one exact pixel size. A prepared template
+// depends on nothing else, so templates for different HUD scales (two sides
+// calibrated to slightly different sizes, camp vs duel) coexist in the cache
+// instead of evicting each other on every frame.
+type avatarTemplateKey struct {
+	entry *avatarEntry
+	w, h  int
+}
+
+// avatarTemplate is one cache entry, linked in least-recently-used order.
+type avatarTemplate struct {
+	key        avatarTemplateKey
+	prepared   *match.PreparedNCC
+	bytes      int
+	prev, next *avatarTemplate
+}
+
+// avatarTemplateCacheBytes bounds the prepared-template cache. One full scan
+// prepares at most 24 + 12*9 templates per side; at 1080p both sides' working
+// set is about 3 MiB, so steady state never evicts while the 242-entry
+// catalog at every factor (about 70 MiB at 1080p) can never accumulate.
+const avatarTemplateCacheBytes = 12 << 20
 
 // AvatarMatch is exclusively current-frame portrait evidence. Candidate is
 // diagnostic-only when the strict identity fields are blank.
@@ -92,18 +109,21 @@ type AvatarMatch struct {
 }
 
 type avatarCatalog struct {
-	// mu guards only the mutable template state: entry.gray/mask lazy decode,
-	// entry.scaled, cacheScale, cachedEntries and cacheWipes. entries, byID and
-	// every other entry field are written once by loadAvatarCatalog and are
-	// read lock-free afterwards; prepared templates are immutable.
-	mu            sync.Mutex
-	entries       []*avatarEntry
-	byID          map[string]*avatarEntry
-	cacheScale    float64
-	cachedEntries int
-	// cacheWipes counts overflow wipes of the scaled template cache; a single
-	// scan must never trigger one (tests assert it).
-	cacheWipes int
+	// mu guards only the prepared-template cache. entries, byID and every
+	// entry field are written once by loadAvatarCatalog and are read lock-free
+	// afterwards; prepared templates are immutable.
+	mu       sync.Mutex
+	entries  []*avatarEntry
+	byID     map[string]*avatarEntry
+	pngBytes int // total verified PNG bytes (AvatarStats)
+	// templates is the byte-capped LRU of prepared scaled templates; lru is
+	// its sentinel (lru.next = most recent). evictions counts templates
+	// dropped by the cap; a single scan must never need one (tests assert it).
+	templates     map[avatarTemplateKey]*avatarTemplate
+	lru           avatarTemplate
+	templateBytes int
+	cacheCap      int // 0 = avatarTemplateCacheBytes
+	evictions     int
 }
 
 type avatarFinalist struct {
@@ -145,9 +165,8 @@ func AvatarStats() (AvatarCatalogStats, error) {
 	if err != nil {
 		return AvatarCatalogStats{}, err
 	}
-	stats := AvatarCatalogStats{Entries: len(c.entries)}
+	stats := AvatarCatalogStats{Entries: len(c.entries), Bytes: c.pngBytes}
 	for _, e := range c.entries {
-		stats.Bytes += len(e.data)
 		if len(e.id) == 5 {
 			stats.Base++
 		} else {
@@ -202,9 +221,10 @@ func loadAvatarCatalog(data []byte, readFile func(string) ([]byte, error)) (*ava
 		seen[item.ID], sums[i] = true, sum
 	}
 	entries := make([]*avatarEntry, len(index.Entries))
+	sizes := make([]int, len(index.Entries))
 	parallelFor(len(index.Entries), func(i int) {
 		if errs[i] == nil {
-			entries[i], errs[i] = loadAvatarEntry(index.Entries[i], sums[i], readFile)
+			entries[i], sizes[i], errs[i] = loadAvatarEntry(index.Entries[i], sums[i], readFile)
 		}
 	})
 	for _, err := range errs {
@@ -213,39 +233,39 @@ func loadAvatarCatalog(data []byte, readFile func(string) ([]byte, error)) (*ava
 		}
 	}
 	catalog := &avatarCatalog{entries: entries, byID: make(map[string]*avatarEntry, len(entries))}
-	for _, entry := range entries {
+	for i, entry := range entries {
 		catalog.byID[entry.id] = entry
+		catalog.pngBytes += sizes[i]
 	}
 	return catalog, nil
 }
 
-// loadAvatarEntry reads, verifies and decodes one indexed asset. It touches
-// only its own entry, so the catalog loader may run it concurrently.
-func loadAvatarEntry(item avatarIndexEntry, sum string, readFile func(string) ([]byte, error)) (*avatarEntry, error) {
+// loadAvatarEntry reads, verifies and decodes one indexed asset and returns
+// it with its PNG size. It touches only its own entry, so the catalog loader
+// may run it concurrently.
+func loadAvatarEntry(item avatarIndexEntry, sum string, readFile func(string) ([]byte, error)) (*avatarEntry, int, error) {
 	png, err := readFile(item.ID)
 	if err != nil {
-		return nil, fmt.Errorf("read avatar %s: %w", item.ID, err)
+		return nil, 0, fmt.Errorf("read avatar %s: %w", item.ID, err)
 	}
 	got := sha256.Sum256(png)
 	if !strings.EqualFold(hex.EncodeToString(got[:]), sum) {
-		return nil, fmt.Errorf("avatar %s sha256 does not match index", item.ID)
+		return nil, 0, fmt.Errorf("avatar %s sha256 does not match index", item.ID)
 	}
 	img, _, err := image.Decode(bytes.NewReader(png))
 	if err != nil {
-		return nil, fmt.Errorf("decode avatar %s: %w", item.ID, err)
+		return nil, 0, fmt.Errorf("decode avatar %s: %w", item.ID, err)
 	}
 	gray, alphaMask := avatarGrayMask(img)
 	if gray.Bounds().Dx() < 16 || gray.Bounds().Dy() < 16 {
-		return nil, fmt.Errorf("avatar %s too small", item.ID)
+		return nil, 0, fmt.Errorf("avatar %s too small", item.ID)
 	}
 	// The catalog PNG carries a baked rank badge/frame/background. Those
 	// pixels vary in the live HUD, while the face inside the diamond is
 	// stable. Recognition uses alpha ∩ inner-diamond only.
 	mask := avatarFaceMask(gray.Bounds(), alphaMask)
-	thumbGray, thumbMask := match.ScaleGray(gray, 16, 16), match.ScaleGray(mask, 16, 16)
-	// The full-resolution gray/mask are exactly what matchEntries would
-	// otherwise re-decode lazily from data; keep them so a PNG is decoded once.
-	return &avatarEntry{id: item.ID, name: avatarName(item), baseName: avatarBaseName(item), data: png, thumb: match.PrepareNCC(thumbGray, thumbMask), thumbGray: thumbGray, thumbMask: thumbMask, coarseGray: match.ScaleGray(gray, 36, 36), coarseMask: match.ScaleGray(mask, 36, 36), gray: gray, mask: mask}, nil
+	// The PNG is decoded exactly once; only the planes matching reads are kept.
+	return &avatarEntry{id: item.ID, name: avatarName(item), baseName: avatarBaseName(item), coarseGray: match.ScaleGray(gray, 36, 36), coarseMask: match.ScaleGray(mask, 36, 36), gray: gray, mask: mask}, len(png), nil
 }
 
 // parallelFor runs fn(0..n-1) on match.Workers(n) workers pulling indexes
@@ -491,8 +511,8 @@ var (
 // gray is ToGray(view), converted once by the caller and shared by every NCC
 // query instead of being rebuilt per entry/factor; nil converts it here.
 //
-// The caller must not hold c.mu. The lock covers only the lazy decode and the
-// template cache while the jobs are built; NCC scoring runs unlocked (and in
+// The caller must not hold c.mu. The lock covers only the template cache
+// while the jobs are built; NCC scoring runs unlocked (and in
 // parallel) on immutable prepared templates and the caller's pixels. Scores
 // are reduced in the original entry/factor order with the same strict '>', so
 // the result equals the serial scan exactly.
@@ -520,9 +540,8 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 		}
 	}
 	c.mu.Lock()
-	c.evictTemplates(scale)
 	for _, entry := range entries {
-		if !c.decode(entry) {
+		if entry == nil {
 			continue
 		}
 		out.ids = append(out.ids, entry.id)
@@ -570,7 +589,6 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 		// score never wins the strict '>', so the fine sweep skips it.
 		jobs = jobs[:0]
 		c.mu.Lock()
-		c.evictTemplates(scale)
 		for _, entry := range entries {
 			if entry != nil && fine[entry.id] {
 				jobs = c.appendJobs(jobs, entry, scale, bounds, avatarFactorsFine)
@@ -644,23 +662,6 @@ func avatarJobScore(view *image.RGBA, gray *image.Gray, prepared *match.Prepared
 	return score.Value
 }
 
-// decode fills the full-resolution gray/mask lazily for entries that were not
-// built by loadAvatarCatalog (caller holds mu).
-func (c *avatarCatalog) decode(entry *avatarEntry) bool {
-	if entry == nil {
-		return false
-	}
-	if entry.gray == nil {
-		img, _, err := image.Decode(bytes.NewReader(entry.data))
-		if err != nil {
-			return false
-		}
-		entry.gray, entry.mask = avatarGrayMask(img)
-		entry.mask = avatarFaceMask(entry.gray.Bounds(), entry.mask)
-	}
-	return true
-}
-
 type stageEntry struct {
 	entry *avatarEntry
 	score float64
@@ -681,46 +682,50 @@ func avatarFactorSize(entry *avatarEntry, scale, factor float64) (int, int) {
 	return max(12, int(math.Round(float64(entry.gray.Bounds().Dx())*scale*factor))), max(12, int(math.Round(float64(entry.gray.Bounds().Dy())*scale*factor)))
 }
 
-// evictTemplates clears the per-entry scaled template cache whenever the HUD
-// scale changes; cached templates are only valid for one capture geometry.
-func (c *avatarCatalog) evictTemplates(scale float64) {
-	if c.cacheScale != scale {
-		c.cacheScale = scale
-		for _, e := range c.entries {
-			e.scaled = nil
-		}
-		c.cachedEntries = 0
-	}
-}
-
-// prepared returns the cached scaled template for the entry at this size,
-// preparing it on first use. All catalog template state lives under the
-// catalog lock; the cache only ever holds templates at the current scale.
+// prepared returns the entry's template scaled to w x h, preparing it on
+// first use (caller holds mu). The template is a pure function of the entry
+// and the size, so a cached one is exactly what preparing again would give.
+// The least recently used templates are dropped beyond the byte cap; a job
+// still holding one keeps it alive until it is scored.
 func (c *avatarCatalog) prepared(entry *avatarEntry, w, h int) *match.PreparedNCC {
-	key := avatarSize{w, h}
-	if entry.scaled == nil {
-		entry.scaled = make(map[avatarSize]*match.PreparedNCC, 8)
-	} else if p, ok := entry.scaled[key]; ok {
-		return p
+	key := avatarTemplateKey{entry, w, h}
+	if c.templates == nil {
+		c.templates = make(map[avatarTemplateKey]*avatarTemplate)
+		c.lru.next, c.lru.prev = &c.lru, &c.lru
+	}
+	if t := c.templates[key]; t != nil {
+		t.unlink()
+		c.lru.pushFront(t)
+		return t.prepared
 	}
 	p := match.PrepareNCC(match.ScaleGray(entry.gray, w, h), match.ScaleGray(entry.mask, w, h))
-	entry.scaled[key] = p
-	c.cachedEntries++
-	if c.cachedEntries > c.templateCacheCap() {
-		for _, e := range c.entries {
-			e.scaled = nil
-		}
-		c.cachedEntries = 0
-		c.cacheWipes++
+	t := &avatarTemplate{key: key, prepared: p, bytes: p.SizeBytes()}
+	c.templates[key] = t
+	c.lru.pushFront(t)
+	c.templateBytes += t.bytes
+	limit := c.cacheCap
+	if limit <= 0 {
+		limit = avatarTemplateCacheBytes
+	}
+	for c.templateBytes > limit && c.lru.prev != t {
+		old := c.lru.prev
+		old.unlink()
+		delete(c.templates, old.key)
+		c.templateBytes -= old.bytes
+		c.evictions++
 	}
 	return p
 }
 
-// templateCacheCap covers every size of one complete scan (each entry at
-// every display factor) plus headroom, so a scan never wipes its own cache.
-// Sizes depend only on the scale, which evictTemplates already keys.
-func (c *avatarCatalog) templateCacheCap() int {
-	return len(c.entries)*len(avatarFactorsFull) + 64
+func (sentinel *avatarTemplate) pushFront(t *avatarTemplate) {
+	t.prev, t.next = sentinel, sentinel.next
+	sentinel.next.prev = t
+	sentinel.next = t
+}
+
+func (t *avatarTemplate) unlink() {
+	t.prev.next, t.next.prev = t.next, t.prev
+	t.prev, t.next = nil, nil
 }
 
 func (t *AvatarTracker) Read(c *avatarCatalog, img *image.RGBA, roi image.Rectangle, scale float64, now time.Time) AvatarMatch {

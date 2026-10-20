@@ -31,7 +31,7 @@ func TestBothLiveNarutoNamesAtScaledWidths(t *testing.T) {
 			got := r.Read(img, roi, float64(w)/960)
 			if got.Name != Naruto {
 				t.Errorf("%d side%d: %+v", w, i, got)
-				for _, p := range r.prepared {
+				for _, p := range r.testPrepared() {
 					score, _ := (match.NCC{}).Match(match.Query{Image: img, ROI: roi, Prepared: p.ncc})
 					t.Logf("%s reference %.4f at %v", p.readout.Name, score.Value, score.Peak)
 				}

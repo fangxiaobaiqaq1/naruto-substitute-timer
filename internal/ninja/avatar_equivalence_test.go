@@ -83,8 +83,11 @@ func TestAvatarGrayMaskFastPathEqualsGenericAt(t *testing.T) {
 		return a.Rect == b.Rect && a.Stride == b.Stride && bytes.Equal(a.Pix, b.Pix)
 	}
 	kinds := map[string]bool{}
+	if c.pngBytes != legacy.pngBytes {
+		t.Fatalf("png bytes %d want %d", c.pngBytes, legacy.pngBytes)
+	}
 	for i, e := range c.entries {
-		img, _, err := image.Decode(bytes.NewReader(e.data))
+		img, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, e.id)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,14 +99,11 @@ func TestAvatarGrayMaskFastPathEqualsGenericAt(t *testing.T) {
 		}
 		// The parallel loader keeps order, metadata and every derived plane.
 		l := legacy.entries[i]
-		if e.id != l.id || e.name != l.name || e.baseName != l.baseName || !bytes.Equal(e.data, l.data) || legacy.byID[e.id] != l || c.byID[e.id] != e ||
-			!sameGray(e.thumbGray, l.thumbGray) || !sameGray(e.thumbMask, l.thumbMask) || !sameGray(e.coarseGray, l.coarseGray) || !sameGray(e.coarseMask, l.coarseMask) ||
-			!reflect.DeepEqual(e.thumb, l.thumb) {
+		if e.id != l.id || e.name != l.name || e.baseName != l.baseName || legacy.byID[e.id] != l || c.byID[e.id] != e ||
+			!sameGray(e.coarseGray, l.coarseGray) || !sameGray(e.coarseMask, l.coarseMask) {
 			t.Fatalf("entry %d %s differs from serial load", i, e.id)
 		}
 		// Retained full-res planes equal the lazy decode matchEntries did.
-		l.gray, l.mask = legacyAvatarGrayMask(img)
-		l.mask = avatarFaceMask(l.gray.Bounds(), l.mask)
 		if !sameGray(e.gray, l.gray) || !sameGray(e.mask, l.mask) {
 			t.Fatalf("%s: retained gray/mask differ from lazy decode", e.id)
 		}

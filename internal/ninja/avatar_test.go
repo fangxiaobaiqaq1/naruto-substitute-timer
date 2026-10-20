@@ -104,7 +104,7 @@ func TestAvatarCurrentPixelsDoNotInherit(t *testing.T) {
 	if entry == nil {
 		t.Fatal("missing Ten-Tails Obito")
 	}
-	portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+	portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, entry.id)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestAvatarTrackerPixelMemoMatchesFreshResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := c.byID["90511"]
-	portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+	portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, entry.id)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestAvatarRecognitionSurvivesScaledLeftAndRightROI(t *testing.T) {
 	}
 	for _, id := range []string{"90511", "90464", "920541"} {
 		entry := c.byID[id]
-		portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+		portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, entry.id)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -201,7 +201,7 @@ func TestAvatarTitleFusionAllowsBaseTitleToCorroborateSkinWithoutChangingIdentit
 	if entry == nil {
 		t.Fatal("missing Madara skin")
 	}
-	portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+	portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, entry.id)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestAvatarTitleFusionRequiresCurrentAgreement(t *testing.T) {
 		return &avatarCatalog{entries: []*avatarEntry{e}, byID: map[string]*avatarEntry{id: e}}
 	}
 	obito, sasuke := makeOne("90511"), makeOne("90464")
-	portrait, _, err := image.Decode(bytes.NewReader(sasuke.byID["90464"].data))
+	portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, sasuke.byID["90464"].id)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestAvatarTitleFusionRequiresCurrentAgreement(t *testing.T) {
 		t.Fatalf("title/avatar conflict confirmed: %+v", got)
 	}
 	r.avatars = obito
-	portrait, _, err = image.Decode(bytes.NewReader(obito.byID["90511"].data))
+	portrait, _, err = image.Decode(bytes.NewReader(testAvatarPNG(t, obito.byID["90511"].id)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestHyakusenItachiOffsetRequiresExactCurrentAvatar(t *testing.T) {
 		return &avatarCatalog{entries: []*avatarEntry{e}, byID: map[string]*avatarEntry{id: e}}
 	}
 	itachi := one("920541")
-	portrait, _, err := image.Decode(bytes.NewReader(itachi.byID["920541"].data))
+	portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, itachi.byID["920541"].id)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestHyakusenItachiOffsetRequiresExactCurrentAvatar(t *testing.T) {
 		t.Fatalf("exact current 百战鼬 did not offset: %+v", got)
 	}
 	base := one("90022")
-	portrait, _, err = image.Decode(bytes.NewReader(base.byID["90022"].data))
+	portrait, _, err = image.Decode(bytes.NewReader(testAvatarPNG(t, base.byID["90022"].id)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestMinatoKyubiOffsetRequiresExactCurrentAvatar(t *testing.T) {
 	}
 	for _, id := range []string{"90316", "90011", "90101", "920111"} {
 		e := all.byID[id]
-		portrait, _, err := image.Decode(bytes.NewReader(e.data))
+		portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, e.id)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -359,7 +359,7 @@ func BenchmarkAvatarMatch(b *testing.B) {
 		b.Fatal(err)
 	}
 	entry := c.byID["90511"]
-	portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+	portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(b, entry.id)))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -379,7 +379,7 @@ func TestOrochimaruVariantsDoNotCrossMatch(t *testing.T) {
 	}
 	for _, id := range []string{"90021", "90191", "90524"} {
 		entry := c.byID[id]
-		portrait, _, err := image.Decode(bytes.NewReader(entry.data))
+		portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, entry.id)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -401,40 +401,58 @@ func TestAvatarTemplateCacheSurvivesFullScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	portrait, _, err := image.Decode(bytes.NewReader(c.byID["90511"].data))
+	portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, c.byID["90511"].id)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	img := image.NewRGBA(portrait.Bounds())
 	draw.Draw(img, img.Bounds(), portrait, portrait.Bounds().Min, draw.Src)
 	first := c.Match(img, img.Bounds(), 1)
-	cached := c.cachedEntries
-	if c.cacheWipes != 0 || cached == 0 {
-		t.Fatalf("first scan wiped=%d cached=%d", c.cacheWipes, cached)
+	cached := len(c.templates)
+	if c.evictions != 0 || cached == 0 {
+		t.Fatalf("first scan evicted=%d cached=%d", c.evictions, cached)
 	}
 	second := c.Match(img, img.Bounds(), 1)
-	if c.cacheWipes != 0 || c.cachedEntries < cached {
-		t.Fatalf("repeat scan wiped=%d cached=%d (was %d)", c.cacheWipes, c.cachedEntries, cached)
+	if c.evictions != 0 || len(c.templates) != cached {
+		t.Fatalf("repeat scan evicted=%d cached=%d (was %d)", c.evictions, len(c.templates), cached)
 	}
 	if first.ID != second.ID || first.Score != second.Score || first.RunnerUp != second.RunnerUp {
 		t.Fatalf("cached result changed: %+v vs %+v", first, second)
 	}
-	// Every entry at every factor bounds the largest possible single scan.
+	// A different scale (the other side's calibration) keeps both sets.
+	other := c.Match(img, img.Bounds(), .97)
+	both := len(c.templates)
+	if c.evictions != 0 || both <= cached {
+		t.Fatalf("second scale evicted=%d cached=%d (was %d)", c.evictions, both, cached)
+	}
+	if again := c.Match(img, img.Bounds(), 1); again.ID != first.ID || again.Score != first.Score || len(c.templates) != both {
+		t.Fatalf("alternating scales rebuilt or changed: %+v vs %+v, cached %d want %d", again, first, len(c.templates), both)
+	}
+	_ = other
+	// The cache is byte-capped: every entry at every factor of 1080p
+	// (about 70 MiB) cannot accumulate, and evicted templates are rebuilt
+	// identically.
+	reference := c.prepared(c.entries[0], 120, 120)
 	for _, e := range c.entries {
-		if e.gray == nil {
-			decoded, _, err := image.Decode(bytes.NewReader(e.data))
-			if err != nil {
-				t.Fatal(err)
-			}
-			e.gray, e.mask = avatarGrayMask(decoded)
-			e.mask = avatarFaceMask(e.gray.Bounds(), e.mask)
-		}
 		for _, f := range avatarFactorsFull {
-			w, h := avatarFactorSize(e, 1, f)
+			w, h := avatarFactorSize(e, 2, f)
 			c.prepared(e, w, h)
+			if c.templateBytes > avatarTemplateCacheBytes {
+				t.Fatalf("cache holds %d bytes > cap %d", c.templateBytes, avatarTemplateCacheBytes)
+			}
 		}
 	}
-	if c.cacheWipes != 0 {
-		t.Fatalf("every entry at every factor wiped the cache: %d (cached %d, cap %d)", c.cacheWipes, c.cachedEntries, c.templateCacheCap())
+	if c.evictions == 0 {
+		t.Fatal("byte cap never evicted")
+	}
+	if rebuilt := c.prepared(c.entries[0], 120, 120); rebuilt == reference || !reflect.DeepEqual(rebuilt, reference) {
+		t.Fatal("evicted template not rebuilt identically")
+	}
+	bytes := 0
+	for _, tmpl := range c.templates {
+		bytes += tmpl.bytes
+	}
+	if bytes != c.templateBytes {
+		t.Fatalf("accounted %d bytes, cached %d", c.templateBytes, bytes)
 	}
 }

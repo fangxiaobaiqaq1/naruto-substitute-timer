@@ -65,12 +65,24 @@ type scaledName struct {
 	requirePortrait bool
 }
 type Reader struct {
-	mu       sync.Mutex
-	source   []nameTemplate
+	mu     sync.Mutex
+	source []nameTemplate
+	// scales caches the prepared templates per HUD scale, most recent first.
+	// Both sides (and camp/duel) may use different scales on every frame,
+	// e.g. after a hand-drawn calibration; one shared slot was rebuilt for
+	// each of them every frame.
+	scales  []readerScale
+	avatars *avatarCatalog
+}
+
+// readerScale is the immutable prepared template set for one exact scale.
+type readerScale struct {
 	scale    float64
 	prepared []scaledName
-	avatars  *avatarCatalog
 }
+
+// readerScales bounds the scale cache: two sides times two profiles.
+const readerScales = 4
 
 func NewReader() *Reader { return NewReaderWithAvatars(AvatarOptions{}) }
 
@@ -132,7 +144,7 @@ func (r *Reader) AvatarEnabled() bool { return r != nil && r.avatars != nil }
 
 // Read uses scale relative to the supplied 960-wide HUD reference (15px
 // nominal slot pitch), never the arbitrary width of a tightly cropped image.
-// The cache holds only one scale and owns immutable templates.
+// The cache holds a few recent scales and owns immutable templates.
 func (r *Reader) Read(img *image.RGBA, roi image.Rectangle, scale float64) Readout {
 	return r.read(img, roi, scale).Readout
 }
@@ -162,29 +174,7 @@ func (r *Reader) readAnchored(img *image.RGBA, roi image.Rectangle, scale float6
 		return evidence{}
 	}
 	r.mu.Lock()
-	if r.prepared == nil || r.scale != scale {
-		r.prepared = nil
-		r.scale = scale
-		for _, t := range r.source {
-			w, h := int(math.Round(float64(t.gray.Bounds().Dx())*scale)), int(math.Round(float64(t.gray.Bounds().Dy())*scale))
-			if w < 8 || h < 8 {
-				continue
-			}
-			gray := match.ScaleGray(t.gray, w, h)
-			coarseScale := min(scale, .5)
-			small := match.ScaleGray(t.gray, int(math.Round(float64(t.gray.Bounds().Dx())*coarseScale)), int(math.Round(float64(t.gray.Bounds().Dy())*coarseScale)))
-			prepared := scaledName{readout: t.readout, ncc: match.PrepareNCC(gray, nil), size: gray.Bounds().Size(), coarse: match.PrepareNCC(small, nil), requirePortrait: t.requirePortrait}
-			if t.portrait != nil {
-				pw := int(math.Round(float64(t.portrait.Bounds().Dx()) * scale))
-				ph := int(math.Round(float64(t.portrait.Bounds().Dy()) * scale))
-				portrait := match.ScaleGray(t.portrait, pw, ph)
-				prepared.portrait = match.PrepareNCC(portrait, nil)
-				prepared.portraitSize = portrait.Bounds().Size()
-			}
-			r.prepared = append(r.prepared, prepared)
-		}
-	}
-	prepared := r.prepared
+	prepared := r.preparedAt(scale)
 	r.mu.Unlock()
 	// 百战鼬 requires two independent, current-frame signals: its complete title
 	// and its fixed right-HUD portrait. The portrait alone cannot move the bean
@@ -259,6 +249,44 @@ func (r *Reader) readAnchored(img *image.RGBA, roi image.Rectangle, scale float6
 		best.portrait, best.portraitSize = t.portrait, t.portraitSize
 	}
 	return best
+}
+
+// preparedAt returns the templates prepared for scale, building them on first
+// use (caller holds mu). Prepared sets depend only on the scale, so a cached
+// set is exactly what rebuilding would produce.
+func (r *Reader) preparedAt(scale float64) []scaledName {
+	for i, s := range r.scales {
+		if s.scale == scale {
+			copy(r.scales[1:i+1], r.scales[:i])
+			r.scales[0] = s
+			return s.prepared
+		}
+	}
+	var prepared []scaledName
+	for _, t := range r.source {
+		w, h := int(math.Round(float64(t.gray.Bounds().Dx())*scale)), int(math.Round(float64(t.gray.Bounds().Dy())*scale))
+		if w < 8 || h < 8 {
+			continue
+		}
+		gray := match.ScaleGray(t.gray, w, h)
+		coarseScale := min(scale, .5)
+		small := match.ScaleGray(t.gray, int(math.Round(float64(t.gray.Bounds().Dx())*coarseScale)), int(math.Round(float64(t.gray.Bounds().Dy())*coarseScale)))
+		p := scaledName{readout: t.readout, ncc: match.PrepareNCC(gray, nil), size: gray.Bounds().Size(), coarse: match.PrepareNCC(small, nil), requirePortrait: t.requirePortrait}
+		if t.portrait != nil {
+			pw := int(math.Round(float64(t.portrait.Bounds().Dx()) * scale))
+			ph := int(math.Round(float64(t.portrait.Bounds().Dy()) * scale))
+			portrait := match.ScaleGray(t.portrait, pw, ph)
+			p.portrait = match.PrepareNCC(portrait, nil)
+			p.portraitSize = portrait.Bounds().Size()
+		}
+		prepared = append(prepared, p)
+	}
+	if len(r.scales) < readerScales {
+		r.scales = append(r.scales, readerScale{})
+	}
+	copy(r.scales[1:], r.scales[:len(r.scales)-1])
+	r.scales[0] = readerScale{scale: scale, prepared: prepared}
+	return prepared
 }
 
 // ResolveEvidence decides identity from two independent CURRENT-frame sources.
