@@ -1,4 +1,8 @@
 // nt/parallel.h 实现（architect 所有）：常驻小线程池，调用线程参与执行。
+//
+// 嵌套：池线程里发起的 ParallelFor 也把任务放进队列，空闲的池线程可以帮忙；发起者
+// 自己领取下标直到领完，然后只等待别人手里正在执行的下标——等待中的线程从不执行
+// 其它任务，正在执行的线程也从不等待一个被等待线程持有的下标，因此不会死锁。
 #include "nt/parallel.h"
 
 #include <algorithm>
@@ -16,24 +20,23 @@ namespace nt {
 namespace {
 
 std::atomic<bool> g_enabled{true};
-thread_local bool t_inPool = false;
 
 struct Job {
     int n = 0;
-    const std::function<void(int)>* fn = nullptr;
+    IndexFn fn;
     std::atomic<int> next{0};
     std::atomic<int> done{0};
     std::mutex mu;
     std::condition_variable cv;
     std::exception_ptr error;
 
-    // 领取并执行下标，直到领完。返回本线程是否执行了最后一个。
+    // 领取并执行下标，直到领完。
     void run() {
         for (;;) {
             int i = next.fetch_add(1, std::memory_order_relaxed);
             if (i >= n) return;
             try {
-                (*fn)(i);
+                fn(i);
             } catch (...) {
                 std::lock_guard<std::mutex> lock(mu);
                 if (!error) error = std::current_exception();
@@ -74,7 +77,6 @@ private:
     }
 
     void loop() {
-        t_inPool = true;
         for (;;) {
             std::shared_ptr<Job> job;
             {
@@ -83,7 +85,8 @@ private:
                 job = std::move(queue_.front());
                 queue_.pop_front();
             }
-            job->run();
+            // 已被领完的任务（发起者自己做完了）直接跳过，不占用线程。
+            if (job->next.load(std::memory_order_relaxed) < job->n) job->run();
         }
     }
 
@@ -98,9 +101,9 @@ private:
 void SetParallelEnabled(bool on) { g_enabled.store(on, std::memory_order_relaxed); }
 bool ParallelEnabled() { return g_enabled.load(std::memory_order_relaxed); }
 
-void ParallelFor(int n, const std::function<void(int)>& fn) {
+void ParallelForRef(int n, IndexFn fn) {
     if (n <= 0) return;
-    if (n == 1 || t_inPool || !ParallelEnabled()) {
+    if (n == 1 || !ParallelEnabled()) {
         for (int i = 0; i < n; ++i) fn(i);
         return;
     }
@@ -112,7 +115,7 @@ void ParallelFor(int n, const std::function<void(int)>& fn) {
     }
     auto job = std::make_shared<Job>();
     job->n = n;
-    job->fn = &fn;
+    job->fn = fn;
     pool.submit(job, helpers);
     job->run();  // 调用线程也是 worker
     {
@@ -120,13 +123,6 @@ void ParallelFor(int n, const std::function<void(int)>& fn) {
         job->cv.wait(lock, [&] { return job->done.load(std::memory_order_acquire) == n; });
     }
     if (job->error) std::rethrow_exception(job->error);
-}
-
-void ParallelInvoke(const std::function<void()>& a, const std::function<void()>& b) {
-    ParallelFor(2, [&](int i) {
-        if (i == 0) a();
-        else b();
-    });
 }
 
 }  // namespace nt
