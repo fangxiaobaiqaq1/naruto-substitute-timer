@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
 	"narutotimer/internal/ninja"
@@ -24,12 +25,20 @@ func (e *Engine) specialPositionsFor(profile string, img *image.RGBA, positions 
 }
 
 func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea, at time.Time) ([]detect.BeadPosition, [2]ninja.Readout) {
+	rows, identified, _ := e.specialRowsAt(profile, img, positions, area, at)
+	return rows, identified
+}
+
+// specialRowsAt also returns each side's name/portrait regions and portrait
+// box (frame geometry).
+func (e *Engine) specialRowsAt(profile string, img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea, at time.Time) ([]detect.BeadPosition, [2]ninja.Readout, [2]engine.SideGeometry) {
 	profileIndex := 0
 	if profile == "duel" {
 		profileIndex = 1
 	}
 	var identified [2]ninja.Readout
 	var rows [2][]detect.BeadPosition
+	var geometry [2]engine.SideGeometry
 	// Each side touches only its own trackers and its own result slots; the
 	// shared Reader and catalog are safe for concurrent tracker calls.
 	side := func(index int, name string) {
@@ -58,6 +67,7 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			} else {
 				identified[index] = tracker.ReadWithAvatar(e.names, avatar, img, nameROI, avatarROI, scale, at)
 			}
+			geometry[index] = regionGeometry(img.Bounds(), nameROI, avatarROI, avatarScale, index == 0)
 			// Only a recognized six-slot NAME permits usable slots five and six.
 			// A brief label gap retains six UNKNOWN placeholders, never extra votes.
 			if len(row) == 4 && identified[index].Slots == 6 {
@@ -109,7 +119,46 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 		side(0, "left")
 		side(1, "right")
 	}
-	return append(rows[0], rows[1]...), identified
+	return append(rows[0], rows[1]...), identified, geometry
+}
+
+// regionGeometry is a side's search regions and the portrait box that
+// reproduces its window.
+func regionGeometry(frame, nameROI, avatarROI image.Rectangle, avatarScale float64, left bool) engine.SideGeometry {
+	g := engine.SideGeometry{NameROI: nameROI, AvatarROI: avatarROI}
+	if !avatarROI.Empty() && avatarScale > 0 && !frame.Empty() {
+		x, y, w, h := ninja.AvatarBoxFromRegion(avatarROI, avatarScale, left)
+		g.AvatarBox = fraction(x, y, w, h, frame)
+	}
+	return g
+}
+
+// fraction is a pixel box as fractions of frame.
+func fraction(x, y, w, h float64, frame image.Rectangle) config.NormalizedRect {
+	fw, fh := float64(frame.Dx()), float64(frame.Dy())
+	return config.NormalizedRect{X: (x - float64(frame.Min.X)) / fw, Y: (y - float64(frame.Min.Y)) / fh, Width: w / fw, Height: h / fh}
+}
+
+// completeGeometry adds the sampled centres and, on a configured layout, the
+// default bead boxes of the layout rows (before identity offsets).
+func completeGeometry(sides [2]engine.SideGeometry, layout *engine.ConfiguredLayout, profile string, img *image.RGBA, area detect.ContentArea, positions []detect.BeadPosition, beads []engine.BeadInfo) [2]engine.SideGeometry {
+	for i, name := range [2]string{"left", "right"} {
+		if layout != nil {
+			var row []detect.BeadPosition
+			for _, p := range positions {
+				if p.Side == name {
+					row = append(row, p)
+				}
+			}
+			sides[i].BeadBox, _ = layout.DefaultBeadBox(profile, row, img.Bounds(), area)
+		}
+		for _, b := range beads {
+			if len(b.Label) > 0 && b.Label[0] == "LR"[i] {
+				sides[i].Beads = append(sides[i].Beads, image.Pt(b.X, b.Y))
+			}
+		}
+	}
+	return sides
 }
 
 func applyNames(res *engine.Result, readouts [2]ninja.Readout) {

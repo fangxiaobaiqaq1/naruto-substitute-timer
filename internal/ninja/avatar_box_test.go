@@ -38,6 +38,48 @@ func TestAvatarRegionFromBoxInvertsAutomaticWindow(t *testing.T) {
 	}
 }
 
+// docs/区域校准.md 每帧几何: the default avatar box of a window converts back
+// to exactly that window and scale, also from Android's float32 storage.
+// Only where both vertical offsets round a half-pixel tie up (scale k+1/4 or
+// k+3/4 with 38·s, 62·s ties) is the 100s-high window 1px taller than any
+// box can give: there the top-left corner stays exact.
+func TestAvatarBoxFromRegionRoundTrip(t *testing.T) {
+	f32 := func(v float64) float64 { return float64(float32(v)) }
+	scales := []float64{1280.0 / 960, 1.25, 1.5, 1.75, 2, 2.4875, 3}
+	for s := .5; s < 4; s += .0137 {
+		scales = append(scales, s)
+	}
+	tall := 0
+	for _, scale := range scales {
+		for _, first := range []image.Point{{155, 61}, {402, 125}, {2041, 250}, {3001, 20}} {
+			for _, left := range []bool{true, false} {
+				window := AvatarRegion(first, scale, left)
+				x, y, w, h := AvatarBoxFromRegion(window, scale, left)
+				if w != h || math.Abs(w-avatarBoxSide*scale) > 1e-9 {
+					t.Fatalf("scale=%v: box %vx%v", scale, w, h)
+				}
+				for _, stored := range [][4]float64{{x, y, w, h}, {f32(x), f32(y), f32(w), f32(h)}} {
+					got, gotScale := AvatarRegionFromBox(stored[0], stored[1], stored[2], stored[3], left)
+					if math.Abs(gotScale-scale) > 1e-6*scale {
+						t.Fatalf("scale=%v left=%v: scale %v", scale, left, gotScale)
+					}
+					if got == window {
+						continue
+					}
+					quarter := math.Mod(scale*4, 2) == 1
+					if !quarter || got.Min != window.Min || got.Max.X != window.Max.X || got.Max.Y != window.Max.Y-1 {
+						t.Fatalf("scale=%v first=%v left=%v: %v, want %v", scale, first, left, got, window)
+					}
+					tall++
+				}
+			}
+		}
+	}
+	if tall != 2*2*4*2 {
+		t.Fatalf("%d tie windows, want those of scales 1.25 and 1.75", tall)
+	}
+}
+
 // Visible portrait boxes measured by hand on native captures (private
 // screenshots, skipped when absent): the converted window/scale stays within
 // 3 reference units / 6% of the automatic ones and identifies the same

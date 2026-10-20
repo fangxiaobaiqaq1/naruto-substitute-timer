@@ -3,7 +3,9 @@
 // Contract: include/nt/engine.h — see android/ARCHITECTURE.md.
 #include "nt/engine.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace nt::engine {
 
@@ -36,6 +38,22 @@ void calibrate(std::vector<detect::BeadPosition>& positions, const std::array<de
             p.Y = m.Y;
         }
     }
+}
+
+// settleMargin (px) keeps a default bead box clear of rounding boundaries,
+// above the float32 error of Android's stored calibration.
+constexpr double settleMargin = 1e-3;
+
+// settle keeps v settleMargin inside [lo, hi), the range rounding every
+// centre back. If the automatic centres round half-pixel ties inconsistently
+// there is none: then bead 0 (n, the anchor of the name and portrait
+// windows) stays exact and another centre may differ by 1px.
+double settle(double v, double lo, double hi, double n) {
+    if (hi - lo <= 2 * settleMargin) {
+        lo = n - .5;
+        hi = n + .5;
+    }
+    return std::min(std::max(v, lo + settleMargin), hi - settleMargin);
 }
 
 }  // namespace
@@ -154,6 +172,55 @@ std::array<detect::SideCalibrationPtr, 2> ConfiguredLayout::sideCalibrations(con
         if (c->Beads() || c->Portrait()) out[i] = std::move(c);
     }
     return out;
+}
+
+bool ConfiguredLayout::DefaultBeadBox(const std::string& name, const std::vector<detect::BeadPosition>& row,
+                                      const Rect& frame, const detect::ContentArea& ca,
+                                      config::NormalizedRect& out) const {
+    out = config::NormalizedRect{};
+    const auto it = profiles_.find(name);
+    if (it == profiles_.end() || row.size() < 4 || frame.Empty()) return false;
+    const detect::BeadPosition& first = row[0];
+    const bool right = first.Side == "right";
+    const auto& ref = right ? it->second.Right.NominalCenters : it->second.Left.NominalCenters;
+    // Unrounded bead 0 by the row's own mapping.
+    double s = 0, x = 0, y = 0;
+    if (detect::CalBeads(first.Cal)) {
+        const detect::SideCalibration& c = *first.Cal;
+        s = c.Scale;
+        x = c.X0 + c.Scale * (first.LX - c.RefX);
+        y = c.Y0 + c.Scale * (first.LY - c.RefY);
+    } else {
+        s = ca.HUDScale(detect::HUDReferenceWidth, detect::HUDReferenceHeight);
+        x = static_cast<double>(ca.X) + first.LX * s;
+        if (right) x = static_cast<double>(ca.X + ca.W) - (detect::HUDReferenceWidth - first.LX) * s;
+        y = static_cast<double>(ca.Y) + first.LY * s;
+        // Plus the whole-pixel HP-bar correction.
+        x += static_cast<double>(
+            first.X -
+            ca.MapHUDPixel(first.LX, first.LY, right, detect::HUDReferenceWidth, detect::HUDReferenceHeight).X);
+    }
+    if (ref.size() < 4 || !(s > 0) || ref[3].X == ref[0].X) return false;
+    // Every centre must round back, also at half-pixel ties.
+    constexpr double inf = std::numeric_limits<double>::infinity();
+    double xlo = -inf, xhi = inf, ylo = -inf, yhi = inf;
+    for (const detect::BeadPosition& b : row) {
+        const double dx = s * (b.LX - first.LX), dy = s * (b.LY - first.LY);
+        xlo = std::max(xlo, static_cast<double>(b.X) - .5 - dx);
+        xhi = std::min(xhi, static_cast<double>(b.X) + .5 - dx);
+        ylo = std::max(ylo, static_cast<double>(b.Y) - .5 - dy);
+        yhi = std::min(yhi, static_cast<double>(b.Y) + .5 - dy);
+    }
+    x = settle(x, xlo, xhi, static_cast<double>(first.X));
+    y = settle(y, ylo, yhi, static_cast<double>(first.Y));
+    // Same pitch_P as sideCalibrations.
+    const double pitch = s * (std::fabs(ref[3].X - ref[0].X) * detect::HUDReferenceWidth / 3);
+    double left = x - pitch / 2;
+    if (right) left = x + pitch / 2 - 4 * pitch;
+    const double w = frame.Dx(), h = frame.Dy();
+    out = config::NormalizedRect{(left - static_cast<double>(frame.Min.X)) / w,
+                                 (y - pitch / 2 - static_cast<double>(frame.Min.Y)) / h, 4 * pitch / w, pitch / h};
+    return true;
 }
 
 std::vector<detect::BeadPosition> ConfiguredLayout::PositionsIn(const std::string& name,

@@ -30,11 +30,12 @@ public:
     // AnalyzeAt uses acquisition time for retry scheduling.
     engine::Result AnalyzeAt(const RGBA* img, TimeNs at) override;
 
-    // special.go
+    // special.go (geometry: Go specialRowsAt's per-side regions, may be null)
     std::vector<detect::BeadPosition> specialPositionsForAt(const std::string& profile, const RGBA* img,
                                                             const std::vector<detect::BeadPosition>& positions,
                                                             const detect::ContentArea& area, TimeNs at,
-                                                            std::array<ninja::Readout, 2>& identified);
+                                                            std::array<ninja::Readout, 2>& identified,
+                                                            std::array<engine::SideGeometry, 2>* geometry = nullptr);
     std::vector<engine::BeadInfo> stickLayout(const std::vector<engine::BeadInfo>& camp,
                                               const std::vector<engine::BeadInfo>& duel,
                                               const std::vector<engine::BeadInfo>& chosen, const std::string& name,

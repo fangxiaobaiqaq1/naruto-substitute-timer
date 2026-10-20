@@ -242,6 +242,9 @@ Rect AvatarRegion(Point first, double scale, bool left);
 // AvatarRegionFromBox converts a calibrated portrait box (frame pixels) into
 // the AvatarRegion window; outScale receives the 960-wide scale (Go returns both).
 Rect AvatarRegionFromBox(double x, double y, double w, double h, bool left, double& outScale);
+// AvatarBoxFromRegion inverts AvatarRegionFromBox: the square portrait box
+// (frame pixels) giving window and scale back (Go returns x, y, w, h).
+void AvatarBoxFromRegion(const Rect& window, double scale, bool left, double& x, double& y, double& w, double& h);
 
 // reader.go 内部 helper（跨 .cpp 共享，故在此声明）。
 scaledName scaledNameForEvidence(const std::vector<scaledName>& prepared, const evidence& found);

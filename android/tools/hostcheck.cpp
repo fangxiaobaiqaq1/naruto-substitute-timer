@@ -195,11 +195,32 @@ std::string beadsString(const std::vector<nt::engine::BeadInfo>& beads) {
     return s;
 }
 
+// geometryString formats Result.Geometry exactly like gocheck.
+std::string geometryString(const std::array<nt::engine::SideGeometry, 2>& sides) {
+    std::string s;
+    for (int i = 0; i < 2; ++i) {
+        const nt::engine::SideGeometry& g = sides[i];
+        std::string beads;
+        for (const nt::Point& p : g.Beads) beads += (beads.empty() ? "" : ";") + std::to_string(p.X) + "," + std::to_string(p.Y);
+        const nt::Rect &n = g.NameROI, &a = g.AvatarROI;
+        const nt::config::NormalizedRect &b = g.BeadBox, &v = g.AvatarBox;
+        char buf[512];
+        std::snprintf(buf, sizeof buf,
+                      "%s%c beads=%s name=%d,%d,%d,%d avatar=%d,%d,%d,%d beadBox=%.9f,%.9f,%.9f,%.9f "
+                      "avatarBox=%.9f,%.9f,%.9f,%.9f",
+                      i ? " | " : "", "LR"[i], beads.c_str(), n.Min.X, n.Min.Y, n.Max.X, n.Max.Y, a.Min.X, a.Min.Y,
+                      a.Max.X, a.Max.Y, b.X, b.Y, b.Width, b.Height, v.X, v.Y, v.Width, v.Height);
+        s += buf;
+    }
+    return s;
+}
+
 void printResult(const std::string& name, const nt::engine::Result& r) {
-    std::printf("%s\tfight=%d unc=%d scene=%s gate=%.4f profile=%s open=%d slots=%d/%d L=%s R=%s side=%s opp=%s name=%s\n\tbeads: %s\n",
+    std::printf("%s\tfight=%d unc=%d scene=%s gate=%.4f profile=%s open=%d slots=%d/%d L=%s R=%s side=%s opp=%s name=%s\n\tbeads: %s\n\tgeometry: %s\n",
                 name.c_str(), r.Fighting, r.Uncertain, r.Scene.c_str(), r.GateScore, r.LayoutProfile.c_str(),
                 r.RoundOpening, r.LeftSlots, r.RightSlots, r.LeftNinja.c_str(), r.RightNinja.c_str(),
-                r.PlayerSide.c_str(), r.OppName.c_str(), r.Name.c_str(), beadsString(r.Beads).c_str());
+                r.PlayerSide.c_str(), r.OppName.c_str(), r.Name.c_str(), beadsString(r.Beads).c_str(),
+                geometryString(r.Geometry).c_str());
 }
 
 // parseCalibration reads "PROFILE:LB/RB/LA/RA" (gocheck uses the same form).

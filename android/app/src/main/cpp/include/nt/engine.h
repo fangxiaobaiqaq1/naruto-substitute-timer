@@ -105,6 +105,12 @@ public:
                                                      const detect::ContentArea& ca) const;
     // PositionsIn is the automatic mapping only; calibrated sides need the frame.
     std::vector<detect::BeadPosition> PositionsIn(const std::string& name, const detect::ContentArea& ca) const;
+    // DefaultBeadBox is the bead box (fractions of frame) that, saved as this
+    // profile's calibration, reproduces row and its scale (docs/区域校准.md 每帧
+    // 几何). row is one side of PositionsInImage, before identity offsets.
+    // false (out zero) without four centres.
+    bool DefaultBeadBox(const std::string& name, const std::vector<detect::BeadPosition>& row, const Rect& frame,
+                        const detect::ContentArea& ca, config::NormalizedRect& out) const;
 
 private:
     // Each side's calibrated geometry for one frame and profile (null = automatic).

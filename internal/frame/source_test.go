@@ -300,6 +300,35 @@ func TestIdenticalCapturesSkipAnalysisAndChangedPixelsRunItAgain(t *testing.T) {
 	}
 }
 
+type geometryEngine struct{ countingEngine }
+
+func (e *geometryEngine) Analyze(img *image.RGBA) engine.Result {
+	res := e.countingEngine.Analyze(img)
+	res.Geometry[1] = engine.SideGeometry{Beads: []image.Point{{300, 40}, {280, 40}}, NameROI: image.Rect(1, 2, 3, 4), AvatarROI: image.Rect(5, -6, 7, 8),
+		BeadBox: config.NormalizedRect{X: .7, Y: .1, Width: .2, Height: .05}, AvatarBox: config.NormalizedRect{X: .9, Y: .01, Width: .05, Height: .09}}
+	return res
+}
+
+// A frame reused from the duplicate cache reports the geometry of the
+// analysis it reuses, without sharing its slices.
+func TestReusedFrameCarriesGeometry(t *testing.T) {
+	eng := &geometryEngine{}
+	img := image.NewRGBA(image.Rect(0, 0, 400, 250))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{90, 120, 140, 255}), image.Point{}, draw.Src)
+	var d dedupedAnalysis
+	at := time.Unix(1700000000, 0)
+	first := d.analyze(img, eng, detect.ModeStretch, at, at, "sdk")
+	second := d.analyze(img, eng, detect.ModeStretch, at.Add(16*time.Millisecond), at.Add(16*time.Millisecond), "sdk")
+	want := eng.Analyze(img).Geometry
+	if eng.calls != 2 || fmt.Sprint(first.Geometry) != fmt.Sprint(want) || fmt.Sprint(second.Geometry) != fmt.Sprint(want) || first.Geometry[0].Beads != nil {
+		t.Fatalf("geometry %+v / %+v, want %+v (calls %d)", first.Geometry, second.Geometry, want, eng.calls)
+	}
+	second.Geometry[1].Beads[0].X = 0
+	if first.Geometry[1].Beads[0].X != 300 {
+		t.Fatal("reused frames must not share geometry slices")
+	}
+}
+
 func TestFrameFingerprintIgnoresPaddingButNotGeometryOrSource(t *testing.T) {
 	base := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	padded := &image.RGBA{Pix: make([]byte, 20), Stride: 12, Rect: base.Rect}

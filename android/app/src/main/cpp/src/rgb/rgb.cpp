@@ -80,15 +80,20 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
         }
         return layout_->Positions(w, h);
     };
-    // sample writes only its own readout and its profile's trackers, so camp
-    // and duel can run concurrently. Non-profiled layouts leave it zero.
+    // sample writes only its own readout, geometry and its profile's trackers,
+    // so camp and duel can run concurrently. Non-profiled layouts leave them zero.
     auto sample = [&](const std::string& name, const std::vector<detect::BeadPosition>& pos,
-                      std::array<ninja::Readout, 2>& readout) -> std::vector<BeadInfo> {
+                      std::array<ninja::Readout, 2>& readout,
+                      std::array<engine::SideGeometry, 2>& geometry) -> std::vector<BeadInfo> {
         if (profiled != nullptr) {
             std::array<ninja::Readout, 2> identified{};
-            std::vector<detect::BeadPosition> special = specialPositionsForAt(name, img, pos, area, at, identified);
+            std::array<engine::SideGeometry, 2> sides{};
+            std::vector<detect::BeadPosition> special =
+                specialPositionsForAt(name, img, pos, area, at, identified, &sides);
             readout = identified;
-            return sampleCalibratedSpecial(img, special, area, vision, identified);
+            std::vector<BeadInfo> beads = sampleCalibratedSpecial(img, special, area, vision, identified);
+            geometry = completeGeometry(std::move(sides), calibrated, name, img, area, pos, beads);
+            return beads;
         }
         return sampleLayout(img, pos);
     };
@@ -102,7 +107,7 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
         res.Name = "rgb-" + prefer;
         res.LayoutProfile = prefer;
         std::array<ninja::Readout, 2> readout{};
-        res.Beads = sample(prefer, positions(prefer), readout);
+        res.Beads = sample(prefer, positions(prefer), readout, res.Geometry);
         applyNames(res, readout);
         locked_ = prefer;
         return res;
@@ -111,10 +116,11 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
     const std::vector<detect::BeadPosition> campPositions = positions("camp"), duelPositions = positions("duel");
     std::vector<BeadInfo> camp, duel;
     std::array<ninja::Readout, 2> campReadout{}, duelReadout{};
+    std::array<engine::SideGeometry, 2> campGeometry{}, duelGeometry{};
     // Go: wg.Go(func() { duel = sample("duel", ...) }); camp = sample("camp", ...); wg.Wait()
     // 串行时（SetParallelEnabled(false)）按 camp、duel 的 Go 顺序执行。
-    ParallelInvoke([&] { camp = sample("camp", campPositions, campReadout); },
-                   [&] { duel = sample("duel", duelPositions, duelReadout); });
+    ParallelInvoke([&] { camp = sample("camp", campPositions, campReadout, campGeometry); },
+                   [&] { duel = sample("duel", duelPositions, duelReadout, duelGeometry); });
     std::string name;
     const std::vector<BeadInfo>& picked = pickLayout(camp, duel, name);
     std::string stuck;
@@ -124,6 +130,7 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
     res.LayoutProfile = name;
     res.Beads = std::move(chosen);
     const std::array<ninja::Readout, 2>& readout = name == "duel" ? duelReadout : campReadout;
+    res.Geometry = name == "duel" ? std::move(duelGeometry) : std::move(campGeometry);
     applyNames(res, readout);
     return res;
 }

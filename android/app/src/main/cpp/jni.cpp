@@ -6,7 +6,7 @@
 //    Pipeline::Analyze → 编码进调用方预分配的 direct ByteBuffer（格式见 ARCHITECTURE.md §JNI）。
 //  * 捕获所有 C++ 异常：JNI 边界之外绝不抛出。
 //
-// 线程：所有 nativeAnalyze* / nativeFinishAssets / nativeSetPlayerNames / nativeSetCalibration 共用一把全局锁，
+// 线程：所有 nativeAnalyze* / nativeFinishAssets / nativeSetPlayerNames / nativeSetCalibration / nativeLastGeometry 共用一把全局锁，
 // 识别核心因此只会在一个线程上运行（Go 里的 sync.Mutex 在 C++ 中可省略）。
 // 方法通过 RegisterNatives 注册，库本身 -fvisibility=hidden，只导出 JNI_OnLoad。
 
@@ -15,6 +15,7 @@
 #include <android/log.h>
 #include <jni.h>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -174,12 +175,22 @@ jint encodeFrame(const nt::frame::Frame& f, uint8_t* out, size_t cap) {
 // ---------------------------------------------------------------------------
 // 全局状态
 // ---------------------------------------------------------------------------
-std::mutex g_mu;  // 保护 g_pipeline / g_playerNames / g_calibration / g_lastError
+std::mutex g_mu;  // 保护 g_pipeline / g_playerNames / g_calibration / g_lastError / g_lastGeometry
 std::unique_ptr<nt::frame::Pipeline> g_pipeline;
 std::vector<std::string> g_playerNames;
 // 区域校准（docs/区域校准.md）：nullopt = 全部自动。与 g_playerNames 一样跨 nativeInit 保留。
 std::optional<nt::config::RegionCalibration> g_calibration;
 std::string g_lastError;
+
+// 最近一次分析的帧的几何（docs/区域校准.md 每帧几何），整帧一起替换；换引擎时清空。
+struct FrameGeometry {
+    bool valid = false;
+    int width = 0, height = 0;
+    std::string profile;
+    uint64_t sequence = 0;
+    std::array<nt::engine::SideGeometry, 2> sides;
+};
+FrameGeometry g_lastGeometry;
 
 void setError(const std::string& e) {
     g_lastError = e;
@@ -268,6 +279,14 @@ jint analyzeLocked(const nt::RGBA& img, jlong capturedAtNanos, jint method, uint
     }
     nt::TimeNs at = capturedAtNanos > 0 ? static_cast<nt::TimeNs>(capturedAtNanos) : nt::NowNs();
     nt::frame::Frame f = g_pipeline->Analyze(&img, at, at, methodName(method));
+    if (!f.HasErr) {
+        g_lastGeometry.valid = true;
+        g_lastGeometry.width = f.Width;
+        g_lastGeometry.height = f.Height;
+        g_lastGeometry.profile = f.Res.LayoutProfile;
+        g_lastGeometry.sequence = f.Sequence;
+        g_lastGeometry.sides = f.Res.Geometry;
+    }
     return encodeFrame(f, out, cap);
 }
 
@@ -288,6 +307,7 @@ jboolean nativeInit(JNIEnv*, jclass) {
     try {
         std::lock_guard<std::mutex> lock(g_mu);
         g_pipeline.reset();
+        g_lastGeometry = FrameGeometry{};
         g_lastError.clear();
         nt::AssetStore::Instance().Clear();
         return JNI_TRUE;
@@ -352,6 +372,7 @@ jboolean nativeFinishAssets(JNIEnv*, jclass) {
             return JNI_FALSE;
         }
         g_pipeline = std::move(p);
+        g_lastGeometry = FrameGeometry{};
         g_lastError.clear();
         NT_LOGI("pipeline ready");
         return JNI_TRUE;
@@ -431,6 +452,7 @@ jboolean nativeSetCalibration(JNIEnv* env, jclass, jstring jprofile, jfloatArray
             setError("calibration rebuild failed: " + err);
             return JNI_FALSE;
         }
+        g_lastGeometry = FrameGeometry{};  // 旧校准下的几何
         NT_LOGI("pipeline rebuilt for region calibration");
         return JNI_TRUE;
     } catch (const std::exception& e) {
@@ -580,8 +602,52 @@ void nativeRelease(JNIEnv*, jclass) {
     try {
         std::lock_guard<std::mutex> lock(g_mu);
         g_pipeline.reset();
+        g_lastGeometry = FrameGeometry{};
     } catch (...) {
     }
+}
+
+// 最近一次分析的帧的几何（成功分析或去重复用的帧；没有则 null）。扁平布局（float，改动必须同步
+// NativeCore.kt 与 ARCHITECTURE.md §4）：
+//   [0] width [1] height（像素）[2] profile（0 无，1 camp，2 duel）
+//   [3] Sequence & 0xFFFFFF [4] Sequence >> 24（= 该帧 AnalysisResult.sequence）
+//   之后左、右各一段：n，n 组豆心 x,y；nameRoi x,y,w,h；avatarRoi x,y,w,h（像素，不裁剪，空 = 0）；
+//   beadBox x,y,w,h；avatarBox x,y,w,h（整帧比例，w = 0 = 没有）。
+jfloatArray nativeLastGeometry(JNIEnv* env, jclass) {
+    try {
+        FrameGeometry g;
+        {
+            std::lock_guard<std::mutex> lock(g_mu);
+            if (!g_lastGeometry.valid) return nullptr;
+            g = g_lastGeometry;
+        }
+        std::vector<jfloat> v = {static_cast<jfloat>(g.width), static_cast<jfloat>(g.height),
+                                 static_cast<jfloat>(g.profile == "camp" ? 1 : g.profile == "duel" ? 2 : 0),
+                                 static_cast<jfloat>(g.sequence & 0xFFFFFF), static_cast<jfloat>(g.sequence >> 24)};
+        for (const nt::engine::SideGeometry& s : g.sides) {
+            v.push_back(static_cast<jfloat>(s.Beads.size()));
+            for (const nt::Point& p : s.Beads) {
+                v.push_back(static_cast<jfloat>(p.X));
+                v.push_back(static_cast<jfloat>(p.Y));
+            }
+            for (const nt::Rect& r : {s.NameROI, s.AvatarROI}) {
+                for (int c : {r.Min.X, r.Min.Y, r.Dx(), r.Dy()}) v.push_back(static_cast<jfloat>(c));
+            }
+            for (const nt::config::NormalizedRect& r : {s.BeadBox, s.AvatarBox}) {
+                for (double c : {r.X, r.Y, r.Width, r.Height}) v.push_back(static_cast<jfloat>(c));
+            }
+        }
+        jfloatArray arr = env->NewFloatArray(static_cast<jsize>(v.size()));
+        if (arr != nullptr) env->SetFloatArrayRegion(arr, 0, static_cast<jsize>(v.size()), v.data());
+        return arr;
+    } catch (const std::exception& e) {
+        std::lock_guard<std::mutex> lock(g_mu);
+        setError(std::string("nativeLastGeometry: ") + e.what());
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(g_mu);
+        setError("nativeLastGeometry: unknown exception");
+    }
+    return nullptr;
 }
 
 jint nativeResultHeaderBytes(JNIEnv*, jclass) { return kHeaderBytes; }
@@ -607,6 +673,7 @@ const JNINativeMethod kMethods[] = {
     {const_cast<char*>("nativeTakeOppCrop"), const_cast<char*>("()[I"), reinterpret_cast<void*>(nativeTakeOppCrop)},
     {const_cast<char*>("nativeResetDelivery"), const_cast<char*>("()V"), reinterpret_cast<void*>(nativeResetDelivery)},
     {const_cast<char*>("nativeRelease"), const_cast<char*>("()V"), reinterpret_cast<void*>(nativeRelease)},
+    {const_cast<char*>("nativeLastGeometry"), const_cast<char*>("()[F"), reinterpret_cast<void*>(nativeLastGeometry)},
     {const_cast<char*>("nativeResultHeaderBytes"), const_cast<char*>("()I"),
      reinterpret_cast<void*>(nativeResultHeaderBytes)},
 };

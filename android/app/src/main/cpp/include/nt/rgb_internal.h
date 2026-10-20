@@ -56,6 +56,15 @@ BeadState specialPixel(ninja::Palette palette, int r, int g, int b);
 bool specialWash(const RGBA* img, const BeadPosition& p, ninja::Palette palette, int guard);
 bool redLowerBody(const RGBA* img, const BeadPosition& p, int w, int h);
 bool isolatedRedHalo(const RGBA* img, const BeadPosition& p, int guard);
+// Frame geometry (docs/区域校准.md 每帧几何).
+engine::SideGeometry regionGeometry(const Rect& frame, const Rect& nameROI, const Rect& avatarROI, double avatarScale,
+                                    bool left);
+config::NormalizedRect fraction(double x, double y, double w, double h, const Rect& frame);
+std::array<engine::SideGeometry, 2> completeGeometry(std::array<engine::SideGeometry, 2> sides,
+                                                     const engine::ConfiguredLayout* layout, const std::string& profile,
+                                                     const RGBA* img, const detect::ContentArea& area,
+                                                     const std::vector<BeadPosition>& positions,
+                                                     const std::vector<BeadInfo>& beads);
 
 // blue_body.go / blue_glint.go
 bool blueBodyVisible(const RGBA* img, const BeadPosition& p, int w, int h);
