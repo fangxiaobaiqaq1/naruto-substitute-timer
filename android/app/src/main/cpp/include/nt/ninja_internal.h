@@ -81,19 +81,26 @@ public:
     std::unordered_map<std::string, avatarEntry*> byID;
     // Scaled-template cache (caller holds mu): keyed by (entry, w, h) instead of
     // one global scale, so calibrated sides with different portrait scales (or
-    // camp/duel) never wipe each other's templates. Bounded by bytes, least
-    // recently used first; templates of the scan in progress are the newest.
+    // camp/duel) never wipe each other's templates. Templates unused for
+    // templateIdleCalls matchEntries calls (an opponent seen rounds ago) are
+    // dropped; templateCacheCap bytes bound the rest, least recently used first
+    // (the scan in progress holds the newest). Typical: ~1-2 MiB at 1080p-1600p.
     struct cachedTemplate {
         PreparedPtr prepared;
         size_t bytes = 0;
-        uint64_t used = 0;
+        uint64_t used = 0;   // templateClock at last use (LRU order)
+        uint64_t epoch = 0;  // templateEpoch at last use (idle eviction)
     };
     std::unordered_map<avatarTemplateKey, cachedTemplate, avatarTemplateKeyHash> templates;
     size_t templateBytes = 0;
-    size_t templateCacheCap = static_cast<size_t>(16) << 20;
+    size_t templateCacheCap = static_cast<size_t>(8) << 20;
     uint64_t templateClock = 0;
-    // templateEvictions counts LRU evictions (diagnostics/tests).
+    uint64_t templateEpoch = 0;  // matchEntries calls
+    static constexpr uint64_t templateIdleCalls = 2048;
+    // templateEvictions counts evicted templates (diagnostics/tests).
     int templateEvictions = 0;
+    // beginScan advances the epoch and drops idle templates (caller holds mu).
+    void beginScan();
     // 注意：Match / matchEntries 可能被 rgb 的两侧并行体同时调用，因此不使用成员级
     // 临时缓冲（Go 每次调用都新分配）。
     std::mutex mu;  // Go c.mu

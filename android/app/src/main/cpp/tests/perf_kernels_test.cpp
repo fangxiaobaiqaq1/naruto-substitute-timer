@@ -379,6 +379,20 @@ bool sameGray(const nt::Gray& a, const nt::Gray& b) {
 }
 
 void testScaleAndGray(std::mt19937& rng) {
+    // ToGray's division-free luma must equal (299r + 587g + 114b + 500) / 1000
+    // for every reachable numerator.
+    for (uint32_t x = 500; x <= 255500; ++x) {
+        if ((((x >> 3) * 33555u) >> 22) != x / 1000u) check(false, "lumaDiv1000 " + std::to_string(x));
+    }
+    for (int r = 0; r < 256; r += 5)
+        for (int g = 0; g < 256; g += 3)
+            for (int b = 0; b < 256; ++b) {
+                nt::RGBA px = nt::RGBA::New(nt::MakeRect(0, 0, 1, 1));
+                px.Pix[0] = static_cast<uint8_t>(r);
+                px.Pix[1] = static_cast<uint8_t>(g);
+                px.Pix[2] = static_cast<uint8_t>(b);
+                if (nt::match::ToGray(&px).Pix[0] != nt::GoLumaRGBA(r, g, b)) check(false, "ToGray pixel");
+            }
     for (int iter = 0; iter < 3000; ++iter) {
         const int pw = 1 + static_cast<int>(rng() % 90), ph = 1 + static_cast<int>(rng() % 90);
         nt::Gray parent = nt::Gray::New(nt::MakeRect(-7, 4, -7 + pw, 4 + ph));

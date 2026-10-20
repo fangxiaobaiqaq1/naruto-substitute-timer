@@ -442,6 +442,7 @@ AvatarMatch AvatarCatalog::matchEntries(const RGBA& view, const Gray* grayIn, do
     };
     std::vector<avatarJob> jobs;
     std::unique_lock<std::mutex> lk(mu);
+    beginScan();
     for (avatarEntry* entry : list) {
         if (!decode(entry)) continue;
         out.ids.push_back(entry->id);
@@ -584,6 +585,20 @@ void avatarFactorSize(const avatarEntry* entry, double scale, double factor, int
     h = std::max(12, static_cast<int>(std::round(static_cast<double>(entry->gray.Bounds().Dy()) * scale * factor)));
 }
 
+void AvatarCatalog::beginScan() {
+    templateEpoch++;
+    if (templateEpoch % 64 != 0 || templateEpoch <= templateIdleCalls) return;
+    for (auto it = templates.begin(); it != templates.end();) {
+        if (it->second.epoch + templateIdleCalls < templateEpoch) {
+            templateBytes -= it->second.bytes;
+            it = templates.erase(it);
+            templateEvictions++;
+        } else {
+            ++it;
+        }
+    }
+}
+
 // prepared returns the cached scaled template for the entry at this size,
 // preparing it on first use. All catalog template state lives under the
 // catalog lock. The template depends only on (entry, w, h), so the cache is
@@ -597,6 +612,7 @@ PreparedPtr AvatarCatalog::prepared(avatarEntry* entry, int w, int h) {
     auto it = templates.find(key);
     if (it != templates.end()) {
         it->second.used = now;
+        it->second.epoch = templateEpoch;
         return it->second.prepared;
     }
     Gray g = match::ScaleGray(&entry->gray, w, h);
@@ -607,6 +623,7 @@ PreparedPtr AvatarCatalog::prepared(avatarEntry* entry, int w, int h) {
     c.prepared = p;
     c.bytes = p != nullptr ? p->bytes() + 64 : 64;
     c.used = now;
+    c.epoch = templateEpoch;
     templateBytes += c.bytes;
     templates.emplace(key, std::move(c));
     if (templateBytes > templateCacheCap) {
