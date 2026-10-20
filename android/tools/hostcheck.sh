@@ -19,7 +19,8 @@ find "$SRC/src" -name '*.cpp' | sort | xargs -P "$(nproc)" -I{} sh -c '
   fi'
 rm -f "$OUT/libnarutocore_host.a"
 ar rcs "$OUT/libnarutocore_host.a" "$OBJ"/*.o
-if [ ! -f "$OUT/hostcheck.o" ] || [ "$HERE/hostcheck.cpp" -nt "$OUT/hostcheck.o" ]; then
+if [ ! -f "$OUT/hostcheck.o" ] || [ "$HERE/hostcheck.cpp" -nt "$OUT/hostcheck.o" ] ||
+   [ -n "$(find "$SRC/include" -newer "$OUT/hostcheck.o" -print -quit)" ]; then
   $CXX $FLAGS -w -I "$HERE" -c "$HERE/hostcheck.cpp" -o "$OUT/hostcheck.o"
 fi
 # --whole-archive：确认所有翻译单元的符号都能解析（无未定义 / 重复定义）。

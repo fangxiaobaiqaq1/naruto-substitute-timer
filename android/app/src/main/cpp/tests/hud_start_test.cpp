@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "nt/engine.h"
+#include "nt/frame.h"
 #include "nt/ninja.h"
 #include "nt/rgb.h"
 #include "nt/scene.h"
@@ -345,6 +346,36 @@ void testSupportHints() {
     check(!f.c->hint(0, hint), "geometry change invalidates hints");
 }
 
+// defaultBoxes saves every default box of r unchanged (docs/区域校准.md 每帧几何).
+config::RegionCalibration defaultBoxes(const Result& r) {
+    config::RegionCalibration c;
+    c.Profile = r.LayoutProfile;
+    c.LeftBeads = r.Geometry[0].BeadBox;
+    c.RightBeads = r.Geometry[1].BeadBox;
+    c.LeftAvatar = r.Geometry[0].AvatarBox;
+    c.RightAvatar = r.Geometry[1].AvatarBox;
+    return c;
+}
+
+bool sameBeads(const Result& a, const Result& b) {
+    if (a.Beads.size() != b.Beads.size() || a.LayoutProfile != b.LayoutProfile) return false;
+    for (size_t i = 0; i < a.Beads.size(); ++i) {
+        const BeadInfo &x = a.Beads[i], &y = b.Beads[i];
+        if (x.X != y.X || x.Y != y.Y || x.Label != y.Label || x.Lit != y.Lit || x.Gold != y.Gold ||
+            x.Unknown != y.Unknown || x.Conf != y.Conf)
+            return false;
+    }
+    return true;
+}
+
+bool sameRegions(const Result& a, const Result& b) {
+    for (int i = 0; i < 2; ++i) {
+        const SideGeometry &x = a.Geometry[i], &y = b.Geometry[i];
+        if (x.Beads != y.Beads || x.NameROI != y.NameROI || x.AvatarROI != y.AvatarROI) return false;
+    }
+    return true;
+}
+
 // Mirrors internal/engine/rgb/energy_gauge_test.go without assets (no title or
 // portrait): a thin orange gauge on the default row and beans 13px@540 lower
 // read via the guarded re-read; a white flash or broad gold wash over an
@@ -406,6 +437,21 @@ void testEnergyGaugeRow() {
                 check(covered ? b.Unknown && !b.Lit
                               : !b.Unknown && b.Lit == lit && b.Gold == isGold && std::abs(b.Y - want[side][i]) <= 1,
                       "energy gauge row " + std::to_string(size.X) + " case " + std::to_string(cover) + " " + b.Label);
+            }
+            // The geometry reports the re-read row; its default boxes read it again.
+            config::LayoutConfig saved = cfg.Layout;
+            saved.Calibration = defaultBoxes(r);
+            rgb::Engine again(std::make_shared<ConfiguredLayout>(detect::ModeAuto, saved), cfg.Vision);
+            again.Prefer("duel");
+            const Result r2 = again.AnalyzeAt(&img, 1700000000LL * Second);
+            check(sameBeads(r2, r) && sameRegions(r2, r), "energy gauge: default boxes reproduce the row");
+            for (int side = 0; side < 2; ++side) {
+                std::vector<Point> centres;
+                for (const BeadInfo& b : r.Beads)
+                    if (b.Label[0] == "LR"[side]) centres.push_back(Pt(b.X, b.Y));
+                check(r.Geometry[side].Beads == centres && r.Geometry[side].BeadBox.Width > 0 &&
+                          r.Geometry[side].AvatarBox.Width > 0,
+                      "energy gauge: geometry beads are the sampled centres");
             }
         }
     }
@@ -493,11 +539,169 @@ void testRegionCalibration() {
         }
     }
 }
+
+// Per-frame geometry (docs/区域校准.md 每帧几何), mirrors
+// internal/engine/configured_layout_geometry_test.go, internal/ninja/avatar_box_test.go
+// and internal/frame/source_test.go.
+void testFrameGeometry() {
+    const config::Config cfg = config::Default();
+    const auto f32 = [](config::NormalizedRect r) {
+        return config::NormalizedRect{double(float(r.X)), double(float(r.Y)), double(float(r.Width)), double(float(r.Height))};
+    };
+    // Default bead boxes saved unchanged (and as float32) reproduce every row.
+    config::RegionCalibration existing;
+    existing.Profile = "duel";
+    existing.LeftBeads = config::NormalizedRect{.127, .143, .081, .019};
+    existing.RightBeads = config::NormalizedRect{.79, .151, .07, .02};
+    int corrected = 0;
+    std::vector<std::string> inconsistent;
+    const Rect frames[] = {MakeRect(0, 0, 1280, 720),  MakeRect(0, 0, 1440, 900),  MakeRect(0, 0, 1600, 900),
+                           MakeRect(0, 0, 1680, 1050), MakeRect(0, 0, 1920, 1080), MakeRect(0, 0, 2160, 1080),
+                           MakeRect(0, 0, 2400, 1080), MakeRect(0, 0, 2400, 1350), MakeRect(0, 0, 2388, 1668),
+                           MakeRect(0, 0, 2880, 1800), MakeRect(0, 0, 3440, 1440), MakeRect(17, 23, 17 + 2340, 23 + 1080)};
+    for (const Rect& bounds : frames) {
+        for (const std::string profile : {"camp", "duel"}) {
+            for (bool calibrated : {false, true}) {
+                const std::string name = std::to_string(bounds.Dx()) + "x" + std::to_string(bounds.Dy()) + "/" + profile;
+                config::LayoutConfig layoutCfg = cfg.Layout;
+                if (calibrated) layoutCfg.Calibration = existing;
+                ConfiguredLayout l(detect::ModeAuto, layoutCfg);
+                RGBA img = RGBA::New(bounds);
+                if (bounds.Min == Point{})
+                    for (int y = bounds.Min.Y; y < bounds.Max.Y; ++y)
+                        for (int x = bounds.Min.X; x < bounds.Max.X; ++x) img.SetRGBA(x, y, Color{32, 32, 32, 255});
+                const detect::ContentArea area = l.ContentArea(&img).first;
+                check((bounds.Min != Point{}) != (area.X == bounds.Min.X), "geometry: letterboxed offset frame");
+                // Health bars move wide rows inward (HP-bar x-correction).
+                const double s = area.HUDScale(1600, 900);
+                const int shift = static_cast<int>(std::round(14 * s)), step = std::max(1, static_cast<int>(std::round(s)));
+                const int cy = area.Y + static_cast<int>(std::round((profile == "camp" ? 70 : 74) * s));
+                const auto plain = l.PositionsIn(profile, area);
+                for (const auto& first : plain) {
+                    if (first.Idx != 0) continue;
+                    const int direction = first.Side == "right" ? 1 : -1;
+                    for (int row = -1; row <= 1; ++row) {
+                        const int x = first.X - direction * shift + direction * row * step, length = static_cast<int>(200 * s);
+                        const int x0 = direction == 1 ? x - length + 1 : x, x1 = direction == 1 ? x + 1 : x + length;
+                        for (int px = x0; px < x1; ++px) img.SetRGBA(px, cy + row * step, Color{240, 70, 10, 255});
+                    }
+                }
+                const auto want = l.PositionsInImage(profile, &img, area);
+                corrected += !calibrated && want[0].X != plain[0].X;
+                std::vector<detect::BeadPosition> rows[2];
+                for (const auto& p : want) rows[p.Side == "right"].push_back(p);
+                config::NormalizedRect boxes[2];
+                bool exact[2];
+                for (int side = 0; side < 2; ++side) {
+                    const auto& row = rows[side];
+                    config::NormalizedRect& box = boxes[side];
+                    const bool ok = l.DefaultBeadBox(profile, row, img.Bounds(), area, box);
+                    const double w = bounds.Dx(), h = bounds.Dy(), pitch = box.Width * w / 4;
+                    const double x0 = bounds.Min.X + box.X * w, x1 = bounds.Min.X + (box.X + box.Width) * w;
+                    check(ok && box.X >= 0 && box.Y >= 0 && box.X + box.Width <= 1 && box.Y + box.Height <= 1 &&
+                              std::abs(box.Height * h - pitch) <= 1e-9 &&
+                              std::abs(bounds.Min.Y + (box.Y + box.Height / 2) * h - row[0].Y) <= .5 &&
+                              std::min(row[0].X, row[3].X) >= x0 + pitch / 2 - .5 &&
+                              std::max(row[0].X, row[3].X) <= x1 - pitch / 2 + .5,
+                          "geometry: bead box encloses " + name);
+                    // One bead-0 point rounding every centre back (with the margin)?
+                    const double rs = detect::RowHUDScale(row, area, 1600, 900);
+                    double xlo = -1e300, xhi = 1e300, ylo = -1e300, yhi = 1e300;
+                    for (const auto& b : row) {
+                        const double dx = rs * (b.LX - row[0].LX), dy = rs * (b.LY - row[0].LY);
+                        xlo = std::max(xlo, b.X - .5 - dx), xhi = std::min(xhi, b.X + .5 - dx);
+                        ylo = std::max(ylo, b.Y - .5 - dy), yhi = std::min(yhi, b.Y + .5 - dy);
+                    }
+                    exact[side] = xhi - xlo > 2e-3 && yhi - ylo > 2e-3;
+                    if (!exact[side]) inconsistent.push_back(name + "/" + row[0].Side + "/" + std::to_string(calibrated));
+                }
+                for (bool single : {false, true}) {
+                    config::LayoutConfig saved = cfg.Layout;
+                    config::RegionCalibration c;
+                    c.Profile = profile;
+                    c.LeftBeads = single ? f32(boxes[0]) : boxes[0];
+                    c.RightBeads = single ? f32(boxes[1]) : boxes[1];
+                    saved.Calibration = c;
+                    const auto got = ConfiguredLayout(detect::ModeAuto, saved).PositionsInImage(profile, &img, area);
+                    check(got.size() == want.size(), "geometry: saved box slot count");
+                    std::vector<detect::BeadPosition> gotRows[2];
+                    for (size_t i = 0; i < got.size(); ++i) {
+                        const int dx = got[i].X - want[i].X, dy = got[i].Y - want[i].Y;
+                        // No exact box: bead 0 (the name/portrait anchor) stays exact.
+                        const bool loose = !exact[got[i].Side == "right"] && got[i].Idx > 0 && std::abs(dx) <= 1 && std::abs(dy) <= 1;
+                        check(((dx == 0 && dy == 0) || loose) && detect::CalBeads(got[i].Cal),
+                              "geometry: saved box reproduces " + name + " " + got[i].Side + std::to_string(got[i].Idx));
+                        gotRows[got[i].Side == "right"].push_back(got[i]);
+                    }
+                    for (int side = 0; side < 2; ++side) {
+                        for (const auto& ref : {Pt(1600, 900), Pt(1920, 1080), Pt(960, 540)}) {
+                            const double a = detect::RowHUDScale(rows[side], area, ref.X, ref.Y);
+                            const double b = detect::RowHUDScale(gotRows[side], area, ref.X, ref.Y);
+                            check(std::abs(a - b) <= (single ? 1e-6 : 1e-12) * a, "geometry: saved box scale " + name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    check(corrected == 6, "geometry: HP-bar x-correction on every wide frame");
+    check(inconsistent == std::vector<std::string>{"1440x900/camp/left/0", "2400x1350/camp/left/0"},
+          "geometry: rows without an exact box");
+    // Default avatar boxes convert back to their window and scale; only the
+    // 38s/62s double-tie scales (1.25, 1.75) give a window 1px shorter.
+    std::vector<double> scales = {1280.0 / 960, 1.25, 1.5, 1.75, 2, 2.4875, 3};
+    for (double s = .5; s < 4; s += .0137) scales.push_back(s);
+    int tall = 0;
+    for (double scale : scales) {
+        for (Point first : {Pt(155, 61), Pt(402, 125), Pt(2041, 250), Pt(3001, 20)}) {
+            for (bool left : {true, false}) {
+                const Rect window = ninja::AvatarRegion(first, scale, left);
+                double x = 0, y = 0, w = 0, h = 0;
+                ninja::AvatarBoxFromRegion(window, scale, left, x, y, w, h);
+                check(w == h && std::abs(w - 68.5 * scale) <= 1e-9, "geometry: square avatar box");
+                for (bool single : {false, true}) {
+                    const auto g = [&](double v) { return single ? double(float(v)) : v; };
+                    double gotScale = 0;
+                    const Rect got = ninja::AvatarRegionFromBox(g(x), g(y), g(w), g(h), left, gotScale);
+                    check(std::abs(gotScale - scale) <= 1e-6 * scale, "geometry: avatar box scale");
+                    if (got == window) continue;
+                    check(std::fmod(scale * 4, 2) == 1 && got.Min == window.Min && got.Max.X == window.Max.X &&
+                              got.Max.Y == window.Max.Y - 1,
+                          "geometry: avatar box window");
+                    ++tall;
+                }
+            }
+        }
+    }
+    check(tall == 2 * 2 * 4 * 2, "geometry: tie windows only at scales 1.25 and 1.75");
+    // A frame reused from the duplicate cache carries the geometry it reuses.
+    struct GeometryEngine : Engine {
+        int calls = 0;
+        Result AnalyzeAt(const RGBA*, TimeNs) override {
+            ++calls;
+            Result r;
+            r.Name = "geometry";
+            r.Geometry[1].Beads = {Pt(300, 40), Pt(280, 40)};
+            r.Geometry[1].NameROI = MakeRect(1, 2, 3, 4);
+            r.Geometry[1].BeadBox = config::NormalizedRect{.7, .1, .2, .05};
+            return r;
+        }
+    } eng;
+    RGBA still = RGBA::New(MakeRect(0, 0, 400, 250));
+    frame::DedupedAnalysis d;
+    const auto first = d.analyze(&still, &eng, detect::ModeStretch, Second, Second, "sdk");
+    const auto second = d.analyze(&still, &eng, detect::ModeStretch, 2 * Second, 2 * Second, "sdk");
+    check(eng.calls == 1 && second.Reused && first.Res.Geometry[1].Beads == second.Res.Geometry[1].Beads &&
+              second.Res.Geometry[1].NameROI == MakeRect(1, 2, 3, 4) && second.Res.Geometry[1].BeadBox.X == .7 &&
+              second.Res.Geometry[0].Beads.empty(),
+          "geometry: reused frame carries the geometry");
+}
 } // namespace
 
 int main() {
     testEnergyGaugeRow();  // first: independent of the scene/gate checks below
     testRegionCalibration();
+    testFrameGeometry();
     testCompleteHUDAndGated();
     testStartFight();
     testSupportHints();

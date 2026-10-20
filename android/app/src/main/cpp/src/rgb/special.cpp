@@ -17,13 +17,15 @@ namespace nt::rgb {
 std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::string& profile, const RGBA* img,
                                                                 const std::vector<detect::BeadPosition>& positions,
                                                                 const detect::ContentArea& area, TimeNs at,
-                                                                std::array<ninja::Readout, 2>& identified) {
+                                                                std::array<ninja::Readout, 2>& identified,
+                                                                std::array<engine::SideGeometry, 2>* geometry) {
     int profileIndex = 0;
     if (profile == "duel") {
         profileIndex = 1;
     }
     identified = {};
     std::array<std::vector<BeadPosition>, 2> rows;
+    std::array<engine::SideGeometry, 2> regions{};
     // Each side touches only its own trackers and its own result slots; the
     // shared Reader and catalog are safe for concurrent tracker calls.
     auto side = [&](int index, const std::string& name) {
@@ -57,6 +59,7 @@ std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::strin
             } else {
                 identified[index] = tracker.ReadWithAvatar(names_.get(), avatar, img, nameROI, avatarROI, scale, at);
             }
+            regions[index] = regionGeometry(img->Bounds(), nameROI, avatarROI, avatarScale, index == 0);
             // Only a recognized six-slot NAME permits usable slots five and six.
             // A brief label gap retains six UNKNOWN placeholders, never extra votes.
             if (row.size() == 4 && identified[index].Slots == 6) {
@@ -113,7 +116,53 @@ std::vector<detect::BeadPosition> Engine::specialPositionsForAt(const std::strin
     ParallelInvoke([&] { side(0, "left"); }, [&] { side(1, "right"); });
     std::vector<BeadPosition> out = std::move(rows[0]);
     out.insert(out.end(), rows[1].begin(), rows[1].end());
+    if (geometry != nullptr) *geometry = std::move(regions);
     return out;
+}
+
+// regionGeometry is a side's search regions and the portrait box that
+// reproduces its window.
+engine::SideGeometry regionGeometry(const Rect& frame, const Rect& nameROI, const Rect& avatarROI, double avatarScale,
+                                    bool left) {
+    engine::SideGeometry g;
+    g.NameROI = nameROI;
+    g.AvatarROI = avatarROI;
+    if (!avatarROI.Empty() && avatarScale > 0 && !frame.Empty()) {
+        double x = 0, y = 0, w = 0, h = 0;
+        ninja::AvatarBoxFromRegion(avatarROI, avatarScale, left, x, y, w, h);
+        g.AvatarBox = fraction(x, y, w, h, frame);
+    }
+    return g;
+}
+
+// fraction is a pixel box as fractions of frame.
+config::NormalizedRect fraction(double x, double y, double w, double h, const Rect& frame) {
+    const double fw = frame.Dx(), fh = frame.Dy();
+    return config::NormalizedRect{(x - static_cast<double>(frame.Min.X)) / fw,
+                                  (y - static_cast<double>(frame.Min.Y)) / fh, w / fw, h / fh};
+}
+
+// completeGeometry adds the sampled centres and, on a configured layout, the
+// default bead boxes of the layout rows (before identity offsets).
+std::array<engine::SideGeometry, 2> completeGeometry(std::array<engine::SideGeometry, 2> sides,
+                                                     const engine::ConfiguredLayout* layout, const std::string& profile,
+                                                     const RGBA* img, const detect::ContentArea& area,
+                                                     const std::vector<BeadPosition>& positions,
+                                                     const std::vector<BeadInfo>& beads) {
+    static const char* const names[2] = {"left", "right"};
+    for (int i = 0; i < 2; ++i) {
+        if (layout != nullptr) {
+            std::vector<BeadPosition> row;
+            for (const BeadPosition& p : positions) {
+                if (p.Side == names[i]) row.push_back(p);
+            }
+            layout->DefaultBeadBox(profile, row, img->Bounds(), area, sides[i].BeadBox);
+        }
+        for (const BeadInfo& b : beads) {
+            if (!b.Label.empty() && b.Label[0] == "LR"[i]) sides[i].Beads.push_back(Pt(b.X, b.Y));
+        }
+    }
+    return sides;
 }
 
 void applyNames(engine::Result& res, const std::array<ninja::Readout, 2>& readouts) {

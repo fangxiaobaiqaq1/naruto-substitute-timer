@@ -2,8 +2,12 @@
 // 字段与 Go internal/engine/engine.go 一一对应，名字保持 Go 拼写。
 #pragma once
 
+#include <array>
 #include <string>
 #include <vector>
+
+#include "nt/config.h"
+#include "nt/image.h"
 
 namespace nt::engine {
 
@@ -20,6 +24,18 @@ struct BeadInfo {
     bool Gold = false;     // true = 金色可用豆；Lit 同时为 true
     bool Unknown = false;  // true = 这颗没看清，不能当暗豆
     double Conf = 0;       // 视觉证据得分 0~1，不是已校准的正确概率。
+};
+
+// SideGeometry is one side's per-frame geometry for the calibration screens
+// (docs/区域校准.md 每帧几何). Pixels are image coordinates like BeadInfo;
+// boxes are fractions of the image bounds in calibration form (Width 0 =
+// none). Empty when not available (no HUD analysis, legacy layouts).
+struct SideGeometry {
+    std::vector<Point> Beads;          // sampled centres: row drops, re-reads, slots 5/6
+    Rect NameROI;                      // title-template search rect, not clipped
+    Rect AvatarROI;                    // portrait window, not clipped
+    config::NormalizedRect BeadBox;    // saved as is: same layout centres and scale
+    config::NormalizedRect AvatarBox;  // saved as is: same AvatarROI and scale
 };
 
 // Result 是一帧画面的完整分析结果。
@@ -43,6 +59,9 @@ struct Result {
     std::string PlayerSide;  // 从 VS 底栏 / 对局顶部账号认出的我方 left/right，无新证据时为空
     std::string PlayerName;  // 我方账号，来自 ui.playerNames
     std::string OppName;     // 对面账号，能对上图鉴才有
+    // Geometry is what each side (0 left, 1 right) of this frame actually
+    // used; empty when the HUD was not analysed.
+    std::array<SideGeometry, 2> Geometry;
 };
 
 }  // namespace nt::engine

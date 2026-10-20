@@ -58,10 +58,15 @@ type Frame struct {
 	Sequence            uint64
 	Duplicate           bool // Identical pixels; never count as an independent confirmation.
 	Err                 error
+	Geometry            [2]SideGeometry // Left, right: what this frame used; zero if not analysed.
 
 	fingerprint   uint64 // Pixel/geometry/source hash computed once per capture.
 	fingerprinted bool
 }
+
+// SideGeometry is engine.SideGeometry (docs/区域校准.md 每帧几何): sampled
+// bead centres, name/portrait regions and the default calibration boxes.
+type SideGeometry = engine.SideGeometry
 
 // Provider 每次调用返回最新一帧。由 UI 定时/事件触发调用。
 type Provider func() Frame
@@ -168,6 +173,7 @@ func fillFromEngine(f *Frame, w win.Window, img *image.RGBA, res engine.Result) 
 	f.PlayerSide = res.PlayerSide
 	f.PlayerName = res.PlayerName
 	f.OppName = res.OppName
+	f.Geometry = res.Geometry
 	if res.PlayerName != "" || res.OppName != "" {
 		who := strings.TrimSpace(res.PlayerName + " vs " + res.OppName)
 		if res.OppName == "" {

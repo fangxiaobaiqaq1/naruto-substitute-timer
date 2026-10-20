@@ -38,6 +38,9 @@ object NativeCore {
     private const val BEAD_GOLD = 1 shl 1
     private const val BEAD_UNKNOWN = 1 shl 2
 
+    /** [nativeLastGeometry]：帧头 width, height, profile, sequence 低 24 位, sequence >> 24。 */
+    private const val GEOMETRY_HEADER = 5
+
     init {
         System.loadLibrary("narutocore")
     }
@@ -59,6 +62,13 @@ object NativeCore {
     @JvmStatic external fun nativeResetDelivery()
     @JvmStatic external fun nativeRelease()
     @JvmStatic external fun nativeResultHeaderBytes(): Int
+    /**
+     * 最近一次分析的帧的几何（没有则 null），float 扁平布局（jni.cpp / ARCHITECTURE.md §4）：
+     * `[width, height, profile(0 无/1 camp/2 duel), sequence & 0xFFFFFF, sequence >> 24]`，
+     * 然后左、右各：`n, n×(x, y), nameRoi x,y,w,h, avatarRoi x,y,w,h`（像素）`, beadBox x,y,w,h,
+     * avatarBox x,y,w,h`（整帧比例，w = 0 = 没有）。用 [lastGeometry]。
+     */
+    @JvmStatic external fun nativeLastGeometry(): FloatArray?
 
     // ---- 高层 API ----
 
@@ -75,6 +85,34 @@ object NativeCore {
         val rects = FloatArray(16) { Float.NaN }
         Settings.KEY_CALIB_RECTS.forEachIndexed { i, key -> settings.calibRect(key)?.copyInto(rects, i * 4) }
         return nativeSetCalibration(settings.calibProfile, rects)
+    }
+
+    /**
+     * 最近一次分析的帧的几何（docs/区域校准.md 每帧几何）：每侧实际采样的豆心、名字/头像区域和默认
+     * 豆框/头像框。整帧一起取（native 全局锁）；用 [FrameGeometry.sequence] 对上 [AnalysisResult.sequence]。
+     * 还没有分析过帧（或引擎刚重建）时为 null。
+     */
+    fun lastGeometry(): FrameGeometry? = nativeLastGeometry()?.let(::decodeGeometry)
+
+    private fun decodeGeometry(v: FloatArray): FrameGeometry? {
+        if (v.size < GEOMETRY_HEADER) return null
+        var pos = GEOMETRY_HEADER
+        fun rect() = PixelRect(v[pos].toInt(), v[pos + 1].toInt(), v[pos + 2].toInt(), v[pos + 3].toInt())
+            .also { pos += 4 }.takeIf { it.width > 0 && it.height > 0 }
+        fun box() = FrameBox(v[pos], v[pos + 1], v[pos + 2], v[pos + 3])
+            .also { pos += 4 }.takeIf { it.width > 0f && it.height > 0f }
+        fun side(): SideGeometry? {
+            val n = if (pos < v.size) v[pos].toInt() else -1
+            if (n < 0 || pos + 1 + 2 * n + 16 > v.size) return null
+            val beads = List(n) { i -> PixelPoint(v[pos + 1 + 2 * i].toInt(), v[pos + 2 + 2 * i].toInt()) }
+            pos += 1 + 2 * n
+            return SideGeometry(beads, rect(), rect(), box(), box())
+        }
+        val left = side() ?: return null
+        val right = side() ?: return null
+        if (pos != v.size) return null
+        val profile = when (v[2].toInt()) { 1 -> "camp"; 2 -> "duel"; else -> "" }
+        return FrameGeometry(v[0].toInt(), v[1].toInt(), profile, v[3].toLong() + (v[4].toLong() shl 24), left, right)
     }
 
     /**
@@ -222,6 +260,46 @@ object NativeCore {
             return str
         }
     }
+}
+
+/** 帧像素坐标的点。 */
+data class PixelPoint(val x: Int, val y: Int)
+
+/** 帧像素矩形（左上角 + 宽高），不裁剪到画面内（头像窗口可以伸出顶边）。 */
+data class PixelRect(val x: Int, val y: Int, val width: Int, val height: Int)
+
+/** 整帧比例的框（x, y, w, h，与 [Settings.calibRect] 同形）。 */
+data class FrameBox(val x: Float, val y: Float, val width: Float, val height: Float) {
+    /** [Settings.setCalibRect] 的形式。 */
+    fun toFloatArray(): FloatArray = floatArrayOf(x, y, width, height)
+}
+
+/** 一侧在这一帧实际用到的几何（Go engine.SideGeometry；docs/区域校准.md 每帧几何）。 */
+data class SideGeometry(
+    /** 实际采样的豆心（按槽位，含特殊忍者整行下移/能量条重读与柱间第 5、6 颗）。 */
+    val beads: List<PixelPoint>,
+    /** 名字（标题模板）搜索区；null = 没有。 */
+    val nameRoi: PixelRect?,
+    /** 头像识别窗口；null = 没有。 */
+    val avatarRoi: PixelRect?,
+    /** 默认豆框：原样保存为校准，豆心与尺度同本帧；null = 没有。 */
+    val beadBox: FrameBox?,
+    /** 默认头像框：原样保存为校准，头像窗口与尺度同本帧；null = 没有。 */
+    val avatarBox: FrameBox?,
+)
+
+/** [NativeCore.lastGeometry]：一帧两侧的几何。 */
+data class FrameGeometry(
+    val width: Int,
+    val height: Int,
+    /** 几何所属布局（该帧的 layoutProfile）："camp" / "duel" / ""。 */
+    val layoutProfile: String,
+    /** 该帧的 [AnalysisResult.sequence]。 */
+    val sequence: Long,
+    val left: SideGeometry,
+    val right: SideGeometry,
+) {
+    fun side(left: Boolean): SideGeometry = if (left) this.left else right
 }
 
 /** engine.BeadInfo（native 原样）。 */

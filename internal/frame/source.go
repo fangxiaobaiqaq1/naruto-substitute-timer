@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/maphash"
 	"image"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -510,6 +511,9 @@ func (d *dedupedAnalysis) analyze(img *image.RGBA, eng engine.Engine, mode detec
 		f.CaptureStarted, f.CapturedAt = started, capturedAt
 		f.AnalysisStarted, f.AnalyzedAt = time.Time{}, time.Time{}
 		f.Beads = append([]Bead(nil), d.last.Beads...)
+		for i := range f.Geometry {
+			f.Geometry[i].Beads = slices.Clone(f.Geometry[i].Beads)
+		}
 		f.fingerprint, f.fingerprinted = fingerprint, true
 		return f
 	}

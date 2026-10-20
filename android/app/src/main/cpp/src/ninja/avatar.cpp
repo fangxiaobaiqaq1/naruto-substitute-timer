@@ -734,6 +734,25 @@ Rect AvatarRegionFromBox(double x, double y, double w, double h, bool left, doub
                     static_cast<int>(std::round(x0 + 70 * scale)), static_cast<int>(std::round(y0 + 100 * scale)));
 }
 
+// AvatarBoxFromRegion inverts AvatarRegionFromBox. The window origin is
+// centred in its rounding range; a window 1px off the 70x100 shape (rounding
+// ties) keeps its top-left corner.
+void AvatarBoxFromRegion(const Rect& window, double scale, bool left, double& x, double& y, double& w, double& h) {
+    const auto origin = [](int lo, int hi, double size) {
+        const double d = static_cast<double>(hi - lo) - size;
+        if (d > -1 && d < 1) return (static_cast<double>(lo + hi) - size) / 2;
+        return static_cast<double>(lo);
+    };
+    const double cx = left ? avatarBoxLeftX : avatarBoxRightX;
+    const double side = avatarBoxSide * scale;
+    const double x0 = origin(window.Min.X, window.Max.X, 70 * scale);
+    const double y0 = origin(window.Min.Y, window.Max.Y, 100 * scale);
+    x = x0 + cx * scale - side / 2;
+    y = y0 + avatarBoxCentreY * scale - side / 2;
+    w = side;
+    h = side;
+}
+
 // canonicalAvatarName maps only documented historical spellings onto a current
 // canonical catalog title. It deliberately does not collapse distinct forms.
 std::string canonicalAvatarName(const std::string& s) {

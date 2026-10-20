@@ -850,6 +850,26 @@ func AvatarRegionFromBox(x, y, w, h float64, left bool) (image.Rectangle, float6
 	return image.Rect(int(math.Round(x0)), int(math.Round(y0)), int(math.Round(x0+70*scale)), int(math.Round(y0+100*scale))), scale
 }
 
+// AvatarBoxFromRegion inverts AvatarRegionFromBox: the square portrait box
+// (frame pixels) giving window and scale back. The window origin is centred
+// in its rounding range; a window 1px off the 70x100 shape (rounding ties)
+// keeps its top-left corner.
+func AvatarBoxFromRegion(window image.Rectangle, scale float64, left bool) (x, y, w, h float64) {
+	origin := func(lo, hi int, size float64) float64 {
+		if d := float64(hi-lo) - size; d > -1 && d < 1 {
+			return (float64(lo+hi) - size) / 2
+		}
+		return float64(lo)
+	}
+	cx := avatarBoxLeftX
+	if !left {
+		cx = avatarBoxRightX
+	}
+	side := avatarBoxSide * scale
+	x0, y0 := origin(window.Min.X, window.Max.X, 70*scale), origin(window.Min.Y, window.Max.Y, 100*scale)
+	return x0 + cx*scale - side/2, y0 + avatarBoxCentreY*scale - side/2, side, side
+}
+
 // canonicalAvatarName maps only documented historical spellings onto a current
 // canonical catalog title. It deliberately does not collapse distinct forms.
 func canonicalAvatarName(s string) string {

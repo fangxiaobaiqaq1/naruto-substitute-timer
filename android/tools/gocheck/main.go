@@ -9,7 +9,8 @@
 //
 // --calibration sets the region calibration (docs/区域校准.md) like hostcheck:
 // left beads/right beads/left avatar/right avatar, each "x,y,w,h" (frame
-// fractions) or "-" (automatic).
+// fractions) or "-" (automatic). The geometry line is the per-frame geometry
+// (beads; name/avatar x0,y0,x1,y1; beadBox/avatarBox x,y,w,h fractions).
 package main
 
 import (
@@ -60,6 +61,24 @@ func beads(bs []engine.BeadInfo) string {
 		parts = append(parts, fmt.Sprintf("%s=%c(%.3f)@%d,%d", b.Label, st, b.Conf, b.X, b.Y))
 	}
 	return strings.Join(parts, " ")
+}
+
+// geometry formats Result.Geometry exactly like hostcheck.
+func geometry(sides [2]engine.SideGeometry) string {
+	rect := func(r image.Rectangle) string { return fmt.Sprintf("%d,%d,%d,%d", r.Min.X, r.Min.Y, r.Max.X, r.Max.Y) }
+	box := func(r config.NormalizedRect) string {
+		return fmt.Sprintf("%.9f,%.9f,%.9f,%.9f", r.X, r.Y, r.Width, r.Height)
+	}
+	var parts []string
+	for i, g := range sides {
+		var beads []string
+		for _, p := range g.Beads {
+			beads = append(beads, fmt.Sprintf("%d,%d", p.X, p.Y))
+		}
+		parts = append(parts, fmt.Sprintf("%c beads=%s name=%s avatar=%s beadBox=%s avatarBox=%s", "LR"[i], strings.Join(beads, ";"),
+			rect(g.NameROI), rect(g.AvatarROI), box(g.BeadBox), box(g.AvatarBox)))
+	}
+	return strings.Join(parts, " | ")
 }
 
 // parseCalibration reads "PROFILE:LB/RB/LA/RA" (hostcheck uses the same form).
@@ -161,8 +180,8 @@ func main() {
 			}
 		}
 		r := eng.(engine.TimedEngine).AnalyzeAt(img, at)
-		fmt.Printf("%s\tfight=%d unc=%d scene=%s gate=%.4f profile=%s open=%d slots=%d/%d L=%s R=%s side=%s opp=%s name=%s\n\tbeads: %s\n",
+		fmt.Printf("%s\tfight=%d unc=%d scene=%s gate=%.4f profile=%s open=%d slots=%d/%d L=%s R=%s side=%s opp=%s name=%s\n\tbeads: %s\n\tgeometry: %s\n",
 			filepath.Base(f), b2i(r.Fighting), b2i(r.Uncertain), r.Scene, r.GateScore, r.LayoutProfile, b2i(r.RoundOpening),
-			r.LeftSlots, r.RightSlots, r.LeftNinja, r.RightNinja, r.PlayerSide, r.OppName, r.Name, beads(r.Beads))
+			r.LeftSlots, r.RightSlots, r.LeftNinja, r.RightNinja, r.PlayerSide, r.OppName, r.Name, beads(r.Beads), geometry(r.Geometry))
 	}
 }

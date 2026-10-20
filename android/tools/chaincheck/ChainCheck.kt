@@ -2,7 +2,9 @@ package hostchain
 
 import android.content.Context
 import com.narutotimer.AnalysisResult
+import com.narutotimer.FrameGeometry
 import com.narutotimer.NativeCore
+import com.narutotimer.PixelPoint
 import com.narutotimer.Settings
 import com.narutotimer.tracker.NinjaRules
 import com.narutotimer.tracker.OverlayState
@@ -223,6 +225,19 @@ private fun syntheticFixture(repo: String, background: Pixels, firstX: Int, spec
     return p
 }
 
+// nativeLastGeometry of the frame just delivered (docs/区域校准.md 每帧几何).
+private fun geometryOf(f: AnalysisResult, label: String): FrameGeometry {
+    val g = checkNotNull(NativeCore.lastGeometry()) { "nativeLastGeometry ($label): ${NativeCore.lastError()}" }
+    equal(g.sequence, f.sequence, "geometry belongs to the delivered frame ($label)")
+    equal(listOf(g.width, g.height, g.layoutProfile), listOf(f.width, f.height, f.layoutProfile), "geometry frame ($label)")
+    for ((side, prefix) in listOf(g.left to 'L', g.right to 'R')) {
+        equal(side.beads, f.beads.filter { it.label.startsWith(prefix) }.map { PixelPoint(it.x, it.y) }, "geometry beads ($label)")
+        verify(side.nameRoi != null && side.avatarRoi != null && side.beadBox != null && side.avatarBox != null,
+            "geometry regions and default boxes ($label): $side")
+    }
+    return g
+}
+
 // Region calibration (docs/区域校准.md) through production Settings -> NativeCore
 // -> nativeSetCalibration: an identical screen is re-read with the new boxes
 // at once (no reuse, no duplicate), and clearing them restores the automatic row.
@@ -230,7 +245,9 @@ private fun calibrationChecks(frame: Pixels) {
     val run = Run("region calibration applies live to an identical screen")
     val auto = run.feed(frame, 0, "automatic layout").frame
     fight(auto, 2, 4)
-    run.feed(frame, 16, "identical pixels reuse the analysis", duplicate = true)
+    val geometry = geometryOf(auto, "automatic")
+    val dup = run.feed(frame, 16, "identical pixels reuse the analysis", duplicate = true).frame
+    equal(geometryOf(dup, "reused").copy(sequence = 0), geometry.copy(sequence = 0), "a reused frame carries its geometry")
     val left = auto.frameBeads.filter { it.label.startsWith('L') }
     val pitch = (left[3].x - left[0].x) / 3f
     val box = floatArrayOf(
@@ -252,6 +269,22 @@ private fun calibrationChecks(frame: Pixels) {
     run.settings.setCalibRect(Settings.KEY_CALIB_LEFT_BEADS, null)
     verify(NativeCore.setCalibration(run.settings), "nativeSetCalibration: ${NativeCore.lastError()}")
     fight(run.feed(frame, 64, "calibration cleared").frame, 2, 4)
+    // All four default boxes saved unchanged (float32 Settings) read the same screen identically.
+    run.settings.calibProfile = geometry.layoutProfile
+    val defaults = listOf(geometry.left.beadBox, geometry.right.beadBox, geometry.left.avatarBox, geometry.right.avatarBox)
+    Settings.KEY_CALIB_RECTS.zip(defaults).forEach { (key, box) -> run.settings.setCalibRect(key, box!!.toFloatArray()) }
+    verify(NativeCore.setCalibration(run.settings), "nativeSetCalibration: ${NativeCore.lastError()}")
+    verify(NativeCore.lastGeometry() == null, "a rebuilt engine drops the old calibration's geometry")
+    val saved = run.feed(frame, 80, "same pixels, default boxes saved").frame
+    equal(saved.beads, auto.beads, "default boxes reproduce the automatic beads")
+    equal(listOf(saved.leftNinja, saved.rightNinja), listOf(auto.leftNinja, auto.rightNinja), "default boxes keep identities")
+    val again = geometryOf(saved, "saved defaults")
+    for ((a, b) in listOf(again.left to geometry.left, again.right to geometry.right)) {
+        equal(listOf(a.beads, a.nameRoi, a.avatarRoi), listOf(b.beads, b.nameRoi, b.avatarRoi), "default boxes reproduce the regions")
+    }
+    println("  geometry: L ${geometry.left}\n            R ${geometry.right}")
+    Settings.KEY_CALIB_RECTS.forEach { run.settings.setCalibRect(it, null) }
+    verify(NativeCore.setCalibration(run.settings), "nativeSetCalibration: ${NativeCore.lastError()}")
 }
 
 private fun specialChecks(repo: String, path: String) {

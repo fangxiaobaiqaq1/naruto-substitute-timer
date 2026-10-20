@@ -247,6 +247,7 @@ Go → C++ 翻译规则：
 | `nativeAnalyzeHardwareBuffer(hb, capturedAtNanos, method, out)` | `(HardwareBuffer,long,int,ByteBuffer)I` | `AHardwareBuffer_lock(CPU_READ_OFTEN)` 零拷贝，格式须为 RGBA_8888/RGBX_8888 |
 | `nativeAnalyzeBuffer(pixels, w, h, rowStride, capturedAtNanos, method, out)` | `(ByteBuffer,int,int,int,long,int,ByteBuffer)I` | direct RGBA8 |
 | `nativeTakeOppCrop()` | `()[I` | `[w, h, argb...]` 或 null |
+| `nativeLastGeometry()` | `()[F` | 最近一次分析（含去重复用）帧的每帧几何（docs/区域校准.md），布局见下；还没有分析过帧或引擎刚重建（`nativeInit/nativeFinishAssets/nativeSetCalibration/nativeRelease`）时为 null。Kotlin：`NativeCore.lastGeometry(): FrameGeometry?` |
 | `nativeResetDelivery()` / `nativeRelease()` / `nativeResultHeaderBytes()` | | |
 
 `method`：0 = `android-media-projection`，1 = `android-accessibility-screenshot`，2 = `android-buffer`（进入帧指纹）。
@@ -279,7 +280,12 @@ Kotlin `NativeCore.Decoder` 每线程复用缓冲，字节相同的字符串复�
 `AnalysisResult`（engine.Result 全字段 + frame.Frame 元数据）。`AnalysisResult.frameBeads` = Go `fillFromEngine` 的
 `frame.Bead` 换算；`slots(left, fallback)` = Go `Frame.Slots`。采集失败用 `AnalysisResult.failure(...)`。
 
-全局锁：jni.cpp 的 `g_mu` 串行化 `nativeFinishAssets/nativeAnalyze*/nativeSetPlayerNames/nativeSetCalibration/nativeTakeOppCrop`，
+**每帧几何（`nativeLastGeometry`，float 数组）**：`[0]` width，`[1]` height（像素），`[2]` 布局（0 无，1 camp，2 duel），
+`[3]` Sequence & 0xFFFFFF，`[4]` Sequence >> 24（= 该帧 `AnalysisResult.sequence`）；之后左、右各一段：`n`，`n` 组豆心 `x, y`，
+`nameRoi x, y, w, h`，`avatarRoi x, y, w, h`（像素，不裁剪，空 = 0），`beadBox x, y, w, h`，`avatarBox x, y, w, h`（整帧比例，w = 0 = 没有）。
+分析帧时在 `g_mu` 内整帧替换，取的时候整帧复制，所以两侧一定属于同一帧。
+
+全局锁：jni.cpp 的 `g_mu` 串行化 `nativeFinishAssets/nativeAnalyze*/nativeSetPlayerNames/nativeSetCalibration/nativeTakeOppCrop/nativeLastGeometry`，
 所以识别核心只在一个线程上被调用（帧内并行另见 nt/parallel.h）。
 
 ---

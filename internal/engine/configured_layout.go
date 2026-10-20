@@ -212,6 +212,70 @@ func (l *ConfiguredLayout) sideCalibrations(name string, frame image.Rectangle, 
 	return out
 }
 
+// settleMargin (px) keeps a default bead box clear of rounding boundaries,
+// above the float32 error of Android's stored calibration.
+const settleMargin = 1e-3
+
+// DefaultBeadBox is the bead box (fractions of frame) that, saved as this
+// profile's calibration, reproduces row and its scale (docs/区域校准.md 每帧
+// 几何). row is one side of PositionsInImage, before identity offsets.
+func (l *ConfiguredLayout) DefaultBeadBox(name string, row []detect.BeadPosition, frame image.Rectangle, ca detect.ContentArea) (config.NormalizedRect, bool) {
+	p, ok := l.profiles[name]
+	if !ok || len(row) < 4 || frame.Empty() {
+		return config.NormalizedRect{}, false
+	}
+	first, right := row[0], row[0].Side == "right"
+	ref := p.Left.NominalCenters
+	if right {
+		ref = p.Right.NominalCenters
+	}
+	// Unrounded bead 0 by the row's own mapping.
+	var s, x, y float64
+	if c := first.Cal; c.Beads() {
+		s, x, y = c.Scale, c.X0+c.Scale*(first.LX-c.RefX), c.Y0+c.Scale*(first.LY-c.RefY)
+	} else {
+		s = ca.HUDScale(detect.HUDReferenceWidth, detect.HUDReferenceHeight)
+		x = float64(ca.X) + first.LX*s
+		if right {
+			x = float64(ca.X+ca.W) - (detect.HUDReferenceWidth-first.LX)*s
+		}
+		y = float64(ca.Y) + first.LY*s
+		// Plus the whole-pixel HP-bar correction.
+		x += float64(first.X - ca.MapHUDPixel(first.LX, first.LY, first.Side, detect.HUDReferenceWidth, detect.HUDReferenceHeight).X)
+	}
+	if len(ref) < 4 || !(s > 0) || ref[3].X == ref[0].X {
+		return config.NormalizedRect{}, false
+	}
+	// Every centre must round back, also at half-pixel ties.
+	xlo, xhi, ylo, yhi := math.Inf(-1), math.Inf(1), math.Inf(-1), math.Inf(1)
+	for _, b := range row {
+		dx, dy := s*(b.LX-first.LX), s*(b.LY-first.LY)
+		xlo, xhi = max(xlo, float64(b.X)-.5-dx), min(xhi, float64(b.X)+.5-dx)
+		ylo, yhi = max(ylo, float64(b.Y)-.5-dy), min(yhi, float64(b.Y)+.5-dy)
+	}
+	x, y = settle(x, xlo, xhi, float64(first.X)), settle(y, ylo, yhi, float64(first.Y))
+	// Same pitch_P as sideCalibrations.
+	pitch := s * (math.Abs(ref[3].X-ref[0].X) * detect.HUDReferenceWidth / 3)
+	left := x - pitch/2
+	if right {
+		left = x + pitch/2 - 4*pitch
+	}
+	w, h := float64(frame.Dx()), float64(frame.Dy())
+	return config.NormalizedRect{X: (left - float64(frame.Min.X)) / w, Y: (y - pitch/2 - float64(frame.Min.Y)) / h,
+		Width: 4 * pitch / w, Height: pitch / h}, true
+}
+
+// settle keeps v settleMargin inside [lo, hi), the range rounding every
+// centre back. If the automatic centres round half-pixel ties inconsistently
+// there is none: then bead 0 (n, the anchor of the name and portrait
+// windows) stays exact and another centre may differ by 1px.
+func settle(v, lo, hi, n float64) float64 {
+	if hi-lo <= 2*settleMargin {
+		lo, hi = n-.5, n+.5
+	}
+	return min(max(v, lo+settleMargin), hi-settleMargin)
+}
+
 // PositionsIn is the automatic mapping only; calibrated sides need the frame
 // (PositionsInImage, PositionsFor).
 func (l *ConfiguredLayout) PositionsIn(name string, ca detect.ContentArea) []detect.BeadPosition {
