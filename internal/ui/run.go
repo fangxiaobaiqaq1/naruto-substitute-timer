@@ -121,6 +121,7 @@ type session struct {
 	lastLeftColor   color.Color
 	lastRightColor  color.Color
 	lastMiniDisplay string
+	lastMiniCaption string
 	clockRevision   uint64 // Accessed only through sync/atomic.
 	overlayRevision uint64 // Accessed only through sync/atomic.
 	overlayPosted   overlayPost
@@ -179,6 +180,7 @@ type session struct {
 	miniPill           *canvas.Rectangle
 	miniEdges          *fyne.Container
 	miniStatus         *canvas.Text
+	miniCaption        *canvas.Text
 	miniWindowSurface  *miniSurface
 	miniWindowControls *fyne.Container
 	miniWindowButtons  []*scaledMiniButton
@@ -1200,7 +1202,7 @@ type clockUpdate struct {
 	altColor              color.NRGBA
 	leftText, rightText   string
 	leftColor, rightColor color.NRGBA
-	miniText              string
+	miniText, miniCaption string
 	scale                 float64
 }
 
@@ -1218,8 +1220,8 @@ func (s *session) refreshClockAt(now time.Time) {
 	rightSecs := s.right.LatestRemaining(now)
 	leftText, leftColor := timerapp.FormatCD(leftSecs), clockColor(leftSecs)
 	rightText, rightColor := timerapp.FormatCD(rightSecs), clockColor(rightSecs)
-	miniText := s.miniTextLocked(txt, altText, leftText, rightText, dual)
-	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor && s.lastLeftBoth == leftText && s.lastRightBoth == rightText && s.lastLeftColor == leftColor && s.lastRightColor == rightColor && s.lastMiniDisplay == miniText
+	miniText, miniCaption := s.miniTextLocked(txt, altText, leftText, rightText, dual), s.miniSideTextLocked()
+	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor && s.lastLeftBoth == leftText && s.lastRightBoth == rightText && s.lastLeftColor == leftColor && s.lastRightColor == rightColor && s.lastMiniDisplay == miniText && s.lastMiniCaption == miniCaption
 	trace := s.traceFrame
 	if same && (trace.id == 0 || trace == s.traceClock) {
 		// The applied trace already recorded this exact UI state (first write wins).
@@ -1246,12 +1248,12 @@ func (s *session) refreshClockAt(now time.Time) {
 	s.lastDual, s.lastAlt, s.lastAltColor = dual, altText, altColor
 	s.lastLeftBoth, s.lastRightBoth = leftText, rightText
 	s.lastLeftColor, s.lastRightColor = leftColor, rightColor
-	s.lastMiniDisplay = miniText
+	s.lastMiniDisplay, s.lastMiniCaption = miniText, miniCaption
 	update := &clockUpdate{revision: atomic.AddUint64(&s.clockRevision, 1), trace: trace,
 		leftEvent: leftEvent, rightEvent: rightEvent, txt: txt, eventText: eventText, col: col,
 		dual: dual, altText: altText, altColor: altColor,
 		leftText: leftText, rightText: rightText, leftColor: leftColor, rightColor: rightColor,
-		miniText: miniText,
+		miniText: miniText, miniCaption: miniCaption,
 		scale:    s.cfg.UI.FontScale}
 	// Offer under s.mu so the coalescer always holds the highest revision;
 	// Offer is only atomic stores.
@@ -1324,7 +1326,7 @@ func (s *session) applyPendingClock() {
 		refreshUI(s.eventTag)
 	}
 	if s.miniWin != nil {
-		s.applyDetachedMiniClockText(u.miniText, u.col)
+		s.applyDetachedMiniClockText(u.miniCaption, u.miniText, u.col)
 	}
 	// canvas.Text.Refresh repaints but does not reflow the neighboring badge.
 	// Going from "—" to a multi-digit clock must also recompute its row layout.

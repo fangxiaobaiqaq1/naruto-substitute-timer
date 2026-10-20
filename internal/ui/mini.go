@@ -22,8 +22,9 @@ import (
 const (
 	minimumMiniOpacity = 0.20
 	maximumMiniOpacity = 1.00
-	// miniClockText is the timer-only window's clock size at 100 %.
-	miniClockText = 22
+	// Timer-only text sizes at 100 %: the 我方 caption above the clock, as
+	// on the Android mini card.
+	miniCaptionText, miniClockText = 11, 22
 	// Clock padding inside the timer-only pill.
 	miniPadY, miniPadX = 3, 14
 	// miniEdgeSize is the grab strip on the pill's right and bottom edges.
@@ -278,6 +279,9 @@ func (s *session) buildDetachedMiniContent() fyne.CanvasObject {
 	s.mu.Lock()
 	scale := s.cfg.UI.FontScale
 	s.mu.Unlock()
+	s.miniCaption = canvas.NewText("我方·自动·待认边", tagIdle)
+	s.miniCaption.TextSize = overlayTextSize(miniCaptionText, scale)
+	s.miniCaption.Alignment = fyne.TextAlignCenter
 	s.miniStatus = canvas.NewText("待机", tagIdle)
 	s.miniStatus.TextSize = overlayTextSize(miniClockText, scale)
 	s.miniStatus.TextStyle = fyne.TextStyle{Bold: true}
@@ -304,7 +308,8 @@ func (s *session) buildDetachedMiniContent() fyne.CanvasObject {
 	s.miniPill.StrokeColor = panelBorder
 	s.miniPill.StrokeWidth = 1
 	s.miniWindowSurface = newMiniSurface(s)
-	clock := container.New(layout.NewCustomPaddedLayout(miniPadY, miniPadY, miniPadX, miniPadX), s.miniStatus)
+	clock := container.New(layout.NewCustomPaddedLayout(miniPadY, miniPadY, miniPadX, miniPadX),
+		container.NewCenter(container.New(layout.NewCustomPaddedVBoxLayout(0), s.miniCaption, s.miniStatus)))
 	s.miniPillBox = container.NewStack(s.miniPill, clock, s.miniWindowSurface)
 	s.miniEdges = container.NewStack(
 		container.NewHBox(layout.NewSpacer(), newMiniEdge(s, false)),
@@ -369,6 +374,8 @@ func (s *session) setMiniContentScale(scale float32) {
 	if s.miniStatus != nil {
 		s.miniStatus.TextSize = s.miniTextSize(miniClockText * scale)
 		s.miniStatus.Refresh()
+		s.miniCaption.TextSize = s.miniTextSize(miniCaptionText * scale)
+		s.miniCaption.Refresh()
 	}
 	for _, button := range s.miniWindowButtons {
 		button.setScale(scale)
@@ -378,11 +385,40 @@ func (s *session) setMiniContentScale(scale float32) {
 	}
 }
 
-func miniTextValue(text string) string {
-	if text == "" || text == "—" {
-		return "待机"
+// miniSideTextLocked is the player-side caption of the Android cards.
+func (s *session) miniSideTextLocked() string {
+	switch s.cfg.UI.PlayerSide {
+	case "left":
+		return "我方·左"
+	case "right":
+		return "我方·右"
 	}
-	return text
+	switch s.side {
+	case "left":
+		return "我方·自动·左"
+	case "right":
+		return "我方·自动·右"
+	}
+	return "我方·自动·待认边"
+}
+
+// miniWaitingLocked says why no countdown runs, with the Android card's words.
+func (s *session) miniWaitingLocked() string {
+	switch {
+	case s.captureLost:
+		return "待采集"
+	case s.hold:
+		return "待识别"
+	case !s.fighting:
+		return "待机"
+	case s.side == "":
+		return "待认边"
+	}
+	opponentLeft := s.side == "right"
+	if !sideObservable(s.beads, opponentLeft) || len(sideBeads(s.beads, opponentLeft)) != s.expectedSlots(opponentLeft) {
+		return "待识别"
+	}
+	return "待替身"
 }
 
 func miniBothSideValue(text string) string {
@@ -396,7 +432,9 @@ func (s *session) miniTextLocked(primary, alternate, left, right string, dual bo
 	if s.cfg.UI.ShowBothSides {
 		return fmt.Sprintf("左%s 右%s", miniBothSideValue(left), miniBothSideValue(right))
 	}
-	primary = miniTextValue(primary)
+	if primary == "" || primary == "—" {
+		primary = s.miniWaitingLocked()
+	}
 	if dual {
 		if alternate == "" {
 			alternate = "—"
@@ -406,21 +444,19 @@ func (s *session) miniTextLocked(primary, alternate, left, right string, dual bo
 	return primary
 }
 
-func (s *session) miniCollapsedText(primary string) string {
-	s.mu.Lock()
-	text := s.miniTextLocked(primary, "", "", "", false)
-	s.mu.Unlock()
-	return text
-}
-
 func (s *session) applyDetachedMiniClock(primary string, col color.Color) {
-	s.applyDetachedMiniClockText(s.miniCollapsedText(primary), col)
+	s.mu.Lock()
+	caption, text := s.miniSideTextLocked(), s.miniTextLocked(primary, "", "", "", false)
+	s.mu.Unlock()
+	s.applyDetachedMiniClockText(caption, text, col)
 }
 
-func (s *session) applyDetachedMiniClockText(text string, col color.Color) {
+func (s *session) applyDetachedMiniClockText(caption, text string, col color.Color) {
 	if s.miniStatus == nil {
 		return
 	}
+	s.miniCaption.Text = caption
+	s.miniCaption.Refresh()
 	s.miniStatus.Text = text
 	s.miniStatus.Color = col
 	s.miniStatus.Refresh()
@@ -676,9 +712,10 @@ func (s *session) fitDetachedMiniWindow() {
 	}
 }
 
-// miniNaturalHeight is the pill height at 100 %: one clock line plus padding.
+// miniNaturalHeight is the pill height at 100 %: caption, clock and padding.
 func (s *session) miniNaturalHeight() float32 {
-	return fyne.MeasureText("8", s.miniTextSize(miniClockText), fyne.TextStyle{Bold: true}).Height + 2*miniPadY
+	return fyne.MeasureText("我", s.miniTextSize(miniCaptionText), fyne.TextStyle{}).Height +
+		fyne.MeasureText("8", s.miniTextSize(miniClockText), fyne.TextStyle{Bold: true}).Height + 2*miniPadY
 }
 
 // miniShownSize is the collapsed pill as drawn: the dragged size, never below

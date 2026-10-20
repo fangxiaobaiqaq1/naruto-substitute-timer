@@ -391,6 +391,28 @@ func TestDetachedMiniShowsFifthMizukageDualEstimates(t *testing.T) {
 	}
 }
 
+func TestDetachedMiniShowsSideCaptionAndWaitingWords(t *testing.T) {
+	s := newDetachedMiniTestSession(t, config.Default())
+	at := time.Unix(1700000000, 0)
+	for _, c := range []struct {
+		setup            func()
+		caption, waiting string
+	}{
+		{func() {}, "我方·自动·待认边", "待机"},
+		{func() { s.captureLost = true }, "我方·自动·待认边", "待采集"},
+		{func() { s.captureLost, s.fighting = false, true }, "我方·自动·待认边", "待认边"},
+		{func() { s.side = "left" }, "我方·自动·左", "待识别"},
+		{func() { s.beads = testBeads(4, 4) }, "我方·自动·左", "待替身"},
+		{func() { s.cfg.UI.PlayerSide, s.side = "right", "right" }, "我方·右", "待替身"},
+	} {
+		c.setup()
+		applyDetachedClockAt(s, at)
+		if s.miniCaption.Text != c.caption || s.miniStatus.Text != c.waiting {
+			t.Fatalf("mini shows %q / %q, want %q / %q", s.miniCaption.Text, s.miniStatus.Text, c.caption, c.waiting)
+		}
+	}
+}
+
 func TestDetachedMiniTextDoesNotExposeSide(t *testing.T) {
 	s := newDetachedMiniTestSession(t, config.Default())
 
