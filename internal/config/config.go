@@ -121,6 +121,20 @@ type LayoutConfig struct {
 	SpacingTolerance                   float64                  `json:"spacingTolerance"`
 	MirrorTolerance                    float64                  `json:"mirrorTolerance"`
 	RelocalizeAfterLowConfidenceFrames int                      `json:"relocalizeAfterLowConfidenceFrames"`
+	// Calibration holds the player's own boxes; nil keeps the automatic layout.
+	Calibration *RegionCalibration `json:"calibration,omitempty"`
+}
+
+// RegionCalibration is drawn by the player on one captured frame (see
+// docs/区域校准.md). Rects are fractions of the whole frame; each one is
+// independent and nil means automatic for that region and side.
+type RegionCalibration struct {
+	// Profile is the layout (camp/duel) of the frame the boxes were drawn on.
+	Profile     string          `json:"profile"`
+	LeftBeads   *NormalizedRect `json:"leftBeads,omitempty"`
+	RightBeads  *NormalizedRect `json:"rightBeads,omitempty"`
+	LeftAvatar  *NormalizedRect `json:"leftAvatar,omitempty"`
+	RightAvatar *NormalizedRect `json:"rightAvatar,omitempty"`
 }
 
 // LayoutProfile keeps camp and duel calibration independent. Coordinates are

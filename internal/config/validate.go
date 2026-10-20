@@ -103,6 +103,19 @@ func Validate(c Config) error {
 			}
 		}
 	}
+	if cal := c.Layout.Calibration; cal != nil {
+		if cal.Profile != "camp" && cal.Profile != "duel" {
+			return fmt.Errorf("layout.calibration.profile: must be camp or duel")
+		}
+		for name, r := range map[string]*NormalizedRect{"leftBeads": cal.LeftBeads, "rightBeads": cal.RightBeads, "leftAvatar": cal.LeftAvatar, "rightAvatar": cal.RightAvatar} {
+			if r == nil {
+				continue
+			}
+			if err := validateRect("layout.calibration."+name, *r); err != nil {
+				return err
+			}
+		}
+	}
 	if c.Layout.RelocalizeAfterLowConfidenceFrames <= 0 {
 		return fmt.Errorf("layout.relocalizeAfterLowConfidenceFrames: must be positive")
 	}

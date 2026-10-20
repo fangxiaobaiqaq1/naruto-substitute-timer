@@ -103,6 +103,22 @@ class Settings(context: Context) {
         @Synchronized get() = prefs.getInt(KEY_OVERLAY_Y, Int.MIN_VALUE)
         set(value) = put(KEY_OVERLAY_Y) { putInt(KEY_OVERLAY_Y, value) }
 
+    /** 区域校准（docs/区域校准.md）：画框时画面的布局，"camp" / "duel"。 */
+    var calibProfile: String
+        @Synchronized get() = if (prefs.getString(KEY_CALIB_PROFILE, "duel") == "camp") "camp" else "duel"
+        set(value) = put(KEY_CALIB_PROFILE) { putString(KEY_CALIB_PROFILE, if (value == "camp") "camp" else "duel") }
+
+    /** One calibration box ([KEY_CALIB_RECTS]) as x,y,w,h fractions of the frame; null = automatic. */
+    @Synchronized
+    fun calibRect(key: String): FloatArray? {
+        val v = prefs.getString(key, "")!!.split(',').mapNotNull { it.trim().toFloatOrNull() }
+        if (v.size != 4 || v[2] <= 0f || v[3] <= 0f || v[0] < 0f || v[1] < 0f || v[0] + v[2] > 1f || v[1] + v[3] > 1f) return null
+        return v.toFloatArray()
+    }
+
+    fun setCalibRect(key: String, rect: FloatArray?) =
+        put(key) { putString(key, rect?.joinToString(",") ?: "") }
+
     /** 是否优先使用 MediaProjection（false = 只用无障碍截屏）。 */
     var preferProjection: Boolean
         @Synchronized get() = prefs.getBoolean(KEY_PREFER_PROJECTION, true)
@@ -149,6 +165,13 @@ class Settings(context: Context) {
         const val KEY_UPDATE_SOURCE = "updateSource"
         const val KEY_AUTO_UPDATES = "autoCheckUpdates"
         const val KEY_DEBUG = "debug"
+        const val KEY_CALIB_PROFILE = "calibProfile"
+        const val KEY_CALIB_LEFT_BEADS = "calibLeftBeads"
+        const val KEY_CALIB_RIGHT_BEADS = "calibRightBeads"
+        const val KEY_CALIB_LEFT_AVATAR = "calibLeftAvatar"
+        const val KEY_CALIB_RIGHT_AVATAR = "calibRightAvatar"
+        /** Native order: left beads, right beads, left avatar, right avatar. */
+        val KEY_CALIB_RECTS = listOf(KEY_CALIB_LEFT_BEADS, KEY_CALIB_RIGHT_BEADS, KEY_CALIB_LEFT_AVATAR, KEY_CALIB_RIGHT_AVATAR)
         /** The overlay card is designed at 100 %; the old one-line pill used 75 %. */
         const val DEFAULT_FONT_SCALE = 1.00f
         const val FONT_SCALE_MIN = 0.25f
