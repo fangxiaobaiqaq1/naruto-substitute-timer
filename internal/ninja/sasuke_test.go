@@ -23,7 +23,7 @@ func TestSasukeXiayinNameAndBoundedGeometryHint(t *testing.T) {
 
 func testSasukeNameAndHint(t *testing.T, file string) {
 	t.Helper()
-	data, err := templates.ReadFile("templates/" + file)
+	data, err := diskTemplates.ReadFile("templates/" + file)
 	if err != nil {
 		t.Fatal(err)
 	}

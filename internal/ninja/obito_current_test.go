@@ -13,7 +13,7 @@ import (
 )
 
 func TestObitoCurrentTemplateRejectsPartialVersion(t *testing.T) {
-	data, err := templates.ReadFile("templates/obito_current.png")
+	data, err := diskTemplates.ReadFile("templates/obito_current.png")
 	if err != nil {
 		t.Fatal(err)
 	}
