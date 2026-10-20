@@ -193,7 +193,13 @@ func BenchmarkFrames(b *testing.B) {
 }
 
 // TestFrameFootprint prints heap and RSS after building the engine and after
-// 200 frames. Run it alone in a fresh process (NARUTO_FOOTPRINT=1).
+// 200 frames. Run it alone in a fresh process (NARUTO_FOOTPRINT=1). Only one
+// frame buffer is alive (perturbed in place, like a reused capture slot), so
+// the numbers are engine + one frame; NARUTO_FOOTPRINT_RING=3 keeps three
+// frame buffers like the live capture ring and NARUTO_FOOTPRINT_FRAMES sets
+// the frame count. "retained" is HeapInuse after two GCs (pool victims
+// flushed); VmHWM is the peak RSS; cpu is the process user+sys time of the
+// frame loop (GOGC/GOMEMLIMIT studies).
 func TestFrameFootprint(t *testing.T) {
 	if os.Getenv("NARUTO_FOOTPRINT") == "" {
 		t.Skip("set NARUTO_FOOTPRINT=1 (fresh process) to measure the footprint")
@@ -207,13 +213,16 @@ func TestFrameFootprint(t *testing.T) {
 		byName[sc.name] = sc
 	}
 	report := func(stage string) {
-		runtime.GC()
 		var ms runtime.MemStats
 		runtime.ReadMemStats(&ms)
+		inuse := ms.HeapInuse
+		runtime.GC()
+		runtime.GC()
+		var after runtime.MemStats
+		runtime.ReadMemStats(&after)
 		rss, hwm := procStatus("VmRSS"), procStatus("VmHWM")
-		t.Logf("%-28s HeapInuse=%6.1f MiB HeapSys=%6.1f MiB Sys=%6.1f MiB VmRSS=%6.1f MiB VmHWM=%6.1f MiB", stage,
-			float64(ms.HeapInuse)/(1<<20), float64(ms.HeapSys)/(1<<20), float64(ms.Sys)/(1<<20), rss/1024, hwm/1024)
-		fmt.Printf("footprint %s heapinuse=%d vmrss_kb=%.0f vmhwm_kb=%.0f\n", stage, ms.HeapInuse, rss, hwm)
+		t.Logf("%-44s HeapInuse=%6.1f MiB retained=%6.1f MiB HeapSys=%6.1f MiB VmRSS=%6.1f MiB VmHWM=%6.1f MiB", stage,
+			float64(inuse)/(1<<20), float64(after.HeapInuse)/(1<<20), float64(after.HeapSys)/(1<<20), rss/1024, hwm/1024)
 	}
 	report("start")
 	for _, name := range names {
@@ -224,15 +233,45 @@ func TestFrameFootprint(t *testing.T) {
 		cfg := perfConfig(t, sc)
 		timed := perfNew(t, cfg)
 		report(name + "/engine")
-		frames := perturbVariants(perfLoad(t, sc, cfg), perfVariants)
+		ring := []*image.RGBA{perfLoad(t, sc, cfg)}
+		if n, _ := strconv.Atoi(os.Getenv("NARUTO_FOOTPRINT_RING")); n > 1 {
+			for range n - 1 {
+				c := image.NewRGBA(ring[0].Rect)
+				copy(c.Pix, ring[0].Pix)
+				ring = append(ring, c)
+			}
+		}
 		report(name + "/engine+frames")
+		frames := 200
+		if n, _ := strconv.Atoi(os.Getenv("NARUTO_FOOTPRINT_FRAMES")); n > 0 {
+			frames = n
+		}
 		at := perfBase
-		for i := range 200 {
-			timed.AnalyzeAt(frames[i%len(frames)], at)
+		cpu := processCPU()
+		for i := range frames {
+			img := ring[i%len(ring)]
+			perturbInPlace(img, (i/len(ring))%perfVariants)
+			timed.AnalyzeAt(img, at)
 			at = at.Add(perfFrameStep)
 		}
-		report(name + "/200-frames")
+		cpu = processCPU() - cpu
+		report(fmt.Sprintf("%s/%d-frames", name, frames))
+		t.Logf("%-44s cpu=%v (%.2f ms/frame) GOGC=%q GOMEMLIMIT=%q", name, cpu.Round(time.Millisecond), float64(cpu.Microseconds())/1000/float64(frames), os.Getenv("GOGC"), os.Getenv("GOMEMLIMIT"))
 		runtime.KeepAlive(timed)
+		runtime.KeepAlive(ring)
+	}
+}
+
+// perturbInPlace flips the low green bit on lattice k (see perturbVariants):
+// successive calls with different k always change every 6x6 window.
+func perturbInPlace(img *image.RGBA, k int) {
+	b := img.Bounds()
+	px, py := k%6, (k*5+1)%6
+	for y := b.Min.Y + py; y < b.Max.Y; y += 6 {
+		row := img.Pix[(y-b.Min.Y)*img.Stride:]
+		for x := px; x < b.Dx(); x += 6 {
+			row[x*4+1] ^= 1
+		}
 	}
 }
 
