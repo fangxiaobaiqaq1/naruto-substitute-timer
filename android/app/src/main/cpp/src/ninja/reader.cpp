@@ -112,12 +112,22 @@ evidence Reader::read(const RGBA* img, Rect roi, double scale) { return readAnch
 
 evidence Reader::readAnchored(const RGBA* img, Rect roi, double scale, const portraitAnchor& anchor) {
     if (img == nullptr || scale <= 0 || std::isnan(scale) || std::isinf(scale)) return evidence{};
-    std::vector<scaledName> preparedCopy;
+    std::shared_ptr<const std::vector<scaledName>> preparedSet;
     {
         std::lock_guard<std::mutex> lock(mu);
-        if (prepared.empty() || this->scale != scale) {
-            prepared.clear();
-            this->scale = scale;
+        // Templates are pure functions of (source, scale). Keep the last few
+        // scales instead of only one: a calibrated left/right pair (and camp vs
+        // duel) can carry different scales and used to rebuild on every call.
+        for (size_t i = 0; i < prepared.size(); ++i) {
+            if (prepared[i].first == scale) {
+                preparedSet = prepared[i].second;
+                if (i != 0) std::rotate(prepared.begin(), prepared.begin() + static_cast<ptrdiff_t>(i),
+                                        prepared.begin() + static_cast<ptrdiff_t>(i) + 1);
+                break;
+            }
+        }
+        if (preparedSet == nullptr) {
+            auto set = std::make_shared<std::vector<scaledName>>();
             for (const auto& t : source) {
                 int w = iround(static_cast<double>(t.gray.Bounds().Dx()) * scale);
                 int h = iround(static_cast<double>(t.gray.Bounds().Dy()) * scale);
@@ -139,13 +149,15 @@ evidence Reader::readAnchored(const RGBA* img, Rect roi, double scale, const por
                     p.portrait = match::PrepareNCC(&portrait, nullptr);
                     p.portraitSize = portrait.Bounds().Size();
                 }
-                prepared.push_back(std::move(p));
+                set->push_back(std::move(p));
             }
+            preparedSet = set;
+            prepared.insert(prepared.begin(), {scale, preparedSet});
+            if (prepared.size() > maxPreparedScales) prepared.resize(maxPreparedScales);
         }
-        // Go 复制的是切片头（共享不可变模板）；这里复制 shared_ptr，模板本身不可变。
-        preparedCopy = prepared;
     }
-    const std::vector<scaledName>& templates = preparedCopy;
+    // Go 复制的是切片头（共享不可变模板）；这里共享不可变的模板集。
+    const std::vector<scaledName>& templates = *preparedSet;
     // 百战鼬 requires two independent, current-frame signals: its complete title
     // and its fixed right-HUD portrait. The portrait alone cannot move the bean
     // row or turn a base Itachi into the 百战 skin.
@@ -161,6 +173,13 @@ evidence Reader::readAnchored(const RGBA* img, Rect roi, double scale, const por
                                       std::max(1, iround(static_cast<double>(gray.Bounds().Dy()) * factor)));
     // NCC reads only the Image bounds when Gray is supplied.
     RGBA smallImage(nullptr, 0, smallGray.Bounds());
+    // Every coarse locate scans the whole small image: share its prefix sums.
+    thread_local match::grayPrefix smallPrefix;
+    const match::grayPrefix* smallPre = nullptr;
+    if (smallGray.Bounds().Dx() <= match::maxDotRun) {
+        match::newGrayPrefix(smallPrefix, smallGray, 0, 0, smallGray.Bounds().Dx(), smallGray.Bounds().Dy());
+        smallPre = &smallPrefix;
+    }
     // Each template's locate+refine pair is independent and only reads the
     // shared pixels and its immutable prepared templates, so they run
     // concurrently. The reduction below stays sequential in prepared order with
@@ -177,6 +196,7 @@ evidence Reader::readAnchored(const RGBA* img, Rect roi, double scale, const por
         cq.Gray = &smallGray;
         cq.ROI = smallImage.Bounds();
         cq.Prepared = t.coarse.get();
+        cq.Prefix = smallPre;
         match::Score coarse;
         if (!match::NCC{}.Match(cq, coarse) || coarse.Value < .55) return;
         Point point(roi.Min.X + iround(static_cast<double>(coarse.Peak.X) / factor),

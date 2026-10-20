@@ -30,21 +30,28 @@ struct avatarIndexEntry {
     std::string SHA256;        // "sha256"（bundled manifest format）
 };
 
-// avatarSize keys the per-entry scaled template cache.
-struct avatarSize {
-    int w = 0, h = 0;
-    bool operator<(const avatarSize& o) const { return w != o.w ? w < o.w : h < o.h; }
-};
-
 struct avatarEntry {
     std::string id, name, baseName;
     std::shared_ptr<const AssetImage> data;  // Go: PNG 字节；这里是已解码像素，decode() 只做灰度/掩膜
-    PreparedPtr thumb;
-    Gray thumbGray, thumbMask;
+    // Go 的 16² thumb 从未被读取，Android 不再生成（省内存与加载时间）。
     Gray coarseGray, coarseMask;
     Gray gray, mask;  // 懒计算（Go decode()）
-    bool scaledValid = false;  // Go: scaled == nil
-    std::map<avatarSize, PreparedPtr> scaled;
+};
+
+// avatarTemplateKey keys the catalog's scaled-template cache: one entry at one
+// pixel size. The prepared template is a pure function of (entry, w, h), so a
+// cached template is valid for every scale/side that asks for that size.
+struct avatarTemplateKey {
+    const avatarEntry* entry = nullptr;
+    int w = 0, h = 0;
+    bool operator==(const avatarTemplateKey& o) const { return entry == o.entry && w == o.w && h == o.h; }
+};
+
+struct avatarTemplateKeyHash {
+    size_t operator()(const avatarTemplateKey& k) const {
+        return std::hash<const void*>()(k.entry) ^ (static_cast<size_t>(k.w) * 0x9e3779b1u) ^
+               (static_cast<size_t>(k.h) * 0x85ebca6bu);
+    }
 };
 
 struct avatarFinalist {
@@ -65,17 +72,25 @@ public:
     AvatarMatch Match(const RGBA* img, Rect roi, double scale);
     // gray 为 nullptr 时内部转换（Go: gray == nil）。
     AvatarMatch matchEntries(const RGBA& view, const Gray* gray, double scale, const std::vector<avatarEntry*>& entries);
-    void evictTemplates(double scale);
     PreparedPtr prepared(avatarEntry* entry, int w, int h);
-    int templateCacheCap() const;
 
     std::vector<std::unique_ptr<avatarEntry>> entries;
     std::unordered_map<std::string, avatarEntry*> byID;
-    double cacheScale = 0;
-    int cachedEntries = 0;
-    // cacheWipes counts overflow wipes of the scaled template cache; a single
-    // scan must never trigger one.
-    int cacheWipes = 0;
+    // Scaled-template cache (caller holds mu): keyed by (entry, w, h) instead of
+    // one global scale, so calibrated sides with different portrait scales (or
+    // camp/duel) never wipe each other's templates. Bounded by bytes, least
+    // recently used first; templates of the scan in progress are the newest.
+    struct cachedTemplate {
+        PreparedPtr prepared;
+        size_t bytes = 0;
+        uint64_t used = 0;
+    };
+    std::unordered_map<avatarTemplateKey, cachedTemplate, avatarTemplateKeyHash> templates;
+    size_t templateBytes = 0;
+    size_t templateCacheCap = static_cast<size_t>(16) << 20;
+    uint64_t templateClock = 0;
+    // templateEvictions counts LRU evictions (diagnostics/tests).
+    int templateEvictions = 0;
     // 注意：Match / matchEntries 可能被 rgb 的两侧并行体同时调用，因此不使用成员级
     // 临时缓冲（Go 每次调用都新分配）。
     std::mutex mu;  // Go c.mu
@@ -94,11 +109,13 @@ public:
     bool decode(avatarEntry* entry);
 };
 
-// avatarJobScore only reads the immutable template and the caller's pixels.
-double avatarJobScore(const RGBA& view, const Gray* gray, const match::PreparedNCC* prepared);
+// avatarJobScore only reads the immutable template and the caller's pixels
+// (prefix: optional shared prefix sums of *gray, see match::Query::Prefix).
+double avatarJobScore(const RGBA& view, const Gray* gray, const match::PreparedNCC* prepared,
+                      const match::grayPrefix* prefix = nullptr);
 
 // loadAvatarCatalog：解析 index.json，逐条校验 id / sha256（对照 AssetStore 的 "<path>.sha256"），
-// 生成 16² thumb 与 36² coarse。任何一条失败返回 nullptr（Go 返回 error）。
+// 生成 36² coarse。任何一条失败返回 nullptr（Go 返回 error）。
 std::shared_ptr<AvatarCatalog> loadAvatarCatalog(const std::string& indexJSON, const std::string& dir,
                                                  std::string* err);
 

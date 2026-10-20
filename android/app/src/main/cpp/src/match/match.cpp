@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <vector>
 
 namespace nt::match {
 
@@ -136,7 +137,7 @@ nt::Gray ToGray(const nt::RGBA* src) {
         return nt::Gray::New(MakeRect(0, 0, 0, 0));
     }
     const Rect b = src->Bounds();
-    nt::Gray out = nt::Gray::New(MakeRect(0, 0, b.Dx(), b.Dy()));
+    nt::Gray out = nt::Gray::NewUninit(MakeRect(0, 0, b.Dx(), b.Dy()));
     // RGBA subimages keep their parent Pix and Stride. 视图的 Pix 已指向 Rect.Min，
     // 因此子图按其自身当前像素转换，而不是父图左上角。
     const int w = b.Dx();
@@ -157,7 +158,7 @@ nt::Gray ToGray(const nt::Gray* src) {
     if (src == nullptr) {
         return nt::Gray::New(MakeRect(0, 0, 0, 0));
     }
-    nt::Gray out = nt::Gray::New(src->Bounds());
+    nt::Gray out = nt::Gray::NewUninit(src->Bounds());
     const int w = src->Bounds().Dx();
     for (int y = 0; y < src->Bounds().Dy(); ++y) {
         std::memcpy(out.Pix + static_cast<ptrdiff_t>(y) * out.Stride, src->Pix + static_cast<ptrdiff_t>(y) * src->Stride,
@@ -173,7 +174,7 @@ nt::Gray ToGray(const nt::Gray* src) {
 // GoLumaFromNRGBA 对三种情况都与 Go 逐位一致。
 nt::Gray ToGrayAsset(const AssetImage& src) {
     const int w = src.Width, h = src.Height;
-    nt::Gray out = nt::Gray::New(MakeRect(0, 0, w, h));
+    nt::Gray out = nt::Gray::NewUninit(MakeRect(0, 0, w, h));
     for (int y = 0; y < h; ++y) {
         const uint8_t* p = src.Pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(w) * 4;
         uint8_t* dst = out.Pix + static_cast<ptrdiff_t>(y) * out.Stride;
@@ -185,6 +186,8 @@ nt::Gray ToGrayAsset(const AssetImage& src) {
 }
 
 // ScaleGray 双线性缩放到指定尺寸。
+// 每列的源坐标/权重与每行的源行/权重只算一次（与逐像素写法是同一组 double 运算），
+// 内层循环直接读行指针；像素值的加权和保持原来的运算顺序，结果逐位相同。
 nt::Gray ScaleGray(const nt::Gray* src, int w, int h) {
     if (src == nullptr) {
         return nt::Gray::New(MakeRect(0, 0, 0, 0));
@@ -193,10 +196,10 @@ nt::Gray ScaleGray(const nt::Gray* src, int w, int h) {
     if (h < 1) h = 1;
     const Rect sb = src->Bounds();
     const int sw = sb.Dx(), sh = sb.Dy();
-    nt::Gray dst = nt::Gray::New(MakeRect(0, 0, w, h));
     if (sw < 1 || sh < 1) {
-        return dst;
+        return nt::Gray::New(MakeRect(0, 0, w, h));
     }
+    nt::Gray dst = nt::Gray::NewUninit(MakeRect(0, 0, w, h));
     if (sw == w && sh == h) {
         for (int y = 0; y < h; ++y) {
             std::memcpy(dst.Pix + static_cast<ptrdiff_t>(y) * dst.Stride, src->Pix + static_cast<ptrdiff_t>(y) * src->Stride,
@@ -204,6 +207,23 @@ nt::Gray ScaleGray(const nt::Gray* src, int w, int h) {
         }
         return dst;
     }
+    struct column {
+        int x0, x1;
+        double wx, omx;  // omx == 1 - wx
+    };
+    thread_local std::vector<column> columns;
+    columns.resize(static_cast<size_t>(w));
+    for (int x = 0; x < w; ++x) {
+        double fx = (static_cast<double>(x) + 0.5) * static_cast<double>(sw) / static_cast<double>(w) - 0.5;
+        if (fx < 0) fx = 0;
+        int x0 = static_cast<int>(fx);
+        int x1 = x0 + 1;
+        if (x0 >= sw) x0 = sw - 1;
+        if (x1 >= sw) x1 = sw - 1;
+        const double wx = fx - static_cast<double>(x0);
+        columns[static_cast<size_t>(x)] = column{x0, x1, wx, 1 - wx};
+    }
+    const column* cols = columns.data();
     for (int y = 0; y < h; ++y) {
         double fy = (static_cast<double>(y) + 0.5) * static_cast<double>(sh) / static_cast<double>(h) - 0.5;
         if (fy < 0) fy = 0;
@@ -212,20 +232,19 @@ nt::Gray ScaleGray(const nt::Gray* src, int w, int h) {
         if (y0 >= sh) y0 = sh - 1;
         if (y1 >= sh) y1 = sh - 1;
         const double wy = fy - static_cast<double>(y0);
+        const double omy = 1 - wy;
+        const uint8_t* r0 = src->Pix + static_cast<ptrdiff_t>(y0) * src->Stride;
+        const uint8_t* r1 = src->Pix + static_cast<ptrdiff_t>(y1) * src->Stride;
+        uint8_t* out = dst.Pix + static_cast<ptrdiff_t>(y) * dst.Stride;
         for (int x = 0; x < w; ++x) {
-            double fx = (static_cast<double>(x) + 0.5) * static_cast<double>(sw) / static_cast<double>(w) - 0.5;
-            if (fx < 0) fx = 0;
-            int x0 = static_cast<int>(fx);
-            int x1 = x0 + 1;
-            if (x0 >= sw) x0 = sw - 1;
-            if (x1 >= sw) x1 = sw - 1;
-            const double wx = fx - static_cast<double>(x0);
-            const double v00 = static_cast<double>(src->GrayAt(sb.Min.X + x0, sb.Min.Y + y0));
-            const double v10 = static_cast<double>(src->GrayAt(sb.Min.X + x1, sb.Min.Y + y0));
-            const double v01 = static_cast<double>(src->GrayAt(sb.Min.X + x0, sb.Min.Y + y1));
-            const double v11 = static_cast<double>(src->GrayAt(sb.Min.X + x1, sb.Min.Y + y1));
-            const double v = (1 - wx) * (1 - wy) * v00 + wx * (1 - wy) * v10 + (1 - wx) * wy * v01 + wx * wy * v11;
-            dst.SetGray(x, y, static_cast<uint8_t>(v + 0.5));
+            const column& c = cols[x];
+            const double v00 = static_cast<double>(r0[c.x0]);
+            const double v10 = static_cast<double>(r0[c.x1]);
+            const double v01 = static_cast<double>(r1[c.x0]);
+            const double v11 = static_cast<double>(r1[c.x1]);
+            // Same operations, same order: (1-wx)*(1-wy)*v00 + wx*(1-wy)*v10 + (1-wx)*wy*v01 + wx*wy*v11.
+            const double v = c.omx * omy * v00 + c.wx * omy * v10 + c.omx * wy * v01 + c.wx * wy * v11;
+            out[x] = static_cast<uint8_t>(v + 0.5);
         }
     }
     return dst;
@@ -240,7 +259,7 @@ nt::RGBA CropRGBA(const nt::RGBA* src, const Rect& r0) {
     if (r.Empty()) {
         return nt::RGBA::New(MakeRect(0, 0, 0, 0));
     }
-    nt::RGBA out = nt::RGBA::New(MakeRect(0, 0, r.Dx(), r.Dy()));
+    nt::RGBA out = nt::RGBA::NewUninit(MakeRect(0, 0, r.Dx(), r.Dy()));
     const size_t row = static_cast<size_t>(r.Dx()) * 4;
     for (int y = 0; y < r.Dy(); ++y) {
         std::memcpy(out.Pix + static_cast<ptrdiff_t>(y) * out.Stride, src->Pix + src->PixOffset(r.Min.X, r.Min.Y + y), row);
