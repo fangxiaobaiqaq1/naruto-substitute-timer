@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "替身计时器",
+    "slug": "naruto-substitute-timer",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#10131a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.narutotimer.mobile"
+    },
+    "android": {
+      "package": "com.narutotimer.mobile"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "13.4"
+          }
+        }
+      ],
+      "./plugins/withReplayKitPlaceholder"
+    ]
+  }
+}

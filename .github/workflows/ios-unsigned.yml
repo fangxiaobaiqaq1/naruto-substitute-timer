@@ -1,0 +1,100 @@
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "ios-unsigned-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: expo
+    env:
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
+      # Expo 51 / React Native 0.74 use the older Xcode toolchain, not macos-latest.
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: expo/package-lock.json
+      - name: Install dependencies and check TypeScript
+        run: |
+          npm ci --include=dev
+          npm run typecheck
+          npm test
+      - name: Generate iOS project and install pods
+        run: |
+          npx --no-install expo prebuild --platform ios --no-install
+          pod install --project-directory=ios
+      - name: Build unsigned device app
+        run: |
+          shopt -s nullglob
+          workspaces=(ios/*.xcworkspace)
+          [[ ${#workspaces[@]} -eq 1 ]] || { echo "::error::Expected one iOS workspace"; exit 1; }
+          scheme="$(basename "${workspaces[0]}" .xcworkspace)"
+          xcodebuild \
+            -workspace "${workspaces[0]}" \
+            -scheme "$scheme" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ios-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+      - name: Validate device app and package IPA
+        run: |
+          shopt -s nullglob
+          apps=("$RUNNER_TEMP/ios-build/Build/Products/Release-iphoneos/"*.app)
+          [[ ${#apps[@]} -eq 1 ]] || { echo "::error::Expected one Release device app"; exit 1; }
+          app="${apps[0]}"
+          test -s "$app/main.jsbundle"
+          platform="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$app/Info.plist")"
+          [[ "$platform" == iPhoneOS ]] || { echo "::error::Not a device build"; exit 1; }
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")"
+          xcrun lipo -verify_arch arm64 "$app/$executable"
+          python3 - "$app" <<'PY'
+          import json, pathlib, plistlib, sys
+          app = pathlib.Path(sys.argv[1])
+          config = json.loads(pathlib.Path('app.json').read_text())['expo']
+          target = next(p[1]['ios']['deploymentTarget'] for p in config['plugins']
+                        if isinstance(p, list) and p[0] == 'expo-build-properties')
+          def version(value):
+              parts = tuple(map(int, value.split('.')))
+              return parts + (0,) * (3 - len(parts))
+          for path in [app / 'Info.plist', *app.glob('Frameworks/*.framework/Info.plist')]:
+              info = plistlib.loads(path.read_bytes())
+              minimum = info.get('MinimumOSVersion')
+              assert minimum or path.parent != app, 'App MinimumOSVersion is missing'
+              if minimum:
+                  assert version(minimum) <= version(target), f'{path}: requires iOS {minimum}, expected <= {target}'
+                  print(f'{path.parent.name}: minimum iOS {minimum}')
+          PY
+          mkdir -p "$RUNNER_TEMP/unsigned-ipa/Payload"
+          ditto "$app" "$RUNNER_TEMP/unsigned-ipa/Payload/$(basename "$app")"
+          ditto -c -k --keepParent "$RUNNER_TEMP/unsigned-ipa/Payload" "$RUNNER_TEMP/naruto-timer-unsigned.ipa"
+          unzip -t "$RUNNER_TEMP/naruto-timer-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: naruto-timer-ios-unsigned-${{ github.run_number }}
+          path: ${{ runner.temp }}/naruto-timer-unsigned.ipa
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
