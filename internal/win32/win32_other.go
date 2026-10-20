@@ -20,3 +20,4 @@ func RefitFrameless(uintptr, uintptr) error                      { return errUns
 func CursorPos() (int32, int32, error)                           { return 0, 0, errUnsupported }
 func WindowPos(uintptr) (int32, int32, error)                    { return 0, 0, errUnsupported }
 func MoveWindowTo(uintptr, int32, int32) error                   { return errUnsupported }
+func MoveWindowOnScreen(uintptr, int32, int32) error             { return errUnsupported }

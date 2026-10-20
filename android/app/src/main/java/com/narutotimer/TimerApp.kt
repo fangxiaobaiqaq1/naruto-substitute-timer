@@ -30,6 +30,9 @@ class TimerApp : Application() {
     @Volatile var assetReport: AssetLoader.Report? = null
         private set
 
+    /** Once per process: an Activity recreation must not re-run the startup check. */
+    @Volatile var autoUpdateChecked = false
+
     private val nativeListeners = CopyOnWriteArrayList<() -> Unit>()
     private val main = Handler(Looper.getMainLooper())
 

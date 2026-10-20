@@ -14,7 +14,7 @@
         android:roundIcon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="false"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:theme="@style/Theme.NarutoTimer">
 
         <activity
             android:name=".ui.MainActivity"
@@ -26,12 +26,16 @@
             </intent-filter>
         </activity>
 
-        <!-- 透明中转页：只负责弹系统录屏授权，然后拉起前台服务。 -->
+        <!-- 透明中转页：只负责弹系统录屏授权，然后拉起前台服务。
+             独立任务：从游戏里的悬浮窗授权时不会把主界面带到前台；
+             不重建：旋转屏幕时不丢授权结果。 -->
         <activity
             android:name=".ui.ProjectionPermissionActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density|fontScale"
             android:excludeFromRecents="true"
             android:exported="false"
             android:noHistory="true"
+            android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <service

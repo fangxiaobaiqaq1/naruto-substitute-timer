@@ -6,25 +6,22 @@ package com.narutotimer.ui
 //          （窗口不透明度/字号的取值范围与步进）。
 //
 // 主界面（纯代码布局，无 AndroidX）：
-//  - 第 1 步 开启无障碍服务（悬浮窗 + 备用截屏都靠它）。
-//  - 第 2 步 授权录屏（推荐；约 60 帧/秒），或依赖无障碍截屏（约 3 帧/秒）。
-//  - 第 3 步（可选）adb 命令：PROJECT_MEDIA 免确认、命令行开启无障碍。
-//  - 状态：native 资源、无障碍、录屏、appops、FrameLoop.stats()、对局/认边，每秒刷新。
-//  - 设置（Go openSettings）：认边方式/记住认边点选即生效（Go OnChanged）；迷你/两边计时/不透明度/字号
-//    立即生效（Go 立即预览并保存）；账号名与对面忍者在"保存设置"时经 session.applySettings 生效。
-//    每次回到前台都按当前状态重建（Go：Rebuild from current state every time —— 悬浮窗的换边按钮可能改过）。
-//  - 账号名图片导入（可选）：复制到 filesDir/identity/<账号名>_<时间>.png|jpg（Go labelFromFile：
-//    文件名第一个 '_' 之前即账号名），然后 TimerApp.instance.reloadNative()。
-// 不移植：窗口置顶、OCR、GPU、更新、诊断录制、真悬浮窗开关（Android 悬浮窗始终是真悬浮窗）。
+//  - 「开始使用」三步：无障碍服务 → 悬浮计时 → 录屏识别（推荐），每步一个状态点和一个按钮。
+//  - 「实时状态」：对局/认边、识别循环、资源、录屏免确认，每秒刷新。
+//  - 「对局设置」（Go openSettings）：认边方式/记住认边点选即生效；账号名与对面忍者在"保存设置"时
+//    经 session.applySettings 生效。回到前台时只回填用户没有改动过的输入框。
+//  - 「高级设置」：悬浮窗外观、采集与调试、在线更新、电脑 ADB、账号名图片导入。
+// 不移植：窗口置顶、OCR、GPU、诊断录制、真悬浮窗开关（Android 悬浮窗始终是真悬浮窗）。
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.AppOpsManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -46,7 +43,9 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import com.narutotimer.BuildConfig
 import com.narutotimer.NativeCore
+import com.narutotimer.R
 import com.narutotimer.Settings
 import com.narutotimer.TimerApp
 import com.narutotimer.capture.FrameLoop
@@ -55,7 +54,6 @@ import com.narutotimer.service.TimerAccessibilityService
 import com.narutotimer.tracker.GoText
 import com.narutotimer.tracker.NinjaRules
 import com.narutotimer.tracker.Session
-import com.narutotimer.tracker.TimerColors
 import com.narutotimer.update.UpdateManager
 import java.io.File
 import java.text.SimpleDateFormat
@@ -68,22 +66,24 @@ class MainActivity : Activity() {
     private lateinit var settings: Settings
     private lateinit var session: Session
     private val main = Handler(Looper.getMainLooper())
-    private val density get() = resources.displayMetrics.density
+
+    /** One setup step: status dot, title, live detail and its contextual action. */
+    private class Step(val dot: View, val detail: TextView, val action: Button) {
+        var onAction: () -> Unit = {}
+        var primary = true
+    }
+
+    private lateinit var accessibilityStep: Step
+    private lateinit var overlayStep: Step
+    private lateinit var projectionStep: Step
 
     // 状态区。
-    private lateinit var nativeText: TextView
-    private lateinit var accessibilityText: TextView
-    private lateinit var overlayText: TextView
-    private lateinit var projectionText: TextView
-    private lateinit var appOpsText: TextView
-    private lateinit var loopText: TextView
     private lateinit var matchText: TextView
-    private lateinit var openAccessibilityBtn: Button
-    private lateinit var startProjectionBtn: Button
-    private lateinit var stopProjectionBtn: Button
-    private lateinit var startOverlayBtn: Button
-    private lateinit var stopOverlayBtn: Button
+    private lateinit var loopText: TextView
+    private lateinit var nativeText: TextView
+    private lateinit var appOpsText: TextView
     private lateinit var restartOverlayBtn: Button
+    private lateinit var positionBtn: Button
 
     // 设置区。
     private lateinit var sideGroup: RadioGroup
@@ -111,7 +111,9 @@ class MainActivity : Activity() {
     /** 程序化回填控件时为 true：控件回调不得再写回 Session/Settings。 */
     private var syncing = false
     private var resumed = false
-    private var autoUpdateChecked = false
+    /** Values last written into the text fields; a different value means the user is typing. */
+    private var loadedNames: String? = null
+    private var loadedNinja: String? = null
 
     private val statusTick = object : Runnable {
         override fun run() {
@@ -132,8 +134,19 @@ class MainActivity : Activity() {
         app = application as TimerApp
         settings = app.settings
         session = app.session
-        title = getString(com.narutotimer.R.string.app_name)
+        pendingIdentityLabel = savedInstanceState?.getString(STATE_IDENTITY_LABEL).orEmpty()
+        title = getString(R.string.app_name)
         setContentView(buildContent())
+        // Android 13+: without this the recognition service's notification (and
+        // its stop button) is silently hidden.
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(STATE_IDENTITY_LABEL, pendingIdentityLabel)
     }
 
     override fun onResume() {
@@ -144,8 +157,9 @@ class MainActivity : Activity() {
         loadFromSettings()
         main.removeCallbacks(statusTick)
         statusTick.run()
-        if (!autoUpdateChecked && settings.autoCheckUpdates) {
-            autoUpdateChecked = true
+        UpdateManager.resumePendingInstall(this)
+        if (!app.autoUpdateChecked && settings.autoCheckUpdates) {
+            app.autoUpdateChecked = true
             UpdateManager.check(this, settings, quiet = true)
         }
     }
@@ -163,85 +177,53 @@ class MainActivity : Activity() {
     private fun buildContent(): View {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(14), dp(16), dp(28))
+            setPadding(dp(16), dp(18), dp(16), dp(32))
         }
 
-        fun add(parent: ViewGroup, child: View, top: Int = 8) {
-            parent.addView(child, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(top) })
-        }
+        // 头部：应用名 + 版本。
+        val titleRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        titleRow.addView(Ui.text(this, getString(R.string.app_name), 24f, Ui.TEXT, bold = true),
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        titleRow.addView(Ui.text(this, "v" + BuildConfig.VERSION_NAME, 12f, Ui.ACCENT).apply {
+            background = Ui.rounded(this@MainActivity, Ui.SURFACE_2, 10f)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+        })
+        Ui.add(content, titleRow, 0f)
+        Ui.add(content, Ui.note(this, "火影忍者手游 · 对面替身冷却悬浮计时"), 2f)
 
-        add(content, text(getString(com.narutotimer.R.string.main_title), 21f, bold = true).apply {
-            setTextColor(TimerColors.CLOCK_LIVE)
-        }, 0)
-        add(content, note("先开启无障碍，再按需授权录屏。状态和常用操作集中在上方。"), 2)
-
-        // 状态卡：一眼确认资源、服务和识别循环是否正常。
-        val statusCard = card()
-        add(statusCard, text("运行状态", 17f, bold = true).apply { setTextColor(TimerColors.CLOCK_LIVE) }, 0)
-        nativeText = text("", 14f).also { add(statusCard, it, 8) }
-        accessibilityText = text("", 14f).also { add(statusCard, it, 4) }
-        overlayText = text("", 14f).also { add(statusCard, it, 4) }
-        projectionText = text("", 14f).also { add(statusCard, it, 4) }
-        appOpsText = text("", 13f).also { add(statusCard, it, 4) }
-        loopText = text("", 13f).also { add(statusCard, it, 4) }
-        matchText = text("", 14f).also { add(statusCard, it, 4) }
-        add(content, statusCard, 14)
-
-        // 三个主操作保持大触控区域，避免用户在手机上寻找按钮。
-        val actionsCard = card()
-        add(actionsCard, text("快速操作", 17f, bold = true).apply { setTextColor(TimerColors.CLOCK_LIVE) }, 0)
-        openAccessibilityBtn = button(getString(com.narutotimer.R.string.action_open_accessibility)) { openAccessibilitySettings() }
-        startOverlayBtn = button("启动悬浮窗") {
-            TimerAccessibilityService.instance?.startOverlay() ?: toast("请先开启并连接无障碍服务")
-            main.postDelayed({ refreshStatus() }, 300)
-        }
-        stopOverlayBtn = button("停止悬浮窗") {
-            TimerAccessibilityService.instance?.stopOverlay() ?: toast("无障碍服务未连接")
-            main.postDelayed({ refreshStatus() }, 300)
-        }
-        restartOverlayBtn = button("重启悬浮窗") {
+        // 开始使用：每一步一个状态点、一句状态和一个按钮。
+        val setup = Ui.card(this)
+        Ui.add(setup, Ui.title(this, "开始使用"), 0f)
+        accessibilityStep = step(setup, "1", "无障碍服务", "悬浮窗和备用截屏都需要它")
+        overlayStep = step(setup, "2", "悬浮计时", "在游戏画面上显示替身冷却")
+        projectionStep = step(setup, "3", "录屏识别（推荐）", "约 60 帧/秒；不开启时用无障碍截屏")
+        restartOverlayBtn = Ui.button(this, "重启悬浮窗") {
             TimerAccessibilityService.instance?.restartOverlay() ?: toast("请先开启并连接无障碍服务")
             main.postDelayed({ refreshStatus() }, 500)
         }
-        startProjectionBtn = button(getString(com.narutotimer.R.string.action_start_projection)) {
-            ProjectionPermissionActivity.launch(this)
+        positionBtn = Ui.button(this, "调整位置") {
+            TimerAccessibilityService.instance?.beginPositionEdit() ?: toast("请先开启并连接无障碍服务")
+            if (TimerAccessibilityService.instance?.isOverlayRunning == true) toast("回到游戏后拖动计时卡片，点击卡片完成")
         }
-        stopProjectionBtn = button(getString(com.narutotimer.R.string.action_stop_projection)) {
-            ProjectionCaptureService.stop(this)
-            main.postDelayed({ refreshStatus() }, 300)
-        }
-        val actionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        add(actionRow, openAccessibilityBtn, 8)
-        add(actionRow, startOverlayBtn, 6)
-        add(actionRow, stopOverlayBtn, 6)
-        add(actionRow, restartOverlayBtn, 6)
-        add(actionRow, startProjectionBtn, 6)
-        add(actionRow, stopProjectionBtn, 6)
-        add(actionsCard, actionRow, 0)
-        add(actionsCard, button("调整显示位置") {
-            TimerAccessibilityService.instance?.beginPositionEdit()
-                ?: toast("请先开启并连接无障碍服务")
-        }, 6)
-        add(actionsCard, button("权限指引") { showPermissionGuide() }, 6)
-        add(content, actionsCard, 10)
+        Ui.add(setup, Ui.row(this, restartOverlayBtn, positionBtn, Ui.button(this, "权限指引") { showPermissionGuide() }), 14f)
+        Ui.add(content, setup, 16f)
 
-        // 最常用的设置不折叠：手机竖屏下仍能快速切换认边方式。
-        val basicsCard = card()
-        add(basicsCard, text("对局设置", 17f, bold = true).apply { setTextColor(TimerColors.CLOCK_LIVE) }, 0)
-        add(basicsCard, text("我方所在边", 14f, bold = true), 10)
+        // 实时状态。
+        val status = Ui.card(this)
+        Ui.add(status, Ui.title(this, "实时状态"), 0f)
+        matchText = Ui.text(this, "", 15f, Ui.TEXT, bold = true).also { Ui.add(status, it, 8f) }
+        loopText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(status, it, 4f) }
+        nativeText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(status, it, 4f) }
+        appOpsText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(status, it, 4f) }
+        Ui.add(content, status, 12f)
+
+        // 对局设置：最常用的设置不折叠。
+        val basics = Ui.card(this)
+        Ui.add(basics, Ui.title(this, "对局设置"), 0f)
+        Ui.add(basics, Ui.text(this, "我方所在边", 13f, Ui.TEXT_2), 10f)
         sideGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
         SIDE_LABELS.forEachIndexed { i, label ->
-            val rb = RadioButton(this).apply {
-                text = label
-                id = View.generateViewId()
-                minHeight = dp(48)
-                setPadding(dp(2), 0, dp(10), 0)
-            }
+            val rb = radio(label)
             sideIds[i] = rb.id
             sideGroup.addView(rb, RadioGroup.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
@@ -251,71 +233,58 @@ class MainActivity : Activity() {
             if (i >= 0) session.selectSideMode(sideMode(SIDE_LABELS[i]))
             refreshStatus()
         }
-        add(basicsCard, sideGroup, 2)
-        rememberChk = check("记住认边方式") { on -> session.setRememberSide(on) }
-        add(basicsCard, rememberChk, 2)
-        add(basicsCard, text("自动认边未完成时会显示“待认边”。", 12f).apply { alpha = 0.72f }, 0)
+        Ui.add(basics, sideGroup, 0f)
+        rememberChk = check("记住认边方式（下次启动沿用）") { on -> session.setRememberSide(on) }
+        Ui.add(basics, rememberChk, 0f)
+        Ui.add(basics, Ui.note(this, "选的是我方；悬浮窗计时的是另一边。自动认边未完成时显示“待认边”。"), 2f)
 
-        add(basicsCard, text("我的名字", 14f, bold = true), 12)
+        Ui.add(basics, Ui.text(this, "我的名字", 13f, Ui.TEXT_2), 14f)
         namesEdit = EditText(this).apply {
             hint = "账号名（多个用逗号分隔）"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            minLines = 1
-            maxLines = 2
+            inputType = InputType.TYPE_CLASS_TEXT
+            isSingleLine = true
         }
-        add(basicsCard, namesEdit, 2)
-        add(basicsCard, text("对面忍者（可选）", 14f, bold = true), 8)
+        Ui.add(basics, namesEdit, 0f)
+        Ui.add(basics, Ui.text(this, "对面忍者（可选）", 13f, Ui.TEXT_2), 10f)
         ninjaEdit = EditText(this).apply {
             hint = "留空自动识别"
             inputType = InputType.TYPE_CLASS_TEXT
             isSingleLine = true
         }
-        val pickNinja = button("选择") { pickNinja() }
-        val ninjaRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val ninjaRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         ninjaRow.addView(ninjaEdit, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        ninjaRow.addView(pickNinja, LinearLayout.LayoutParams(dp(92), ViewGroup.LayoutParams.WRAP_CONTENT))
-        add(basicsCard, ninjaRow, 2)
-        add(basicsCard, button(getString(com.narutotimer.R.string.action_save)) { save() }.apply {
-            setTypeface(typeface, Typeface.BOLD)
-        }, 10)
-        add(content, basicsCard, 10)
+        ninjaRow.addView(Ui.button(this, "选择") { pickNinja() },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+        Ui.add(basics, ninjaRow, 0f)
+        Ui.add(basics, Ui.button(this, getString(R.string.action_save), Ui.Kind.PRIMARY) { save() }, 14f)
+        Ui.add(content, basics, 12f)
 
         // 高级内容默认收起，保留全部既有控件和 adb/文件选择功能。
-        val advancedCard = card()
+        val advanced = Ui.card(this)
         lateinit var advancedPanel: LinearLayout
-        val advancedToggle = TextView(this).apply {
-            text = "高级设置  ▸"
-            textSize = 17f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(TimerColors.CLOCK_LIVE)
+        val advancedToggle = Ui.text(this, "高级设置", 16f, Ui.TEXT, bold = true).apply {
             gravity = Gravity.CENTER_VERTICAL
-            minHeight = dp(52)
+            minHeight = dp(44)
             isClickable = true
             isFocusable = true
             setOnClickListener {
-                advancedPanel.visibility = if (advancedPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-                text = if (advancedPanel.visibility == View.VISIBLE) "高级设置  ▾" else "高级设置  ▸"
+                val open = advancedPanel.visibility != View.VISIBLE
+                advancedPanel.visibility = if (open) View.VISIBLE else View.GONE
+                text = if (open) "高级设置  ▾" else "高级设置  ▸"
             }
+            text = "高级设置  ▸"
         }
-        add(advancedCard, advancedToggle, 0)
+        Ui.add(advanced, advancedToggle, 0f)
         advancedPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
         }
-        add(advancedCard, advancedPanel, 0)
+        Ui.add(advanced, advancedPanel, 0f)
 
-        val appearanceTitle = text("悬浮窗", 15f, bold = true).apply { setTextColor(TimerColors.CLOCK_LIVE) }
-        add(advancedPanel, appearanceTitle, 8)
+        section(advancedPanel, "悬浮窗外观", 6f)
         modeGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
         MODE_LABELS.forEachIndexed { i, label ->
-            val rb = RadioButton(this).apply {
-                text = label
-                id = View.generateViewId()
-                minHeight = dp(48)
-            }
+            val rb = radio(label)
             modeIds[i] = rb.id
             modeGroup.addView(rb, RadioGroup.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
@@ -324,92 +293,92 @@ class MainActivity : Activity() {
             val on = checkedId == modeIds[1]
             if (on != (settings.overlayMode == "mini")) session.setMiniMode(on)
         }
-        add(advancedPanel, modeGroup, 2)
+        Ui.add(advancedPanel, modeGroup, 0f)
         bothChk = check("左右两边都显示替身倒计时") { on -> session.setShowBothSides(on) }
-        add(advancedPanel, bothChk, 2)
-        miniOpacityText = text("", 13f).also { add(advancedPanel, it, 6) }
-        miniOpacityBar = slider(MINI_OPACITY_MIN, MINI_OPACITY_MAX, OPACITY_STEP) { v ->
-            miniOpacityText.text = String.format(Locale.ROOT, "迷你窗口不透明度：%.0f%%", v * 100)
-            settings.miniOpacity = v.toFloat()
-        }
-        add(advancedPanel, miniOpacityBar, 0)
-        opacityText = text("", 13f).also { add(advancedPanel, it, 4) }
+        Ui.add(advancedPanel, bothChk, 0f)
+        opacityText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(advancedPanel, it, 8f) }
         opacityBar = slider(WINDOW_OPACITY_MIN, WINDOW_OPACITY_MAX, OPACITY_STEP) { v ->
-            opacityText.text = String.format(Locale.ROOT, "窗口不透明度：%.0f%%", v * 100)
             settings.windowOpacity = v.toFloat()
+            updateAppearanceLabels()
         }
-        add(advancedPanel, opacityBar, 0)
-        fontScaleText = text("", 13f).also { add(advancedPanel, it, 4) }
+        Ui.add(advancedPanel, opacityBar, 0f)
+        miniOpacityText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(advancedPanel, it, 6f) }
+        miniOpacityBar = slider(MINI_OPACITY_MIN, MINI_OPACITY_MAX, OPACITY_STEP) { v ->
+            settings.miniOpacity = v.toFloat()
+            updateAppearanceLabels()
+        }
+        Ui.add(advancedPanel, miniOpacityBar, 0f)
+        fontScaleText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(advancedPanel, it, 6f) }
         fontScaleBar = slider(
             Settings.FONT_SCALE_MIN.toDouble(),
             Settings.FONT_SCALE_MAX.toDouble(),
             Settings.FONT_SCALE_STEP.toDouble(),
         ) { v ->
-            fontScaleText.text = String.format(Locale.ROOT, "悬浮窗大小：%.0f%%", v * 100)
             settings.fontScale = v.toFloat()
+            updateAppearanceLabels()
         }
-        add(advancedPanel, fontScaleBar, 0)
-        add(advancedPanel, row(
-            button("默认外观") {
+        Ui.add(advancedPanel, fontScaleBar, 0f)
+        Ui.add(advancedPanel, Ui.row(
+            this,
+            Ui.button(this, "默认外观") {
                 settings.windowOpacity = 1f
+                settings.miniOpacity = DEFAULT_MINI_OPACITY.toFloat()
                 settings.fontScale = Settings.DEFAULT_FONT_SCALE
                 loadFromSettings()
             },
-            button("默认位置") {
+            Ui.button(this, "默认位置") {
                 settings.overlayX = Int.MIN_VALUE
                 settings.overlayY = Int.MIN_VALUE
                 toast("悬浮窗已回到默认位置")
             },
-        ), 6)
+        ), 8f)
 
-        val captureTitle = text("采集与调试", 15f, bold = true).apply { setTextColor(TimerColors.CLOCK_LIVE) }
-        add(advancedPanel, captureTitle, 14)
+        section(advancedPanel, "采集与调试", 18f)
         projectionChk = check("优先使用录屏采集") { on -> settings.preferProjection = on }
         debugChk = check("输出调试日志") { on -> settings.debug = on }
-        add(advancedPanel, projectionChk, 2)
-        add(advancedPanel, debugChk, 2)
+        Ui.add(advancedPanel, projectionChk, 0f)
+        Ui.add(advancedPanel, debugChk, 0f)
 
-        val updateTitle = text("在线更新", 15f, bold = true).apply { setTextColor(TimerColors.CLOCK_LIVE) }
-        add(advancedPanel, updateTitle, 14)
-        add(advancedPanel, note("可选择 Gitee（国内）或 GitHub（海外）。只下载 HTTPS、带 SHA-256 校验的正式 APK。"), 2)
+        section(advancedPanel, "在线更新", 18f)
+        Ui.add(advancedPanel, Ui.note(this, "可选 Gitee（国内）或 GitHub（海外）。只下载 HTTPS、带 SHA-256 校验的正式 APK。"), 2f)
         updateSourceGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
-        val gitee = RadioButton(this).apply { id = View.generateViewId(); text = "Gitee（国内）"; minHeight = dp(48) }
-        val github = RadioButton(this).apply { id = View.generateViewId(); text = "GitHub（海外）"; minHeight = dp(48) }
+        val gitee = radio("Gitee（国内）")
+        val github = radio("GitHub（海外）")
         updateSourceGroup.addView(gitee, RadioGroup.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         updateSourceGroup.addView(github, RadioGroup.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         updateSourceGroup.setOnCheckedChangeListener { _, id ->
             if (!syncing) settings.updateSource = if (id == github.id) "github" else "gitee"
         }
-        add(advancedPanel, updateSourceGroup, 2)
+        Ui.add(advancedPanel, updateSourceGroup, 0f)
         autoUpdateChk = check("启动应用时自动检查更新") { on -> settings.autoCheckUpdates = on }
-        add(advancedPanel, autoUpdateChk, 2)
-        add(advancedPanel, button("检查更新") { UpdateManager.check(this, settings) }, 4)
+        Ui.add(advancedPanel, autoUpdateChk, 0f)
+        Ui.add(advancedPanel, Ui.button(this, "检查更新") { UpdateManager.check(this, settings) }, 4f)
 
-        val adbTitle = text("电脑 ADB（可选）", 15f, bold = true).apply { setTextColor(TimerColors.CLOCK_LIVE) }
-        add(advancedPanel, adbTitle, 14)
-        add(advancedPanel, note("仅在需要免确认录屏或命令开启无障碍时使用。点击命令可复制。"), 2)
-        add(advancedPanel, command(appOpsCommand()), 4)
-        add(advancedPanel, command(accessibilityCommand()), 4)
+        section(advancedPanel, "电脑 ADB（可选）", 18f)
+        Ui.add(advancedPanel, Ui.note(this, "仅在需要免确认录屏或命令开启无障碍时使用。第二条会替换已开启的其它无障碍服务列表。"), 2f)
+        Ui.add(advancedPanel, command(appOpsCommand()), 6f)
+        Ui.add(advancedPanel, command(accessibilityCommand()), 6f)
 
-        val identityTitle = text("账号名图片（可选）", 15f, bold = true).apply { setTextColor(TimerColors.CLOCK_LIVE) }
-        add(advancedPanel, identityTitle, 14)
-        add(advancedPanel, note("导入 PNG/JPG 裁剪图可帮助自动认边；对面的图片会自动收集。"), 2)
+        section(advancedPanel, "账号名图片（可选）", 18f)
+        Ui.add(advancedPanel, Ui.note(this, "导入 PNG/JPG 裁剪图可帮助自动认边；对面的图片会自动收集。"), 2f)
         identityLabelEdit = EditText(this).apply {
             hint = "图片对应的账号名"
             inputType = InputType.TYPE_CLASS_TEXT
             isSingleLine = true
         }
-        add(advancedPanel, identityLabelEdit, 2)
-        identityText = text("", 13f).also { add(advancedPanel, it, 4) }
-        add(advancedPanel, row(
-            button("导入图片") { pickIdentityImages() },
-            button("删除已导入") { confirmDeleteIdentity() },
-        ), 4)
-        add(content, advancedCard, 10)
+        Ui.add(advancedPanel, identityLabelEdit, 2f)
+        identityText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(advancedPanel, it, 4f) }
+        Ui.add(advancedPanel, Ui.row(
+            this,
+            Ui.button(this, "导入图片") { pickIdentityImages() },
+            Ui.button(this, "删除已导入", Ui.Kind.DANGER) { confirmDeleteIdentity() },
+        ), 6f)
+        Ui.add(content, advanced, 12f)
 
         return ScrollView(this).apply {
             isFillViewport = true
             isVerticalScrollBarEnabled = true
+            setBackgroundColor(Ui.BG)
             addView(content, ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -417,28 +386,82 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun step(parent: LinearLayout, number: String, title: String, hint: String): Step {
+        val row = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(56)
+        }
+        val badge = Ui.text(this, number, 13f, Ui.TEXT_2, bold = true).apply {
+            gravity = Gravity.CENTER
+            background = Ui.rounded(this@MainActivity, Ui.SURFACE_2, 14f)
+        }
+        row.addView(badge, LinearLayout.LayoutParams(dp(28), dp(28)))
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val titleRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val dot = Ui.dot(this)
+        titleRow.addView(Ui.text(this, title, 15f, Ui.TEXT, bold = true))
+        titleRow.addView(dot, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginStart = dp(8) })
+        texts.addView(titleRow)
+        val detail = Ui.text(this, hint, 12.5f, Ui.TEXT_2)
+        texts.addView(detail)
+        row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginStart = dp(12)
+            marginEnd = dp(8)
+        })
+        lateinit var step: Step
+        val action = Ui.button(this, "开启", Ui.Kind.PRIMARY) { step.onAction() }
+        row.addView(action, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        step = Step(dot, detail, action)
+        Ui.add(parent, row, 10f)
+        return step
+    }
+
+    private fun setStep(s: Step, color: Int, detail: String, label: String, primary: Boolean, enabled: Boolean = true, action: () -> Unit) {
+        Ui.setDot(s.dot, color)
+        s.detail.text = detail
+        s.action.text = label
+        s.action.isEnabled = enabled
+        if (s.primary != primary) {
+            Ui.style(s.action, if (primary) Ui.Kind.PRIMARY else Ui.Kind.TONAL)
+            s.primary = primary
+        }
+        s.onAction = action
+    }
+
+    private fun section(parent: LinearLayout, title: String, topDp: Float) {
+        Ui.add(parent, Ui.text(this, title, 14f, Ui.ACCENT, bold = true), topDp)
+    }
+
     // ---- 回填（Go openSettings：每次按当前状态重建） ----
 
     private fun loadFromSettings() {
         syncing = true
         try {
-            namesEdit.setText(settings.playerNames.joinToString("，"))
-            ninjaEdit.setText(settings.ninjaQuery)
+            // Keep what the user is typing (e.g. after returning from the consent
+            // dialog or file picker); refill only fields that still show old values.
+            val names = settings.playerNames.joinToString("，")
+            if (loadedNames == null || namesEdit.text.toString() == loadedNames) {
+                namesEdit.setText(names)
+                loadedNames = names
+            }
+            val ninja = settings.ninjaQuery
+            if (loadedNinja == null || ninjaEdit.text.toString() == loadedNinja) {
+                ninjaEdit.setText(ninja)
+                loadedNinja = ninja
+            }
             syncSide()
             rememberChk.isChecked = settings.rememberSide
             syncMode()
             bothChk.isChecked = settings.showBothSides
             setSlider(miniOpacityBar, MINI_OPACITY_MIN, OPACITY_STEP, settings.miniOpacity.toDouble())
-            miniOpacityText.text = String.format(Locale.ROOT, "迷你窗口不透明度：%.0f%%", settings.miniOpacity * 100)
             setSlider(opacityBar, WINDOW_OPACITY_MIN, OPACITY_STEP, settings.windowOpacity.toDouble())
-            opacityText.text = String.format(Locale.ROOT, "窗口不透明度：%.0f%%", settings.windowOpacity * 100)
             setSlider(
                 fontScaleBar,
                 Settings.FONT_SCALE_MIN.toDouble(),
                 Settings.FONT_SCALE_STEP.toDouble(),
                 settings.fontScale.toDouble(),
             )
-            fontScaleText.text = String.format(Locale.ROOT, "悬浮窗大小：%.0f%%", settings.fontScale * 100)
+            updateAppearanceLabels()
             projectionChk.isChecked = settings.preferProjection
             debugChk.isChecked = settings.debug
             if (updateSourceGroup.childCount >= 2) {
@@ -452,6 +475,12 @@ class MainActivity : Activity() {
             syncing = false
         }
         refreshIdentityCount()
+    }
+
+    private fun updateAppearanceLabels() {
+        opacityText.text = String.format(Locale.ROOT, "完整卡片不透明度：%.0f%%", settings.windowOpacity * 100)
+        miniOpacityText.text = String.format(Locale.ROOT, "迷你卡片不透明度：%.0f%%", settings.miniOpacity * 100)
+        fontScaleText.text = String.format(Locale.ROOT, "悬浮窗大小：%.0f%%", settings.fontScale * 100)
     }
 
     private fun syncSide() {
@@ -487,6 +516,8 @@ class MainActivity : Activity() {
         val ninja = GoText.trimSpace(ninjaEdit.text.toString())
         val i = sideIds.indexOf(sideGroup.checkedRadioButtonId).coerceAtLeast(0)
         session.applySettings(names, ninja, sideMode(SIDE_LABELS[i]), rememberChk.isChecked)
+        loadedNames = null
+        loadedNinja = null
         loadFromSettings()
         refreshStatus()
         toast("设置已保存")
@@ -505,51 +536,66 @@ class MainActivity : Activity() {
     // ---- 状态 ----
 
     private fun refreshStatus() {
-        nativeText.text = when (app.nativeStatus) {
-            TimerApp.NativeStatus.LOADING -> getString(com.narutotimer.R.string.status_native_loading)
-            TimerApp.NativeStatus.READY -> {
-                val r = app.assetReport
-                getString(com.narutotimer.R.string.status_native_ready) +
-                    (if (r != null) "（图片 ${r.images} · 文本 ${r.texts} · ${r.millis}ms）" else "")
-            }
-            TimerApp.NativeStatus.FAILED -> getString(com.narutotimer.R.string.status_native_failed, app.nativeMessage)
-        }
-        nativeText.setTextColor(statusColor(app.nativeStatus == TimerApp.NativeStatus.READY, app.nativeStatus == TimerApp.NativeStatus.FAILED))
-
         val enabled = TimerAccessibilityService.isEnabled(this)
         val connected = TimerAccessibilityService.instance != null
-        accessibilityText.text = when {
-            connected -> getString(com.narutotimer.R.string.status_accessibility_on)
-            enabled -> "无障碍服务：已开启，正在连接…（长时间无反应请关闭后重新开启）"
-            else -> getString(com.narutotimer.R.string.status_accessibility_off)
-        }
-        accessibilityText.setTextColor(statusColor(connected, !enabled))
-        openAccessibilityBtn.text = if (connected) "无障碍设置" else getString(com.narutotimer.R.string.action_open_accessibility)
+        setStep(
+            accessibilityStep,
+            if (connected) Ui.OK else if (enabled) Ui.WARN else Ui.BAD,
+            when {
+                connected -> "已连接"
+                enabled -> "已开启，正在连接…（长时间无反应请关闭后重新开启）"
+                else -> "未开启 · 悬浮窗和备用截屏都需要它"
+            },
+            if (connected) "设置" else "去开启",
+            primary = !connected,
+        ) { openAccessibilitySettings() }
+
         val overlayRunning = TimerAccessibilityService.instance?.isOverlayRunning == true
-        overlayText.text = when {
-            overlayRunning -> "悬浮窗：运行中"
-            connected -> "悬浮窗：未启动（点击启动）"
-            else -> "悬浮窗：等待无障碍服务"
+        setStep(
+            overlayStep,
+            if (overlayRunning) Ui.OK else if (connected) Ui.WARN else Ui.TEXT_2,
+            when {
+                overlayRunning -> "运行中 · 点击游戏里的计时卡片打开操作"
+                connected -> "未启动"
+                else -> "等待无障碍服务"
+            },
+            if (overlayRunning) "停止" else "启动",
+            primary = !overlayRunning && connected,
+            enabled = connected,
+        ) {
+            val service = TimerAccessibilityService.instance
+            when {
+                service == null -> toast("请先开启并连接无障碍服务")
+                overlayRunning -> service.stopOverlay()
+                else -> service.startOverlay()
+            }
+            main.postDelayed({ refreshStatus() }, 300)
         }
-        overlayText.setTextColor(statusColor(overlayRunning, false))
-        startOverlayBtn.isEnabled = connected && !overlayRunning
-        stopOverlayBtn.isEnabled = overlayRunning
         restartOverlayBtn.isEnabled = connected
+        positionBtn.isEnabled = overlayRunning
 
         val projecting = ProjectionCaptureService.running
-        projectionText.text = getString(
-            if (projecting) com.narutotimer.R.string.status_projection_on else com.narutotimer.R.string.status_projection_off,
-        )
-        projectionText.setTextColor(statusColor(projecting, false))
-        startProjectionBtn.isEnabled = !projecting
-        stopProjectionBtn.isEnabled = projecting
+        setStep(
+            projectionStep,
+            if (projecting) Ui.OK else Ui.WARN,
+            if (projecting) "运行中 · 约 60 帧/秒" else "未运行 · 正在用无障碍截屏（约 3 帧/秒）",
+            if (projecting) "停止" else "开始",
+            primary = !projecting && overlayRunning,
+        ) {
+            if (projecting) ProjectionCaptureService.stop(this) else ProjectionPermissionActivity.launch(this)
+            main.postDelayed({ refreshStatus() }, 300)
+        }
 
-        val autoGrant = projectMediaAllowed()
-        appOpsText.text = if (autoGrant) "录屏免确认（PROJECT_MEDIA）：已允许" else "录屏免确认（PROJECT_MEDIA）：未设置（每次需在系统弹窗确认）"
-        appOpsText.setTextColor(statusColor(autoGrant, false))
+        val side = when (session.side) {
+            "left" -> "我方在左边"
+            "right" -> "我方在右边"
+            else -> "待认边"
+        }
+        matchText.text = (if (session.fighting) "对局中 · " else "未在对局 · ") + side
+        matchText.setTextColor(if (session.fighting) Ui.OK else Ui.TEXT)
 
         loopText.text = if (!FrameLoop.running) {
-            "识别：未运行（开启无障碍服务后自动开始）"
+            "识别：未运行（启动悬浮计时或录屏后开始）"
         } else {
             val st = FrameLoop.stats()
             val method = when (st.lastMethod) {
@@ -559,29 +605,28 @@ class MainActivity : Activity() {
                 else -> "—"
             }
             val size = if (st.lastWidth > 0) " ${st.lastWidth}×${st.lastHeight}" else ""
-            val scene = st.lastScene.ifEmpty { "—" }
-            val uncertain = if (st.lastUncertain) " · uncertain" else ""
+            val detail = if (settings.debug) {
+                String.format(Locale.ROOT, " · scene=%s · gate=%.3f%s", st.lastScene.ifEmpty { "—" }, st.lastGateScore, if (st.lastUncertain) " · uncertain" else "")
+            } else ""
             String.format(
-                Locale.ROOT, "识别：已分析 %d 帧 · 丢弃 %d · 平均 %.1fms · %s%s · scene=%s · gate=%.3f%s",
-                st.analyzedFrames, st.droppedFrames, st.avgAnalyzeMillis, method, size,
-                scene, st.lastGateScore, uncertain,
+                Locale.ROOT, "识别：已分析 %d 帧 · 丢弃 %d · 平均 %.1fms · %s%s%s",
+                st.analyzedFrames, st.droppedFrames, st.avgAnalyzeMillis, method, size, detail,
             )
         }
-        loopText.setTextColor(statusColor(FrameLoop.running, false))
 
-        val side = when (session.side) {
-            "left" -> "我方在左边"
-            "right" -> "我方在右边"
-            else -> "待认边"
+        nativeText.text = when (app.nativeStatus) {
+            TimerApp.NativeStatus.LOADING -> getString(R.string.status_native_loading)
+            TimerApp.NativeStatus.READY -> {
+                val r = app.assetReport
+                getString(R.string.status_native_ready) +
+                    (if (r != null) "（图片 ${r.images} · 文本 ${r.texts} · ${r.millis}ms）" else "")
+            }
+            TimerApp.NativeStatus.FAILED -> getString(R.string.status_native_failed, app.nativeMessage)
         }
-        matchText.text = (if (session.fighting) "对局中 · " else "未在对局 · ") + side
-        matchText.setTextColor(TimerColors.TAG_IDLE)
-    }
+        nativeText.setTextColor(if (app.nativeStatus == TimerApp.NativeStatus.FAILED) Ui.BAD else Ui.TEXT_2)
 
-    private fun statusColor(ok: Boolean, bad: Boolean): Int = when {
-        ok -> COLOR_OK
-        bad -> COLOR_BAD
-        else -> COLOR_WARN
+        val autoGrant = projectMediaAllowed()
+        appOpsText.text = if (autoGrant) "录屏免确认（PROJECT_MEDIA）：已允许" else "录屏免确认：未设置（每次需在系统弹窗确认，可用电脑 ADB 设置）"
     }
 
     /** adb shell appops set <pkg> PROJECT_MEDIA allow 之后，系统录屏授权页会直接放行。 */
@@ -634,25 +679,21 @@ class MainActivity : Activity() {
             "adb shell settings put secure accessibility_enabled 1"
 
     private fun command(cmd: String): View {
-        val tv = TextView(this).apply {
-            text = cmd
+        val tv = Ui.text(this, cmd, 12f, Ui.TEXT).apply {
             typeface = Typeface.MONOSPACE
-            textSize = 12f
             setTextIsSelectable(true)
-            setTextColor(TimerColors.CLOCK_IDLE)
-            setBackgroundColor(TimerColors.PANEL_BG)
-            setPadding(dp(8), dp(6), dp(8), dp(6))
+            background = Ui.rounded(this@MainActivity, Ui.BG, 10f, Ui.OUTLINE)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
         }
-        val copy = button("复制") {
+        val copy = Ui.button(this, "复制") {
             val cm = getSystemService(ClipboardManager::class.java)
             cm.setPrimaryClip(ClipData.newPlainText("adb", cmd))
             toast("已复制")
         }
         return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(copy)
+            addView(copy, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
         }
     }
 
@@ -707,8 +748,8 @@ class MainActivity : Activity() {
         } else {
             data.data?.let { uris += it }
         }
-        if (uris.isEmpty()) return
         val label = pendingIdentityLabel
+        if (uris.isEmpty() || label.isEmpty()) return
         val resolver = contentResolver
         val dir = identityDir()
         Thread({
@@ -741,6 +782,7 @@ class MainActivity : Activity() {
             }
             main.post {
                 if (ok > 0) app.reloadNative()
+                if (isDestroyed) return@post
                 refreshIdentityCount()
                 refreshStatus()
                 toast("已导入 $ok 张" + (if (skipped > 0) "，跳过 $skipped 张（只支持 PNG/JPG）" else "") +
@@ -770,53 +812,19 @@ class MainActivity : Activity() {
 
     // ---- 小部件 ----
 
-    private fun dp(v: Int): Int = (v * density).roundToInt()
+    private fun dp(v: Int): Int = Ui.dp(this, v.toFloat())
 
-    private fun text(s: String, sizeSp: Float, bold: Boolean = false): TextView = TextView(this).apply {
-        text = s
-        textSize = sizeSp
-        if (bold) setTypeface(typeface, Typeface.BOLD)
-        setPadding(0, dp(2), 0, dp(2))
-    }
-
-    private fun note(s: String): TextView = text(s, 13f).apply { alpha = 0.75f }
-
-    private fun section(s: String): TextView = text(s, 16f, bold = true).apply {
-        setPadding(0, dp(18), 0, dp(4))
-        setTextColor(TimerColors.CLOCK_LIVE)
-    }
-
-    /** A compact, readable surface that remains usable in both portrait and landscape. */
-    private fun card(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(14), dp(12), dp(14), dp(14))
-        background = GradientDrawable().apply {
-            setColor(TimerColors.PANEL_BG)
-            setStroke(dp(1), TimerColors.PANEL_BORDER)
-            cornerRadius = dp(12).toFloat()
-        }
-    }
-
-    private fun button(label: String, onClick: () -> Unit): Button = Button(this).apply {
+    private fun radio(label: String): RadioButton = RadioButton(this).apply {
         text = label
-        isAllCaps = false
-        minHeight = dp(52)
-        minimumHeight = dp(52)
-        setPadding(dp(12), dp(4), dp(12), dp(4))
-        setOnClickListener { onClick() }
-    }
-
-    private fun row(vararg views: View): View = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        for ((i, v) in views.withIndex()) {
-            addView(v, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                if (i > 0) marginStart = dp(6)
-            })
-        }
+        id = View.generateViewId()
+        minHeight = dp(44)
+        setTextColor(Ui.TEXT)
     }
 
     private fun check(label: String, onChange: (Boolean) -> Unit): CheckBox = CheckBox(this).apply {
         text = label
+        minHeight = dp(44)
+        setTextColor(Ui.TEXT)
         setOnCheckedChangeListener { _, on -> if (!syncing) onChange(on) }
     }
 
@@ -844,6 +852,8 @@ class MainActivity : Activity() {
         private const val TAG = "MainActivity"
         private const val STATUS_INTERVAL_MS = 1_000L
         private const val REQUEST_IMPORT = 41
+        private const val REQUEST_NOTIFICATIONS = 42
+        private const val STATE_IDENTITY_LABEL = "identityLabel"
         private const val IDENTITY_DIR = "identity"
         /** AppOpsManager.OPSTR_PROJECT_MEDIA（隐藏常量）。 */
         private const val OPSTR_PROJECT_MEDIA = "android:project_media"
@@ -853,16 +863,13 @@ class MainActivity : Activity() {
         private const val WINDOW_OPACITY_MAX = 1.00
         private const val MINI_OPACITY_MIN = 0.20
         private const val MINI_OPACITY_MAX = 1.00
+        private const val DEFAULT_MINI_OPACITY = 0.85
         private const val OPACITY_STEP = 0.05
-
-        private const val COLOR_OK = 0xFF7EE8A0.toInt()
-        private const val COLOR_WARN = 0xFFFFD27E.toInt()
-        private const val COLOR_BAD = 0xFFFF8A80.toInt()
 
         /** Go sideSel 选项。 */
         private val SIDE_LABELS = arrayOf("自动认边", "左边", "右边")
         /** Go miniSel 选项。 */
-        private val MODE_LABELS = arrayOf("完整浮窗", "迷你窗口")
+        private val MODE_LABELS = arrayOf("完整卡片", "迷你卡片")
         /** Go ninjaEntry 选项（除空串外）。 */
         private val NINJA_CHOICES = arrayOf(
             NinjaRules.FIFTH_MIZUKAGE, NinjaRules.HASHIRAMA, NinjaRules.MADARA, NinjaRules.OBITO, NinjaRules.NARUTO,

@@ -249,6 +249,15 @@ type UIConfig struct {
 	MiniAutoScale   bool     `json:"miniAutoScale"`
 	GPUAcceleration bool     `json:"gpuAcceleration"`
 	PlayerNames     []string `json:"playerNames"`
+	// Last top-left corners (screen pixels) of the full overlay and the mini
+	// window; nil centres the window. Restores are clamped to a visible monitor.
+	WindowPosition *ScreenPoint `json:"windowPosition,omitempty"`
+	MiniPosition   *ScreenPoint `json:"miniPosition,omitempty"`
+}
+
+type ScreenPoint struct {
+	X int `json:"x"`
+	Y int `json:"y"`
 }
 
 func Default() Config {

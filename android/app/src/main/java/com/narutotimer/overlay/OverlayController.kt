@@ -1,43 +1,39 @@
 package com.narutotimer.overlay
 
 // Owner: kt-overlay-ui
-// Android-native floating timer controller.  The card is deliberately passive
-// until the handle opens its compact action row, so the game remains touchable.
+// Android-native floating timer controller. The card is passive until tapped:
+// a tap opens its action row, and only then (or in position-edit mode) can it
+// be dragged, so a stray swipe during a fight never moves it.
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.ContextThemeWrapper
 import android.view.Gravity
-import android.view.HapticFeedbackConstants
-import android.view.inputmethod.InputMethodManager
-import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import com.narutotimer.R
 import com.narutotimer.Settings
 import com.narutotimer.capture.ProjectionCaptureService
+import com.narutotimer.service.TimerAccessibilityService
 import com.narutotimer.tracker.OverlayState
 import com.narutotimer.tracker.Session
-import com.narutotimer.tracker.TimerColors
-import com.narutotimer.service.TimerAccessibilityService
 import com.narutotimer.ui.ProjectionPermissionActivity
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** Owns the timer, handle, and in-overlay settings TYPE_ACCESSIBILITY_OVERLAY windows. */
+/** Owns the timer card and the in-overlay settings TYPE_ACCESSIBILITY_OVERLAY windows. */
 class OverlayController(
     private val service: AccessibilityService,
     private val session: Session,
@@ -45,14 +41,11 @@ class OverlayController(
 ) {
     private val wm: WindowManager = service.getSystemService(WindowManager::class.java)
     private val main = Handler(Looper.getMainLooper())
-    private val density = service.resources.displayMetrics.density
 
     private var view: MiniTimerView? = null
-    private var handle: HandleView? = null
     private var settingsView: OverlaySettingsView? = null
     private var settingsRoot: FrameLayout? = null
-    private val params = overlayParams(touchable = false)
-    private val handleParams = overlayParams(touchable = true)
+    private val params = overlayParams()
     private val settingsParams = settingsOverlayParams()
 
     private var showing = false
@@ -60,10 +53,9 @@ class OverlayController(
     private var destroyed = false
     private var controlsVisible = false
     private var positionEditing = false
-    private var rightDocked = true
-    private var handleOnLeft = true
+    private var rightDocked = false
 
-    // Clock refresh is kept on the main thread.  Revision polling avoids asking
+    // Clock refresh is kept on the main thread. Revision polling avoids asking
     // Session for state on every 0.1-second repaint when the scene is idle.
     private var lastSessionRevision = Long.MIN_VALUE
     private var clockDeadline = 0L
@@ -71,18 +63,22 @@ class OverlayController(
     private var lastState: OverlayState? = null
     private var appliedOpacity = -1f
     private var lastErrorLogAt = 0L
+    private var lastStatusAt = 0L
 
     private val tick = Runnable { tickNow() }
-    private val autoHide = Runnable { setControls(false) }
+    private val autoHide = Runnable {
+        setControls(false)
+        setEditing(false)
+    }
     private val settingsListener: (String) -> Unit = { key ->
-        // Settings can be changed from MainActivity's thread.  WindowManager is
+        // Settings can be changed from MainActivity's thread. WindowManager is
         // always driven from the main looper.
         main.post { onSettingChanged(key) }
     }
 
     // ---- Public API -------------------------------------------------------
 
-    /** Adds both overlay windows and starts the refresh loop.  Main-thread API. */
+    /** Adds the timer window and starts the refresh loop. Main-thread API. */
     fun show() {
         if (destroyed || showing) return
         val v = MiniTimerView(service)
@@ -93,11 +89,10 @@ class OverlayController(
             v.render(state)
             lastState = state
             params.alpha = state.opacity
-            handleParams.alpha = state.opacity
             appliedOpacity = state.opacity
         }
         v.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
-        initialPosition(v.measuredWidth, v.measuredHeight)
+        placeFromSettings(safeRect(), v.measuredWidth, v.measuredHeight)
 
         try {
             wm.addView(v, params)
@@ -115,7 +110,7 @@ class OverlayController(
         tickNow()
     }
 
-    /** Removes both overlay windows and stops refresh.  Main-thread API. */
+    /** Removes the overlay windows and stops refresh. Main-thread API. */
     fun hide() {
         if (!showing && !settingsVisible) return
         closeSettings()
@@ -125,7 +120,6 @@ class OverlayController(
         settings.removeListener(settingsListener)
         controlsVisible = false
         positionEditing = false
-        setTouchable(false)
         view?.let { v ->
             v.listener = null
             v.onConfigChanged = null
@@ -146,18 +140,13 @@ class OverlayController(
 
     val isShowing: Boolean get() = showing
 
-    /**
-     * Temporarily makes the display pill draggable from the settings screen.
-     * There is deliberately no permanent handle window: display and settings
-     * stay separate, and the game is never covered by a control tab.
-     */
+    /** Temporarily makes the card draggable (from the settings screens). */
     fun startPositionEdit() {
         if (!showing) return
-        controlsVisible = false
-        positionEditing = true
-        setTouchable(true)
-        view?.controlsVisible = false
-        refreshSoon()
+        setControls(false)
+        setEditing(true)
+        main.removeCallbacks(autoHide)
+        main.postDelayed(autoHide, EDIT_AUTO_END_MS)
     }
 
     // ---- Refresh ----------------------------------------------------------
@@ -179,6 +168,9 @@ class OverlayController(
             val delay = runCatching { session.nextTickDelayNanos(now) }
                 .getOrDefault(IDLE_TICK_NANOS)
             clockDeadline = now + delay.coerceAtLeast(MIN_TICK_NANOS)
+        }
+        if (settingsVisible && SystemClock.uptimeMillis() - lastStatusAt >= STATUS_REFRESH_MS) {
+            updateSettingsStatus()
         }
         val wait = min(clockDeadline - now, REVISION_POLL_NANOS)
             .coerceAtLeast(MIN_TICK_NANOS)
@@ -217,8 +209,7 @@ class OverlayController(
         if (abs(opacity - appliedOpacity) < 0.001f) return
         appliedOpacity = opacity
         params.alpha = opacity
-        handleParams.alpha = opacity
-        updateLayouts()
+        updateLayout()
     }
 
     // ---- Controls ---------------------------------------------------------
@@ -229,26 +220,25 @@ class OverlayController(
         if (controlsVisible == on) return
         controlsVisible = on
         view?.controlsVisible = on
-        handle?.active = on
-        setTouchable(on)
-        updateLayouts()
+        updateDraggable()
         view?.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
     }
 
-    /**
-     * The compact status pill is always touchable so tapping it opens the
-     * action row. Its small bounds are the only game area it intercepts;
-     * everything else remains touch-through. The handle is independently
-     * touchable for drag/open access.
-     */
-    private fun setTouchable(on: Boolean) {
-        params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+    private fun setEditing(on: Boolean) {
+        if (positionEditing == on) return
+        positionEditing = on
+        view?.editing = on
+        updateDraggable()
+    }
+
+    private fun updateDraggable() {
+        view?.draggable = controlsVisible || positionEditing
     }
 
     private fun touchActivity() {
-        if (controlsVisible) {
+        if (controlsVisible || positionEditing) {
             main.removeCallbacks(autoHide)
-            main.postDelayed(autoHide, CONTROLS_AUTO_HIDE_MS)
+            main.postDelayed(autoHide, if (positionEditing) EDIT_AUTO_END_MS else CONTROLS_AUTO_HIDE_MS)
         }
     }
 
@@ -270,6 +260,7 @@ class OverlayController(
     private fun openSettings() {
         if (!showing) return
         setControls(false)
+        setEditing(false)
         if (settingsVisible) {
             settingsView?.refresh()
             settingsView?.requestFocus()
@@ -278,9 +269,11 @@ class OverlayController(
         }
 
         val root = FrameLayout(service).apply {
-            setBackgroundColor(0x66000000)
+            setBackgroundColor(SCRIM)
             isFocusable = true
             isFocusableInTouchMode = true
+            // Tapping the dimmed area closes the panel, like a dialog.
+            setOnClickListener { closeSettings() }
             setOnKeyListener { _, keyCode, event ->
                 if (keyCode == android.view.KeyEvent.KEYCODE_BACK &&
                     event.action == android.view.KeyEvent.ACTION_UP
@@ -290,8 +283,11 @@ class OverlayController(
                 } else false
             }
         }
+        // A service context carries the light DeviceDefault theme; the panel's
+        // framework widgets must use the app's dark theme to stay readable.
+        val themed = ContextThemeWrapper(service, R.style.Theme_NarutoTimer)
         val panel = OverlaySettingsView(
-            service,
+            themed,
             session,
             settings,
             object : OverlaySettingsView.Callbacks {
@@ -300,19 +296,16 @@ class OverlayController(
                     refreshSoon()
                     settingsView?.refresh()
                 }
-                override fun onSavedAndClose() {
-                    refreshSoon()
-                    closeSettings()
-                }
                 override fun onEditPosition() {
                     closeSettings()
                     startPositionEdit()
                 }
                 override fun onResetPosition() = onPositionSettingChanged()
                 override fun onRequestProjection() {
+                    // The consent dialog would open underneath this panel.
+                    closeSettings()
                     runCatching { ProjectionPermissionActivity.launch(service) }
                         .onFailure { Log.e(TAG, "projection permission failed", it) }
-                    main.postDelayed({ updateSettingsStatus() }, 500)
                 }
                 override fun onStopProjection() {
                     runCatching { ProjectionCaptureService.stop(service) }
@@ -321,12 +314,13 @@ class OverlayController(
                 }
             },
         )
+        panel.isClickable = true // Taps inside the panel never reach the scrim.
         panel.onConfigChanged = { main.post { updateSettingsLayout() } }
         root.addView(
             panel,
             FrameLayout.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER,
             ),
         )
@@ -374,7 +368,8 @@ class OverlayController(
             gravity = Gravity.TOP or Gravity.LEFT
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED
-            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+            // Coordinates come from safeRect(), which already excludes cutouts.
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             setFitInsetsTypes(0)
             title = "NarutoTimerSettings"
         }
@@ -386,6 +381,7 @@ class OverlayController(
         settingsParams.y = b.top
         settingsParams.width = b.width().coerceAtLeast(1)
         settingsParams.height = b.height().coerceAtLeast(1)
+        settingsView?.setMaxSize(b.width(), b.height())
         settingsRoot?.let { root ->
             if (root.isAttachedToWindow) runCatching { wm.updateViewLayout(root, settingsParams) }
         }
@@ -393,10 +389,11 @@ class OverlayController(
     }
 
     private fun updateSettingsStatus() {
+        lastStatusAt = SystemClock.uptimeMillis()
         settingsView?.setStatus(
-            "悬浮窗运行中\n" +
-                "识别状态：${if (session.fighting) "对局中" else "等待场景识别"}\n" +
-                "录屏采集：${if (ProjectionCaptureService.running) "运行中" else "未运行（可用无障碍截屏）"}",
+            "悬浮窗：运行中\n" +
+                "识别：${if (session.fighting) "对局中" else "等待对局画面"}\n" +
+                "录屏采集：${if (ProjectionCaptureService.running) "运行中（约 60 帧/秒）" else "未运行（无障碍截屏，约 3 帧/秒）"}",
         )
     }
 
@@ -406,23 +403,29 @@ class OverlayController(
         override fun onSwapSide() {
             session.swapSide()
             refreshSoon()
+            touchActivity()
         }
 
-        override fun onToggleBothSides() = toggleBothSides()
+        override fun onToggleBothSides() {
+            toggleBothSides()
+            touchActivity()
+        }
         override fun onToggleMini() = toggleMini()
         override fun onExit() {
             TimerAccessibilityService.instance?.stopOverlay()
         }
         override fun onDrag(dx: Int, dy: Int) = moveBy(dx, dy)
-        override fun onDragEnd() {
-            savePosition()
-            positionEditing = false
-            setTouchable(true)
-        }
+        override fun onDragEnd() = savePosition()
         override fun onDismissControls() {
-            if (positionEditing) return
-            // Tap the status pill to expand/collapse its compact action row.
+            if (positionEditing) {
+                setEditing(false)
+                return
+            }
             setControls(!controlsVisible)
+        }
+        override fun onOutsideTouch() {
+            if (controlsVisible) setControls(false)
+            if (positionEditing) setEditing(false)
         }
         override fun onTouchActivity() = touchActivity()
     }
@@ -430,9 +433,8 @@ class OverlayController(
     // ---- Safe placement ---------------------------------------------------
 
     /**
-     * Returns the display area which is safe for the card and its hit target.
-     * Unlike the old maximumWindowMetrics approach this accounts for status /
-     * navigation bars, gesture exclusion edges and display cutouts.
+     * Returns the display area which is safe for the card. It accounts for
+     * status / navigation bars, gesture exclusion edges and display cutouts.
      */
     private fun safeRect(): Rect {
         val fallback = Rect(
@@ -457,55 +459,50 @@ class OverlayController(
         }.getOrElse { fallback }
     }
 
-    private fun px(dp: Float): Int = (dp * density).roundToInt()
     private fun viewW(): Int = view?.width?.takeIf { it > 0 } ?: view?.measuredWidth ?: 0
     private fun viewH(): Int = view?.height?.takeIf { it > 0 } ?: view?.measuredHeight ?: 0
 
-    private fun overlayParams(touchable: Boolean): WindowManager.LayoutParams {
-        // The card itself is a small status pill and must receive taps to open
-        // the action row. Everything outside its bounds remains game touch-through.
-        var flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+    private fun overlayParams(): WindowManager.LayoutParams {
+        // The card receives taps (its small bounds only). FLAG_WATCH_OUTSIDE_TOUCH
+        // reports game touches elsewhere, so an open action row closes itself.
+        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
         return WindowManager.LayoutParams(
-            if (touchable) px(HANDLE_TOUCH_DP) else WindowManager.LayoutParams.WRAP_CONTENT,
-            if (touchable) px(HANDLE_TOUCH_DP) else WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             flags,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.LEFT
-            // We clamp against the cutout-aware safe rectangle ourselves.  Do
-            // not ask WM to lay the card out under a cutout or outside bounds.
-            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+            // We clamp against the cutout-aware safe rectangle ourselves, so
+            // x/y must be display coordinates, not cutout-shifted ones.
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             setFitInsetsTypes(0)
-            title = if (touchable) "NarutoTimerHandle" else "NarutoTimerOverlay"
+            title = "NarutoTimerOverlay"
         }
-    }
-
-    private fun initialPosition(w: Int, h: Int) {
-        val b = safeRect()
-        val sx = settings.overlayX
-        val sy = settings.overlayY
-        if (sx == Int.MIN_VALUE || sy == Int.MIN_VALUE) {
-            defaultPosition(b, w, h)
-        } else {
-            params.x = sx
-            params.y = sy
-            clamp(b, w, h)
-            rightDocked = isNearRight(b, params.x, w)
-        }
-        placeHandle(b, w, h)
     }
 
     /**
-     * Default to the open upper-middle arena, below the name/bean HUD and away
-     * from the right-side skill controls. Users can still drag and persist it.
+     * Places the card from the saved coordinates (or the default spot) and
+     * clamps only the live copy. The saved values survive rotation, so a
+     * landscape position is restored after a portrait detour.
      */
-    private fun defaultPosition(b: Rect, w: Int, h: Int) {
-        params.x = b.left + ((b.width() - w) / 2f).roundToInt()
-        params.y = b.top + (b.height() * DEFAULT_Y_FRACTION).roundToInt()
-        rightDocked = false
+    private fun placeFromSettings(b: Rect, w: Int, h: Int) {
+        val sx = settings.overlayX
+        val sy = settings.overlayY
+        if (sx == Int.MIN_VALUE || sy == Int.MIN_VALUE) {
+            // Upper middle of the arena: below the name/bean HUD, away from skills.
+            params.x = b.left + ((b.width() - w) / 2f).roundToInt()
+            params.y = b.top + (b.height() * DEFAULT_Y_FRACTION).roundToInt()
+            rightDocked = false
+        } else {
+            params.x = sx
+            params.y = sy
+            rightDocked = isNearRight(b, sx, w)
+        }
         clamp(b, w, h)
     }
 
@@ -515,73 +512,41 @@ class OverlayController(
     }
 
     private fun isNearRight(b: Rect, x: Int, w: Int): Boolean =
-        b.right - (x + w) <= px(RIGHT_SNAP_DP)
-
-    /** Places a 48dp hit target adjacent to the card; only its pill is painted. */
-    private fun placeHandle(b: Rect, w: Int, h: Int) {
-        val hw = px(HANDLE_TOUCH_DP)
-        val hh = px(HANDLE_TOUCH_DP)
-        val leftFits = params.x - hw >= b.left
-        handleOnLeft = leftFits
-        handleParams.x = if (leftFits) params.x - hw else params.x + w
-        handleParams.x = handleParams.x.coerceIn(b.left, max(b.left, b.right - hw))
-        handleParams.y = params.y + ((h - hh) / 2f).roundToInt()
-        handleParams.y = handleParams.y.coerceIn(b.top, max(b.top, b.bottom - hh))
-    }
+        w > 0 && b.right - (x + w) <= (RIGHT_SNAP_DP * service.resources.displayMetrics.density).roundToInt()
 
     private fun moveBy(dx: Int, dy: Int) {
         val b = safeRect()
-        val w = viewW()
-        rightDocked = false
         params.x += dx
         params.y += dy
-        clamp(b, w, viewH())
-        placeHandle(b, w, viewH())
-        updateLayouts()
+        clamp(b, viewW(), viewH())
+        updateLayout()
     }
 
     /** Keep the exact user-selected coordinates; only clamp to the safe display. */
     private fun savePosition() {
         val b = safeRect()
         val w = viewW()
-        val h = viewH()
-        clamp(b, w, h)
+        clamp(b, w, viewH())
         rightDocked = isNearRight(b, params.x, w)
-        placeHandle(b, w, h)
-        updateLayouts()
+        updateLayout()
         settings.overlayX = params.x
         settings.overlayY = params.y
     }
 
     private fun onPositionSettingChanged() {
-        val sx = settings.overlayX
-        val sy = settings.overlayY
-        val b = safeRect()
-        val w = viewW()
-        val h = viewH()
-        if (sx == Int.MIN_VALUE || sy == Int.MIN_VALUE) {
-            defaultPosition(b, w, h)
-        } else if (sx != params.x || sy != params.y) {
-            params.x = sx
-            params.y = sy
-            clamp(b, w, h)
-            rightDocked = isNearRight(b, params.x, w)
-        } else {
-            return
-        }
-        placeHandle(b, w, h)
-        updateLayouts()
+        if (settings.overlayX == params.x && settings.overlayY == params.y) return
+        placeFromSettings(safeRect(), viewW(), viewH())
+        updateLayout()
     }
 
     private fun onViewResized() {
         if (!showing) return
         val b = safeRect()
         val w = viewW()
-        val h = viewH()
+        // A right-docked card grows to the left when its action row opens.
         if (rightDocked) params.x = b.right - w
-        clamp(b, w, h)
-        placeHandle(b, w, h)
-        updateLayouts()
+        clamp(b, w, viewH())
+        updateLayout()
     }
 
     private fun reclamp() {
@@ -589,175 +554,17 @@ class OverlayController(
         val b = safeRect()
         val w = viewW()
         val h = viewH()
-        if (settings.overlayX == Int.MIN_VALUE || settings.overlayY == Int.MIN_VALUE) {
-            defaultPosition(b, w, h)
-        } else {
-            if (rightDocked) params.x = b.right - w
-            clamp(b, w, h)
-        }
-        placeHandle(b, w, h)
-        updateLayouts()
+        placeFromSettings(b, w, h)
+        if (rightDocked) params.x = b.right - w
+        clamp(b, w, h)
+        updateLayout()
         updateSettingsLayout()
     }
 
-    private fun updateLayouts() {
+    private fun updateLayout() {
         if (!showing) return
         view?.let { v ->
             if (v.isAttachedToWindow) runCatching { wm.updateViewLayout(v, params) }
-        }
-        handle?.let { h ->
-            if (h.isAttachedToWindow) runCatching { wm.updateViewLayout(h, handleParams) }
-        }
-    }
-
-    // ---- Handle -----------------------------------------------------------
-
-    /** Accessible 48dp target: tap controls, long press mode, drag placement. */
-    private inner class HandleView(context: Context) : View(context) {
-        var active = false
-            set(value) {
-                if (field != value) {
-                    field = value
-                    contentDescription = if (value) "关闭计时器控制" else "打开计时器控制"
-                    invalidate()
-                }
-            }
-
-        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = density
-        }
-        private val rect = android.graphics.RectF()
-        private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
-        private val longPressMs = ViewConfiguration.getLongPressTimeout().toLong()
-        private var downX = 0f
-        private var downY = 0f
-        private var lastX = 0f
-        private var lastY = 0f
-        private var dragging = false
-        private var longPressed = false
-        private val longPress = Runnable {
-            if (!dragging) {
-                longPressed = true
-                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                toggleMini()
-            }
-        }
-
-        init {
-            isFocusable = true
-            isClickable = true
-            isLongClickable = true
-            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-            contentDescription = "打开计时器控制"
-        }
-
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            setMeasuredDimension(px(HANDLE_TOUCH_DP), px(HANDLE_TOUCH_DP))
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            val pillW = px(HANDLE_PILL_WIDTH_DP).toFloat()
-            val pillH = px(HANDLE_PILL_HEIGHT_DP).toFloat()
-            val left = if (handleOnLeft) width - pillW else 0f
-            val top = (height - pillH) / 2f
-            rect.set(left + density / 2f, top + density / 2f, left + pillW - density / 2f, top + pillH - density / 2f)
-            fill.color = if (active) TimerColors.PANEL_HOVER else TimerColors.PANEL_BTN
-            canvas.drawRoundRect(rect, pillW / 2f, pillW / 2f, fill)
-            stroke.color = TimerColors.PANEL_BORDER
-            canvas.drawRoundRect(rect, pillW / 2f, pillW / 2f, stroke)
-            fill.color = TimerColors.TAG_IDLE
-            val cx = rect.centerX()
-            val lineW = pillW * 0.22f
-            val lineH = density * 1.5f
-            for (i in -1..1) {
-                val cy = rect.centerY() + i * density * 5f
-                canvas.drawRect(cx - lineW, cy - lineH / 2f, cx + lineW, cy + lineH / 2f, fill)
-            }
-        }
-
-        override fun onTouchEvent(event: MotionEvent): Boolean {
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downX = event.rawX
-                    downY = event.rawY
-                    lastX = downX
-                    lastY = downY
-                    dragging = false
-                    longPressed = false
-                    postDelayed(longPress, longPressMs)
-                    touchActivity()
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (!dragging && !longPressed &&
-                        (abs(event.rawX - downX) > touchSlop || abs(event.rawY - downY) > touchSlop)
-                    ) {
-                        dragging = true
-                        removeCallbacks(longPress)
-                    }
-                    if (dragging) {
-                        val dx = (event.rawX - lastX).roundToInt()
-                        val dy = (event.rawY - lastY).roundToInt()
-                        if (dx != 0 || dy != 0) {
-                            lastX += dx
-                            lastY += dy
-                            moveBy(dx, dy)
-                        }
-                        touchActivity()
-                    }
-                }
-                MotionEvent.ACTION_UP -> {
-                    removeCallbacks(longPress)
-                    when {
-                        dragging -> savePosition()
-                        !longPressed -> performClick()
-                    }
-                    dragging = false
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    removeCallbacks(longPress)
-                    if (dragging) savePosition()
-                    dragging = false
-                }
-            }
-            return true
-        }
-
-        override fun performClick(): Boolean {
-            super.performClick()
-            setControls(!controlsVisible)
-            return true
-        }
-
-        override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-            super.onInitializeAccessibilityNodeInfo(info)
-            info.className = "android.widget.ImageButton"
-            info.isClickable = true
-            info.isLongClickable = true
-            info.contentDescription = contentDescription
-            info.addAction(AccessibilityNodeInfo.AccessibilityAction(
-                AccessibilityNodeInfo.ACTION_CLICK,
-                if (active) "关闭计时器控制" else "打开计时器控制",
-            ))
-            info.addAction(AccessibilityNodeInfo.AccessibilityAction(
-                AccessibilityNodeInfo.ACTION_LONG_CLICK,
-                "切换迷你模式",
-            ))
-        }
-
-        override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean {
-            return when (action) {
-                AccessibilityNodeInfo.ACTION_CLICK -> {
-                    performClick()
-                    true
-                }
-                AccessibilityNodeInfo.ACTION_LONG_CLICK -> {
-                    toggleMini()
-                    true
-                }
-                else -> super.performAccessibilityAction(action, arguments)
-            }
         }
     }
 
@@ -767,11 +574,10 @@ class OverlayController(
         private const val IDLE_TICK_NANOS = 200_000_000L
         private const val MIN_TICK_NANOS = 1_000_000L
         private const val CONTROLS_AUTO_HIDE_MS = 5_000L
+        private const val EDIT_AUTO_END_MS = 8_000L
+        private const val STATUS_REFRESH_MS = 1_000L
         private const val DEFAULT_Y_FRACTION = 0.28
-        private const val EDGE_MARGIN_DP = 8f
         private const val RIGHT_SNAP_DP = 32f
-        private const val HANDLE_TOUCH_DP = 48f
-        private const val HANDLE_PILL_WIDTH_DP = 18f
-        private const val HANDLE_PILL_HEIGHT_DP = 40f
+        private const val SCRIM = 0x99000000.toInt()
     }
 }

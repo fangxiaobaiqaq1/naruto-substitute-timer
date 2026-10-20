@@ -29,18 +29,20 @@ data class OverlayState(
     val opacity: Float,
 )
 
+/** Shared with internal/ui/theme.go: cyan = cooling down, amber = last 3 s. */
 object TimerColors {
-    const val CLOCK_IDLE = 0xFFB8F4FF.toInt()
-    const val CLOCK_LIVE = 0xFF7EEBFF.toInt()
-    const val CLOCK_WARN = 0xFF4DA3FF.toInt()
-    const val TAG_MINE = 0xFFB8F4FF.toInt()
-    const val TAG_IDLE = 0xFF7ED2E6.toInt()
+    const val CLOCK_IDLE = 0xFF9FB9C4.toInt()
+    const val CLOCK_LIVE = 0xFF5CE1FF.toInt()
+    const val CLOCK_WARN = 0xFFFFB547.toInt()
+    const val TAG_MINE = 0xFFE3F6FB.toInt()
+    const val TAG_IDLE = 0xFF8FB3C0.toInt()
     const val GLASS_BG = 0xFF061820.toInt()
-    const val PANEL_BG = 0xFF0A1622.toInt()
-    const val PANEL_BTN = 0xFF123044.toInt()
-    const val PANEL_HOVER = 0xFF1C4862.toInt()
-    const val PANEL_BORDER = 0xFF388CA8.toInt()
-    const val MINI_CONTROLS_BG = 0xE6061820.toInt()
+    const val PANEL_BG = 0xFF0B1A24.toInt()
+    const val PANEL_BTN = 0xFF15303F.toInt()
+    const val PANEL_HOVER = 0xFF1E4457.toInt()
+    const val PANEL_BORDER = 0xFF24485A.toInt()
+    const val EXIT_BG = 0xFF3A1E24.toInt()
+    const val EXIT_TEXT = 0xFFFF9A8F.toInt()
 }
 
 class Session(
@@ -58,6 +60,12 @@ class Session(
     private var playerSideState = if (settings.rememberSide) {
         settings.playerSide.takeIf { it == "left" || it == "right" } ?: ""
     } else ""
+
+    init {
+        // Go restoreSide: without 记住认边 a previous manual side is not restored,
+        // so the persisted mode must not keep claiming "我方·左" either.
+        if (!settings.rememberSide && settings.playerSide != "auto") settings.playerSide = "auto"
+    }
     private var autoSide = ""
     private var opponentName = ""
     private var leftNinja = ""
@@ -594,7 +602,8 @@ class Session(
         "ban" -> "禁"
         "blank" -> "画面遮挡"
         "unsupported-resolution" -> "画面比例未校准"
-        else -> s.ifEmpty { "待识别" }
+        // The mode word already says 待识别; avoid "待识别 · 待识别".
+        else -> s.ifEmpty { "画面" }
     }
 
     private fun bump() {

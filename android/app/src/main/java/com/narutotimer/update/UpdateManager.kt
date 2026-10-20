@@ -35,6 +35,20 @@ object UpdateManager {
     private const val MAX_APK = 256L * 1024 * 1024
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "nt-updater") }
     private val main = Handler(Looper.getMainLooper())
+    @Volatile private var downloading = false
+    /** A verified APK waiting for the user to allow unknown-source installs. */
+    @Volatile private var pendingInstall: File? = null
+
+    /** Results may arrive after rotation/finish; never show UI on a dead Activity. */
+    private fun Activity.alive() = !isFinishing && !isDestroyed
+
+    /** Called from onResume: continue an install the system permission page interrupted. */
+    fun resumePendingInstall(activity: Activity) {
+        val file = pendingInstall ?: return
+        if (!activity.packageManager.canRequestPackageInstalls()) return
+        pendingInstall = null
+        if (file.exists()) install(activity, file)
+    }
 
     fun source(settings: AppSettings): Source = Source.entries.firstOrNull { it.key == settings.updateSource } ?: Source.GITEE
 
@@ -43,8 +57,12 @@ object UpdateManager {
         if (!quiet) Toast.makeText(activity, "正在检查 ${source.label} 更新…", Toast.LENGTH_SHORT).show()
         executor.execute {
             runCatching { checkNow(source) }
-                .onSuccess { release -> main.post { showResult(activity, settings, release, quiet) } }
-                .onFailure { error -> if (!quiet) main.post { Toast.makeText(activity, "更新检查失败：${error.message}", Toast.LENGTH_LONG).show() } }
+                .onSuccess { release -> main.post { if (activity.alive()) showResult(activity, settings, release, quiet) } }
+                .onFailure { error ->
+                    if (!quiet) main.post {
+                        if (activity.alive()) Toast.makeText(activity, "更新检查失败：${error.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
         }
     }
 
@@ -63,11 +81,27 @@ object UpdateManager {
     }
 
     private fun downloadAndInstall(activity: Activity, release: Release) {
-        Toast.makeText(activity, "正在下载 ${release.tag}…", Toast.LENGTH_SHORT).show()
+        if (downloading) {
+            Toast.makeText(activity, "更新正在下载，请稍候…", Toast.LENGTH_SHORT).show()
+            return
+        }
+        downloading = true
+        Toast.makeText(activity, "正在下载 ${release.tag}，完成后会弹出安装…", Toast.LENGTH_LONG).show()
+        val app = activity.applicationContext
         executor.execute {
-            runCatching { download(activity, release) }
-                .onSuccess { file -> main.post { install(activity, file) } }
-                .onFailure { error -> main.post { Toast.makeText(activity, "更新下载失败：${error.message}", Toast.LENGTH_LONG).show() } }
+            runCatching { download(app, release) }
+                .onSuccess { file ->
+                    main.post {
+                        downloading = false
+                        if (activity.alive()) install(activity, file) else pendingInstall = file
+                    }
+                }
+                .onFailure { error ->
+                    main.post {
+                        downloading = false
+                        Toast.makeText(app, "更新下载失败：${error.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
         }
     }
 
@@ -178,8 +212,10 @@ object UpdateManager {
 
     private fun install(context: Activity, file: File) {
         if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
+            // Keep the verified file; MainActivity.onResume continues the install.
+            pendingInstall = file
             context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")))
-            Toast.makeText(context, "请允许本应用安装未知来源，然后重新点击检查更新", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "请允许本应用安装未知来源，返回后会自动继续安装", Toast.LENGTH_LONG).show()
             return
         }
         val uri = Uri.parse("content://${context.packageName}.update-files/apk/${Uri.encode(file.name)}")
@@ -199,7 +235,18 @@ object UpdateManager {
         return 0
     }
 
-    private fun sha256(file: File): String = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(128 * 1024)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                digest.update(buffer, 0, n)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private fun java.io.InputStream.readBytesLimited(limit: Long): ByteArray {
         val out = java.io.ByteArrayOutputStream()

@@ -139,7 +139,8 @@ class Settings(context: Context) {
         const val KEY_UPDATE_SOURCE = "updateSource"
         const val KEY_AUTO_UPDATES = "autoCheckUpdates"
         const val KEY_DEBUG = "debug"
-        const val DEFAULT_FONT_SCALE = 0.75f
+        /** The overlay card is designed at 100 %; the old one-line pill used 75 %. */
+        const val DEFAULT_FONT_SCALE = 1.00f
         const val FONT_SCALE_MIN = 0.25f
         const val FONT_SCALE_MAX = 3.00f
         const val FONT_SCALE_STEP = 0.01f

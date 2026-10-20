@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -20,6 +21,7 @@ import android.view.Display
 import android.view.WindowManager
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import com.narutotimer.R
 import com.narutotimer.service.TimerAccessibilityService
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
@@ -54,8 +56,20 @@ class ProjectionCaptureService : Service() {
             intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
         } ?: return START_NOT_STICKY
         runCatching { startCapture(code, data) }
-            .onFailure { FrameLoop.offerFailure(it.message ?: "projection failed", NativeMethod.PROJECTION) }
-        return START_STICKY
+            .onFailure {
+                FrameLoop.offerFailure(it.message ?: "projection failed", NativeMethod.PROJECTION)
+                stopCapture()
+                finishService()
+            }
+        return START_NOT_STICKY
+    }
+
+    /** Without a projection there is nothing to show: drop the notification too. */
+    private fun finishService() {
+        mainHandler.post {
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {
@@ -67,15 +81,26 @@ class ProjectionCaptureService : Service() {
         stopCapture()
         stopping.set(false)
         val nm = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(
-                NotificationChannel(NOTIFICATION_CHANNEL, "屏幕识别", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
+        nm.createNotificationChannel(
+            NotificationChannel(NOTIFICATION_CHANNEL, getString(R.string.notification_channel_name), NotificationManager.IMPORTANCE_LOW)
+                .apply { description = getString(R.string.notification_channel_description) }
+        )
+        val open = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, com.narutotimer.ui.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        val stop = PendingIntent.getService(
+            this, 1,
+            Intent(this, ProjectionCaptureService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         val notification = Notification.Builder(this, NOTIFICATION_CHANNEL)
-            .setContentTitle("火影识别服务")
-            .setContentText("正在识别模拟器画面")
-            .setSmallIcon(com.narutotimer.R.drawable.ic_launcher)
+            .setContentTitle(getString(R.string.notification_title))
+            .setContentText(getString(R.string.notification_text))
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentIntent(open)
+            .addAction(Notification.Action.Builder(null, getString(R.string.notification_stop), stop).build())
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
@@ -104,8 +129,10 @@ class ProjectionCaptureService : Service() {
             }
 
             override fun onStop() {
-                if (run != captureGeneration || !stopping.compareAndSet(false, true)) return
+                // "Stop sharing" from the system UI ends this token for good.
+                if (run != captureGeneration || stopping.get()) return
                 stopCapture()
+                finishService()
             }
         }
         p.registerCallback(callback!!, handler)
@@ -227,6 +254,7 @@ class ProjectionCaptureService : Service() {
         const val ACTION_STOP = "com.narutotimer.action.STOP_PROJECTION"
         const val NOTIFICATION_CHANNEL = "capture"
         const val NOTIFICATION_ID = 1
+        private val mainHandler = Handler(android.os.Looper.getMainLooper())
         @Volatile var running = false
             private set
 
