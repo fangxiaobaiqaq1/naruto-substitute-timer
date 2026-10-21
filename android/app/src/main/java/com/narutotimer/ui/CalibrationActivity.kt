@@ -43,6 +43,7 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.narutotimer.CalibrationLimits
 import com.narutotimer.FrameBox
 import com.narutotimer.FrameGeometry
 import com.narutotimer.PixelRect
@@ -86,6 +87,8 @@ class CalibrationActivity : Activity() {
     private var choiceImported = false
     /** Saved boxes (x,y,w,h); null = automatic. */
     private val stored = arrayOfNulls<FloatArray>(COUNT)
+    /** Why a saved box is not used (outside CalibrationLimits; the region is automatic), else null. */
+    private val ignored = arrayOfNulls<String>(COUNT)
     /** Per box: [EDIT_NONE] (saved box or automatic), [EDIT_SET] ([pending] box), [EDIT_CLEAR] (back to automatic). */
     private val edits = IntArray(COUNT)
     private val pending = arrayOfNulls<RectF>(COUNT)
@@ -347,7 +350,32 @@ class CalibrationActivity : Activity() {
     // ---- State ------------------------------------------------------------
 
     private fun readStored() {
-        for (i in 0 until COUNT) stored[i] = settings.calibRect(Settings.KEY_CALIB_RECTS[i])
+        for (i in 0 until COUNT) {
+            stored[i] = settings.calibRect(Settings.KEY_CALIB_RECTS[i])
+            ignored[i] = settings.calibRectIssue(Settings.KEY_CALIB_RECTS[i])
+        }
+    }
+
+    /** Why the pending box [i] would not be used (CalibrationLimits), else null. */
+    private fun pendingIssue(i: Int): String? {
+        if (edits[i] != EDIT_SET) return null
+        val b = imported[i] ?: pending[i]?.let(::toStored) ?: return null
+        return CalibrationLimits.issue(CalibrationLimits.isAvatar(i), b)
+    }
+
+    /** Pending boxes the engine would not use: a dialog says why; true if there were any. */
+    private fun refuseUnusable(action: String): Boolean {
+        val bad = (0 until COUNT).mapNotNull { i -> pendingIssue(i)?.let { "${LABELS[i]}：$it" } }
+        if (bad.isEmpty()) return false
+        AlertDialog.Builder(this)
+            .setTitle("不能$action")
+            .setMessage(
+                bad.joinToString("\n") + "\n\n这样的框识别不会使用（会按自动识别）。框要贴住豆或头像，" +
+                    "大小参考标「（自动）」的框，改好再$action。",
+            )
+            .setPositiveButton("知道了", null)
+            .show()
+        return true
     }
 
     /** Unsaved edits (also the draft carried across 重新取一帧). */
@@ -377,7 +405,7 @@ class CalibrationActivity : Activity() {
                     if (v != null && v.size == 4) {
                         edits[i] = EDIT_SET
                         pending[i] = RectF(v[0], v[1], v[2], v[3])
-                        imported[i] = state.getFloatArray(STATE_EXACT + i)?.takeIf(CalibrationScheme::valid)
+                        imported[i] = state.getFloatArray(STATE_EXACT + i)?.takeIf(CalibrationScheme::inFrame)
                     }
                 }
                 EDIT_CLEAR -> edits[i] = EDIT_CLEAR
@@ -453,15 +481,20 @@ class CalibrationActivity : Activity() {
                 Ui.rounded(this, Ui.SURFACE_2, 10f)
             }
             val (text, tint) = when {
+                edits[i] == EDIT_SET && pendingIssue(i) != null -> "大小不对，不能保存" to Ui.BAD
                 edits[i] == EDIT_SET -> "已修改" to Ui.WARN
                 edits[i] == EDIT_CLEAR -> "将恢复自动" to Ui.WARN
                 stored[i] != null -> "已校准" to Ui.OK
+                ignored[i] != null -> "已保存的框没用上" to Ui.BAD
                 else -> "自动" to Ui.TEXT_2
             }
             chipStates[i]?.text = text
             chipStates[i]?.setTextColor(tint)
         }
-        regionHint.text = REGION_HINTS[selected]
+        // The selected box's size problem (CalibrationLimits) goes first.
+        val problem = pendingIssue(selected)?.let { "$it，保存不了。" }
+            ?: ignored[selected]?.takeIf { edits[selected] == EDIT_NONE }?.let { "已保存的框没用上（$it），现在按自动识别；重新框好再保存。" }
+        regionHint.text = if (problem != null) problem + "\n" + REGION_HINTS[selected] else REGION_HINTS[selected]
         clearButton.isEnabled = edits[selected] == EDIT_SET || (edits[selected] == EDIT_NONE && stored[selected] != null)
         updateProfile()
     }
@@ -729,7 +762,7 @@ class CalibrationActivity : Activity() {
 
     private fun resetAll() {
         // Only saved boxes are written: each write rebuilds the recognition pipeline.
-        for (i in 0 until COUNT) if (stored[i] != null) settings.setCalibRect(Settings.KEY_CALIB_RECTS[i], null)
+        for (i in 0 until COUNT) if (stored[i] != null || ignored[i] != null) settings.setCalibRect(Settings.KEY_CALIB_RECTS[i], null)
         readStored()
         edits.fill(EDIT_NONE)
         pending.fill(null)
@@ -757,6 +790,7 @@ class CalibrationActivity : Activity() {
             }
             return
         }
+        if (refuseUnusable("保存")) return
         val profile = choice
         if (profile != "camp" && profile != "duel") {
             askProfile()
@@ -809,6 +843,7 @@ class CalibrationActivity : Activity() {
 
     /** [profile] = layout of the changed boxes (null: no box set here). */
     private fun commit(profile: String?, clear: List<Int>) {
+        if (refuseUnusable("保存")) return
         val next = finalBoxes(clear)
         // Only real changes are written: each write rebuilds the native pipeline.
         val changed = (0 until COUNT).filter { !sameBox(next[it], stored[it]) }
@@ -847,6 +882,7 @@ class CalibrationActivity : Activity() {
             return
         }
         val sets = (0 until COUNT).any { edits[it] == EDIT_SET }
+        if (refuseUnusable("导出")) return
         val profile = if (sets) choice else settings.calibProfile
         if (profile != "camp" && profile != "duel") {
             askProfile()
@@ -1101,8 +1137,11 @@ class CalibrationActivity : Activity() {
         /** One line for the settings screens. */
         fun summary(settings: Settings): String {
             val set = (0 until COUNT).filter { settings.calibRect(Settings.KEY_CALIB_RECTS[it]) != null }
-            if (set.isEmpty()) return "自动（未校准）"
-            return "已校准 " + set.joinToString("、") { LABELS[it] } + "（${profileName(settings.calibProfile)}画面）"
+            // Saved boxes outside CalibrationLimits are not used: say so, they look calibrated otherwise.
+            val unused = (0 until COUNT).filter { settings.calibRectIssue(Settings.KEY_CALIB_RECTS[it]) != null }
+            val note = if (unused.isEmpty()) "" else "；${names(unused)}的框大小不对，没用上（按自动识别）"
+            if (set.isEmpty()) return "自动（未校准）$note"
+            return "已校准 " + set.joinToString("、") { LABELS[it] } + "（${profileName(settings.calibProfile)}画面）$note"
         }
 
         private fun profileOrEmpty(p: String?): String = when (p) {
@@ -1185,14 +1224,15 @@ class CalibrationActivity : Activity() {
 
         private fun toRect(v: FloatArray) = RectF(v[0], v[1], v[0] + v[2], v[1] + v[3])
 
-        /** x,y,w,h fractions (5 decimals) that pass Settings.calibRect's checks in Float arithmetic. */
+        /** x,y,w,h fractions (5 decimals) inside the frame as Settings.calibRect checks it (sizes are not checked). */
         private fun toStored(r: RectF): FloatArray? {
             val x = round5(r.left.coerceIn(0f, 1f))
             val y = round5(r.top.coerceIn(0f, 1f))
             var w = round5(r.right.coerceIn(0f, 1f) - x).coerceAtMost(1f - x)
             var h = round5(r.bottom.coerceIn(0f, 1f) - y).coerceAtMost(1f - y)
-            while (w > 0f && x + w > 1f) w = Math.nextDown(w)
-            while (h > 0f && y + h > 1f) h = Math.nextDown(h)
+            // The native core adds in double (CalibrationLimits.inFrame).
+            while (w > 0f && x.toDouble() + w.toDouble() > 1.0) w = Math.nextDown(w)
+            while (h > 0f && y.toDouble() + h.toDouble() > 1.0) h = Math.nextDown(h)
             if (w <= 0f || h <= 0f) return null
             return floatArrayOf(x, y, w, h)
         }

@@ -53,11 +53,13 @@ func TestCalibrationSchemeRoundTripsExactly(t *testing.T) {
 	third := 1.0 / 3
 	for _, c := range []*config.RegionCalibration{
 		{Profile: "camp", LeftBeads: &config.NormalizedRect{X: 0.07125, Y: 0.09833333333333333, Width: 0.049999999999999975, Height: 0.027777777777777766}},
+		// Awkward float64 values (and boxes on the frame's edges) within the
+		// size limits (config.CalibrationRectIssue).
 		{Profile: "duel",
-			LeftBeads:   &config.NormalizedRect{X: third, Y: 0.1 + 0.2, Width: 1e-7, Height: third / 7},
+			LeftBeads:   &config.NormalizedRect{X: 1e-7, Y: 0.1 + 0.2, Width: third / 5, Height: third / 12},
 			RightBeads:  &config.NormalizedRect{X: 0.8511666666666665, Y: 0.0981, Width: 0.05, Height: 0.028},
-			LeftAvatar:  &config.NormalizedRect{X: 0, Y: 0, Width: 1, Height: 1},
-			RightAvatar: &config.NormalizedRect{X: math.Nextafter(1, 0) - 0.25, Y: 0.5, Width: 0.25, Height: 0.5}},
+			LeftAvatar:  &config.NormalizedRect{X: 0, Y: 0, Width: 1.0 / 14, Height: third / 2.7},
+			RightAvatar: &config.NormalizedRect{X: math.Nextafter(1, 0) - 0.075, Y: 0.5, Width: 0.075, Height: 0.13}},
 		{Profile: "camp"}, // every box automatic
 	} {
 		in := calibrationScheme{Calibration: c, FrameWidth: 2388, FrameHeight: 1668}
@@ -77,6 +79,9 @@ func TestCalibrationSchemeRoundTripsExactly(t *testing.T) {
 		{Calibration: &config.RegionCalibration{Profile: "duel"}},
 		{Calibration: &config.RegionCalibration{Profile: "duel", RightBeads: &config.NormalizedRect{X: 0.9, Y: 0.1, Width: 0.2, Height: 0.1}}, FrameWidth: 1, FrameHeight: 1},
 		{Calibration: &config.RegionCalibration{Profile: "duel", RightBeads: &config.NormalizedRect{X: math.NaN(), Y: 0.1, Width: 0.2, Height: 0.1}}, FrameWidth: 1, FrameHeight: 1},
+		// Inside the frame but outside the size limits: the engine would not use it.
+		{Calibration: &config.RegionCalibration{Profile: "duel", LeftAvatar: &config.NormalizedRect{X: 0, Y: 0, Width: 1, Height: 1}}, FrameWidth: 1, FrameHeight: 1},
+		{Calibration: &config.RegionCalibration{Profile: "duel", LeftBeads: &config.NormalizedRect{X: 0.3, Y: 0.3, Width: 1e-7, Height: 0.02}}, FrameWidth: 1, FrameHeight: 1},
 	} {
 		if data, err := encodeCalibrationScheme(bad); err == nil {
 			t.Fatalf("encoded an invalid scheme: %s", data)
@@ -120,6 +125,11 @@ func TestCalibrationSchemeDecodingIsStrictAboutContentOnly(t *testing.T) {
 		{"missing width", `{` + head + `, "rightAvatar": {"x": 0.9, "y": 0, "height": 0.1}}`, "缺少数值 width"},
 		{"text number", `{` + head + `, "rightAvatar": {"x": "0.9", "y": 0, "width": 0.07, "height": 0.1}}`, "缺少数值 x"},
 		{"box as array", `{` + head + `, "leftBeads": [0.1, 0.1, 0.05, 0.02]}`, "应为"},
+		// Size limits (docs/区域校准.md 框的大小限制): the engine would not use these boxes.
+		{"whole-frame avatar", `{` + head + `, "leftAvatar": {"x": 0, "y": 0, "width": 1, "height": 1}}`, "左侧头像（leftAvatar）：头像框太大"},
+		{"bead box 3x", `{` + head + `, "rightBeads": {"x": 0.7, "y": 0.05, "width": 0.19, "height": 0.08}}`, "右侧豆（rightBeads）：豆框太大"},
+		{"tiny bead box", `{` + head + `, "leftBeads": {"x": 0.1, "y": 0.1, "width": 0.02, "height": 0.01}}`, "豆框太小"},
+		{"sliver avatar", `{` + head + `, "rightAvatar": {"x": 0.9, "y": 0, "width": 0.01, "height": 0.12}}`, "头像框太扁或太窄"},
 		{"huge", `{"kind": "naruto-timer-calibration", "pad": "` + strings.Repeat("x", calibrationSchemeMaxBytes) + `"}`, "太大"},
 	} {
 		got, err := decodeCalibrationScheme([]byte(tc.file))

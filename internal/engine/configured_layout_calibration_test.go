@@ -19,12 +19,25 @@ func TestCalibrationUnsetKeepsAutomaticPositions(t *testing.T) {
 	invalid := cfg
 	invalid.Calibration = &config.RegionCalibration{Profile: "lobby", LeftBeads: &config.NormalizedRect{X: .1, Y: .1, Width: .1, Height: .1}}
 	ignored := NewConfiguredLayout(detect.ModeAuto, invalid)
+	// Inside the frame but outside the size limits (config.CalibrationRectIssue,
+	// docs/区域校准.md 框的大小限制): every box stays automatic, from the
+	// config and from a live SetCalibration alike.
+	oversized := &config.RegionCalibration{Profile: "duel",
+		LeftBeads:   &config.NormalizedRect{X: 0, Y: 0, Width: 1, Height: 1},
+		RightBeads:  &config.NormalizedRect{X: 0.8, Y: 0.1, Width: 0.004, Height: 0.003},
+		LeftAvatar:  &config.NormalizedRect{X: 0, Y: 0, Width: 0.25, Height: 0.45},
+		RightAvatar: &config.NormalizedRect{X: 0.9, Y: 0, Width: 0.01, Height: 0.12}}
+	tooBig := cfg
+	tooBig.Calibration = oversized
+	rejected := NewConfiguredLayout(detect.ModeAuto, tooBig)
+	rejectedLive := NewConfiguredLayout(detect.ModeAuto, cfg)
+	rejectedLive.SetCalibration(oversized)
 	for _, size := range []image.Point{{1280, 720}, {1920, 1080}, {2400, 1080}, {2388, 1668}} {
 		img := image.NewRGBA(image.Rectangle{Max: size})
 		for _, profile := range []string{"camp", "duel"} {
 			area, _ := plain.ContentArea(img)
 			want := plain.PositionsInImage(profile, img, area)
-			for _, l := range []*ConfiguredLayout{cleared, ignored, plain.Pinned()} {
+			for _, l := range []*ConfiguredLayout{cleared, ignored, plain.Pinned(), rejected, rejectedLive} {
 				if got := l.PositionsInImage(profile, img, area); !slices.Equal(got, want) {
 					t.Fatalf("%v %s: %+v != %+v", size, profile, got, want)
 				}

@@ -43,6 +43,24 @@ struct RegionCalibration {
     std::optional<NormalizedRect> LeftBeads, RightBeads, LeftAvatar, RightAvatar;
 };
 
+// Size limits of a calibration box (docs/区域校准.md 框的大小限制; port of
+// internal/config/calibration_limits.go, same arithmetic as Go and Kotlin
+// CalibrationLimits, so every layer accepts the same boxes). u, v = the box's
+// width and height in automatic-box units at HUD scale 1 (bead box: 16w, 36h;
+// portrait box: 960w/68.5, 540h/68.5), k = max(u, v) = how many times the
+// automatic box it is, on any frame. Usable: 1/2 <= k <= 2 and
+// min(u, v) >= k/4. Implemented in src/config/calibration_limits.cpp.
+constexpr double CalibrationMaxScale = 2.0;
+constexpr double CalibrationMinScale = 0.5;
+constexpr double CalibrationMinShape = 0.25;
+
+enum class CalibrationIssue { None, TooLarge, TooSmall, BadShape };
+
+// CalibrationBoxUnits is the box's (u, v) (avatar: a portrait box, else a bead box).
+void CalibrationBoxUnits(bool avatar, const NormalizedRect& r, double& u, double& v);
+// CalibrationRectIssue is None for a usable box; r must already lie inside the frame.
+CalibrationIssue CalibrationRectIssue(bool avatar, const NormalizedRect& r);
+
 struct LayoutConfig {
     std::string PreferredProfile;
     std::map<std::string, LayoutProfile> Profiles;

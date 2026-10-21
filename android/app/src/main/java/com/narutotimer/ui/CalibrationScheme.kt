@@ -1,5 +1,6 @@
 package com.narutotimer.ui
 
+import com.narutotimer.CalibrationLimits
 import org.json.JSONException
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -72,7 +73,7 @@ object CalibrationScheme {
         out.append("  \"profile\": \"").append(scheme.profile).append('"')
         for ((i, key) in KEYS.withIndex()) {
             val b = scheme.boxes[i] ?: continue
-            require(valid(b)) { "$key ${b.joinToString()}" }
+            require(valid(i, b)) { "$key ${b.joinToString()}" }
             out.append(",\n  \"").append(key).append("\": {")
                 .append("\"x\": ").append(number(b[0]))
                 .append(", \"y\": ").append(number(b[1]))
@@ -85,8 +86,10 @@ object CalibrationScheme {
 
     /**
      * Parses and checks a scheme file. Throws [FormatException] (Chinese message) when the kind or
-     * version is wrong, the profile is not camp/duel or a box is not a box inside the frame. Boxes
-     * come back as valid calibration boxes (x, y ≥ 0, w, h > 0, x + w ≤ 1, y + h ≤ 1 in Float).
+     * version is wrong, the profile is not camp/duel, a box is not a box inside the frame or its
+     * size is outside [CalibrationLimits] (the engine would not use it). Boxes come back as valid
+     * calibration boxes ([valid]: x, y ≥ 0, w, h > 0, x + w ≤ 1, y + h ≤ 1 as the native core
+     * checks them, and within the size limits).
      */
     fun decode(text: String): Scheme {
         val root = try {
@@ -121,10 +124,11 @@ object CalibrationScheme {
         return abs(scheme.frameWidth.toDouble() / scheme.frameHeight - current) / current
     }
 
-    /** Same checks as Settings.calibRect. */
-    fun valid(b: FloatArray): Boolean =
-        b.size == 4 && b.all { it.isFinite() } && b[0] >= 0f && b[1] >= 0f && b[2] > 0f && b[3] > 0f &&
-            b[0] + b[2] <= 1f && b[1] + b[3] <= 1f
+    /** Same checks as Settings.calibRect for box [index] ([KEYS] order): inside the frame and within [CalibrationLimits]. */
+    fun valid(index: Int, b: FloatArray): Boolean = CalibrationLimits.usable(index, b)
+
+    /** Inside the frame with a positive size, as the native core checks it (sizes not checked). */
+    fun inFrame(b: FloatArray): Boolean = CalibrationLimits.inFrame(b)
 
     private fun box(root: JSONObject, index: Int): FloatArray? {
         val key = KEYS[index]
@@ -146,20 +150,25 @@ object CalibrationScheme {
         if (x < -EDGE_SLACK || y < -EDGE_SLACK || x + w > 1 + EDGE_SLACK || y + h > 1 + EDGE_SLACK) {
             throw FormatException("${name}超出画面：坐标是整帧的比例，x、y 和 x+width、y+height 都要在 0–1 之间。")
         }
-        return fit(x, y, w, h) ?: throw FormatException("${name}太小。")
+        val b = fit(x, y, w, h) ?: throw FormatException("${name}太小。")
+        CalibrationLimits.issue(CalibrationLimits.isAvatar(index), b)?.let {
+            throw FormatException("${name}：$it。这个框不会被使用，请重新框好再导出方案。")
+        }
+        return b
     }
 
-    /** The box as Float; only a box that is not valid as it is gets pulled inside the frame ([EDGE_SLACK], rounding). */
+    /** The box as Float; only a box that is not inside the frame as it is gets pulled inside ([EDGE_SLACK], rounding). */
     private fun fit(x: Double, y: Double, w: Double, h: Double): FloatArray? {
         val exact = floatArrayOf(x.toFloat(), y.toFloat(), w.toFloat(), h.toFloat())
-        if (valid(exact)) return exact
+        if (inFrame(exact)) return exact
         val fx = x.coerceIn(0.0, 1.0).toFloat()
         val fy = y.coerceIn(0.0, 1.0).toFloat()
         var fw = w.toFloat().coerceAtMost(1f - fx)
         var fh = h.toFloat().coerceAtMost(1f - fy)
-        while (fw > 0f && fx + fw > 1f) fw = Math.nextDown(fw)
-        while (fh > 0f && fy + fh > 1f) fh = Math.nextDown(fh)
-        return floatArrayOf(fx, fy, fw, fh).takeIf(::valid)
+        // The native core adds in double: shrink until the widened sum fits too.
+        while (fw > 0f && fx.toDouble() + fw.toDouble() > 1.0) fw = Math.nextDown(fw)
+        while (fh > 0f && fy.toDouble() + fh.toDouble() > 1.0) fh = Math.nextDown(fh)
+        return floatArrayOf(fx, fy, fw, fh).takeIf(::inFrame)
     }
 
     private fun frameSide(v: Any?): Int {

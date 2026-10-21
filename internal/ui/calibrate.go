@@ -130,6 +130,38 @@ func newRegionCalibration(profile string, rects [calibTargetCount]*config.Normal
 		LeftAvatar: rects[calibLeftAvatar], RightAvatar: rects[calibRightAvatar]}
 }
 
+// calibrationLimitIssue is why the engine would not use r as t's box
+// (config.CalibrationRectIssue, docs/区域校准.md 框的大小限制), "" if it would.
+func calibrationLimitIssue(t calibTarget, r config.NormalizedRect) string {
+	return config.CalibrationRectIssue(!t.beads(), r)
+}
+
+// calibrationLimitError names the first box of c outside the size limits;
+// validation would refuse it, this says which box and why.
+func calibrationLimitError(c *config.RegionCalibration) error {
+	for t, r := range calibrationRects(c) {
+		if r == nil {
+			continue
+		}
+		if issue := calibrationLimitIssue(calibTarget(t), *r); issue != "" {
+			return fmt.Errorf("%w：%s：%s。这样的框识别不会使用，请框好后再保存（大小参考带「自动」的框）", errInvalidCalibration, calibTargetNames[t], issue)
+		}
+	}
+	return nil
+}
+
+// limitNote warns on the status line that the box just drawn or changed is
+// outside the size limits.
+func (c *calibrationWindow) limitNote(t calibTarget) string {
+	if !c.touched[t] || c.drawn[t] == nil {
+		return ""
+	}
+	if issue := calibrationLimitIssue(t, c.drawn[t].rect); issue != "" {
+		return issue + "，这样的框保存不了。"
+	}
+	return ""
+}
+
 // cloneCalibration deep-copies c: no rect pointer is ever shared between the
 // session, the window and the engine.
 func cloneCalibration(c *config.RegionCalibration) *config.RegionCalibration {
@@ -480,6 +512,9 @@ func (s *session) calibration() *config.RegionCalibration {
 // after the calibration was applied, like the other settings.
 func (s *session) setCalibration(next *config.RegionCalibration) error {
 	next = cloneCalibration(next)
+	if err := calibrationLimitError(next); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	cfg := s.cfg
 	cfg.Layout.Calibration = next
@@ -908,6 +943,7 @@ func (c *calibrationWindow) finishBox(from, to fyne.Position) {
 	if c.target.beads() {
 		text = name + "已框好，4 个小点应落在每颗豆中间。"
 	}
+	text += c.limitNote(c.target)
 	if c.profile() == "" {
 		text += "先在上方选择训练场或决斗场，否则不能保存。"
 	}
@@ -950,6 +986,7 @@ func (c *calibrationWindow) finishAdjust(t calibTarget, r config.NormalizedRect,
 	if t.beads() {
 		text += "4 个小点应落在每颗豆中间。"
 	}
+	text += c.limitNote(t)
 	if c.drawn[t].profile == "" {
 		text += "先在上方选择训练场或决斗场，否则不能保存。"
 	}
