@@ -118,6 +118,18 @@ func (s *session) stopDiagnostics() {
 	}()
 }
 
+// exportReplayAsync runs a replay export off the UI goroutine. Run joins it
+// (diagnosticWriters) before returning, so quitting during an export does not
+// leave a partial .replay-*.zip behind.
+func (s *session) exportReplayAsync(export func() (string, error), done func(path string, err error)) {
+	s.diagnosticWriters.Add(1)
+	go func() {
+		defer s.diagnosticWriters.Done()
+		path, err := export()
+		done(path, err)
+	}()
+}
+
 // Called while the model lock is held, immediately after SideClock.Observe.
 // LastEvent carries first evidence time, not the time its confirmation returned.
 func (s *session) traceConfirmed(ref traceRef, beforeLeft, beforeRight uint64, at time.Time) {
@@ -404,8 +416,7 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 			return
 		}
 		exportReplay.Disable()
-		go func() {
-			path, err := r.ExportReplay("")
+		s.exportReplayAsync(func() (string, error) { return r.ExportReplay("") }, func(path string, err error) {
 			fyne.Do(func() {
 				if s.stopped() || s.diagnosticWindow != w {
 					return
@@ -417,7 +428,7 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 				}
 				exportSaved(w, "诊断回放", path)
 			})
-		}()
+		})
 	})
 	var probe *widget.Button
 	probe = widget.NewButton("验证 MuMu SDK", func() {
