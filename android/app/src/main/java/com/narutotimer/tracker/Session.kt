@@ -59,6 +59,8 @@ class Session(
     private var fightHits = 0
     private var leaveHits = 0
     private var lastFrame: AnalysisResult? = null
+    /** Go s.beads: bead display of the latest fighting, error-free frame; empty otherwise. */
+    private var displayBeads: List<FrameBead> = emptyList()
     private var playerSideState = if (settings.rememberSide) {
         settings.playerSide.takeIf { it == "left" || it == "right" } ?: ""
     } else ""
@@ -74,6 +76,12 @@ class Session(
     private var rightNinja = ""
     private var leftNinjaCandidate = ""
     private var rightNinjaCandidate = ""
+
+    // Go ninjaDisplay: tag history only, never a cooldown, identity, slot or palette input.
+    // Keeps a short name-reading gap from blinking the label. Index 0 = left, 1 = right.
+    private val ninjaDisplayName = arrayOf("", "")
+    private val ninjaDisplaySeenAt = LongArray(2)
+    private var ninjaDisplayAt = 0L
 
     private var lastCaptured = 0L
     private var scene = ""
@@ -123,9 +131,18 @@ class Session(
                 // Only the visual baseline is invalid; confirmed cooldowns continue.
                 leftClock.resyncObservation()
                 rightClock.resyncObservation()
+                clearNinjaDisplaysLocked()
+            }
+            // Topology, confirmed ninjas and the bead display come only from fight
+            // frames without an error; VS/result/failure frames carry none of them.
+            if (f.fighting && f.err == null) {
+                updateHudLocked(f)
+                displayBeads = f.frameBeads
+            } else {
+                updateNinjaDisplayLocked(f)
+                displayBeads = emptyList()
             }
             updateIdentityLocked(f)
-            updateTopologyLocked(f)
 
             // Hold/error frames retain the display but never supply exit evidence,
             // bead votes, or a replacement for a missing fresh pixel frame.
@@ -206,12 +223,16 @@ class Session(
         val right = rightClock.latestRemaining(nowNanos)
         val player = effectiveSideLocked()
         val opponentNinja = opponentNinjaLocked()
+        // Go refreshOverlay: the confirmed name only while the fight is readable (or the
+        // user's override), else the recent display (cleared on VS/end), else the candidate.
+        val confirmed = if (GoText.trimSpace(settings.ninjaQuery).isEmpty() && (fHoldLocked() || !isFighting)) "" else opponentNinja
+        val shownConfirmed = confirmed.ifEmpty { recentOpponentDisplayLocked() }
         val candidate = when (player) {
             "left" -> rightNinjaCandidate
             "right" -> leftNinjaCandidate
             else -> ""
         }
-        val shownNinja = opponentNinja.ifEmpty { candidate }
+        val shownNinja = shownConfirmed.ifEmpty { candidate }
         val opponentSide = if (player == "left") "右" else if (player == "right") "左" else ""
         val tag = if (shownNinja.isNotEmpty() && opponentSide.isNotEmpty()) {
             "对面·$opponentSide · ${NinjaRules.shortLabel(shownNinja)}"
@@ -232,7 +253,7 @@ class Session(
             "right" -> "第 ${leftClock.eventCount()} 次"
             else -> "左${leftClock.eventCount()}次 / 右${rightClock.eventCount()}次"
         }
-        val currentBeads = lastFrame?.frameBeads.orEmpty()
+        val currentBeads = displayBeads
         // Missing visual evidence must not stop an already-confirmed cooldown.
         // Without a clock, expose why we are waiting instead of the pill's generic "—".
         val opponentLeft = player == "right"
@@ -254,7 +275,7 @@ class Session(
             }
         }
         OverlayState(
-            revision, tag, if (opponentNinja.isEmpty()) TimerColors.TAG_IDLE else TimerColors.TAG_MINE,
+            revision, tag, if (shownConfirmed.isEmpty()) TimerColors.TAG_IDLE else TimerColors.TAG_MINE,
             modeText, primary, clockColor(opp), event, dual, alt,
             if (alt == "—" || alt == "就绪" || alt.isEmpty()) TimerColors.CLOCK_IDLE else TimerColors.CLOCK_LIVE,
             SideClock.formatCD(left), clockColor(left), SideClock.formatCD(right), clockColor(right),
@@ -339,6 +360,7 @@ class Session(
             rightClock.resyncObservation()
             syncLeft = false
             syncRight = false
+            clearNinjaDisplaysLocked()
             bump()
         }
     }
@@ -373,13 +395,75 @@ class Session(
         return changed
     }
 
-    private fun updateIdentityLocked(f: AnalysisResult) {
+    /** Go updateHUD: fighting frames without an error only. */
+    private fun updateHudLocked(f: AnalysisResult) {
+        if (layoutProfile.isNotEmpty() && f.layoutProfile.isNotEmpty() && layoutProfile != f.layoutProfile) {
+            clearNinjaDisplaysLocked()
+        }
+        updateNinjaDisplayLocked(f)
+        val left = f.slots(true, settings.beadsPerSide)
+        val right = f.slots(false, settings.beadsPerSide)
+        if (leftSlots != 0 && leftSlots != left) leftClock.resyncObservation()
+        if (rightSlots != 0 && rightSlots != right) rightClock.resyncObservation()
+        leftSlots = left
+        rightSlots = right
         // Candidate labels are display-only. They never enter the confirmed ninja
         // policy (in particular, they cannot enable the special 10-second clock).
         leftNinja = f.leftNinja
         rightNinja = f.rightNinja
         leftNinjaCandidate = f.leftNinjaCandidate
         rightNinjaCandidate = f.rightNinjaCandidate
+    }
+
+    private fun clearNinjaDisplaysLocked() {
+        ninjaDisplayName.fill("")
+        ninjaDisplaySeenAt.fill(0L)
+    }
+
+    /** Go updateNinjaDisplay (internal/ui/ninja_display.go). */
+    private fun updateNinjaDisplayLocked(f: AnalysisResult) {
+        val at = frameTime(f.capturedAtNanos)
+        if (ninjaDisplayAt != 0L && at < ninjaDisplayAt) clearNinjaDisplaysLocked()
+        if (ninjaDisplayAt != 0L && at == ninjaDisplayAt) return
+        ninjaDisplayAt = at
+        if (f.scene == "vs" || (!f.hold && !f.fighting && isEndScene(f.scene))) {
+            clearNinjaDisplaysLocked()
+            return
+        }
+        for (i in 0..1) {
+            if (at - ninjaDisplaySeenAt[i] > NAME_DISPLAY_TTL_NANOS) {
+                ninjaDisplayName[i] = ""
+                ninjaDisplaySeenAt[i] = 0L
+            }
+            if (!f.fighting || f.hold || f.err != null) continue
+            val name = if (i == 0) f.leftNinja else f.rightNinja
+            val candidate = if (i == 0) f.leftNinjaCandidate else f.rightNinjaCandidate
+            if (name.isNotEmpty()) {
+                ninjaDisplayName[i] = name
+                ninjaDisplaySeenAt[i] = at
+            } else if (candidate.isNotEmpty() && candidate != ninjaDisplayName[i]) {
+                ninjaDisplayName[i] = ""
+                ninjaDisplaySeenAt[i] = 0L
+            }
+        }
+    }
+
+    /** Go recentOpponentDisplay; Android shows no "needs recheck" suffix. */
+    private fun recentOpponentDisplayLocked(): String {
+        val index = when (effectiveSideLocked()) {
+            "left" -> 1
+            "right" -> 0
+            else -> return ""
+        }
+        val age = ninjaDisplayAt - ninjaDisplaySeenAt[index]
+        val name = ninjaDisplayName[index]
+        return if (name.isEmpty() || age < 0 || age > NAME_DISPLAY_TTL_NANOS) "" else name
+    }
+
+    /** Go frameTime: a frame without an acquisition time is observed now. */
+    private fun frameTime(at: Long): Long = if (at != 0L) at else System.nanoTime()
+
+    private fun updateIdentityLocked(f: AnalysisResult) {
         if (f.oppName.isNotEmpty()) opponentName = f.oppName
 
         if (f.err != null) return
@@ -399,15 +483,6 @@ class Session(
             playerSideState = f.playerSide
             if (f.playerName.isNotEmpty()) opponentName = f.oppName
         }
-    }
-
-    private fun updateTopologyLocked(f: AnalysisResult) {
-        val left = f.slots(true, settings.beadsPerSide)
-        val right = f.slots(false, settings.beadsPerSide)
-        if (leftSlots != 0 && leftSlots != left) leftClock.resyncObservation()
-        if (rightSlots != 0 && rightSlots != right) rightClock.resyncObservation()
-        leftSlots = left
-        rightSlots = right
     }
 
     private fun observeRoundOpeningLocked(f: AnalysisResult) {
@@ -640,5 +715,7 @@ class Session(
 
     companion object {
         private const val ROUND_OPENING_MARKER_GAP_NANOS = 250_000_000L
+        /** Go nameDisplayTTL. */
+        private const val NAME_DISPLAY_TTL_NANOS = 2_000_000_000L
     }
 }
