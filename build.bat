@@ -11,6 +11,9 @@ set "LDFLAGS=-s -w %VERSION_FLAGS%"
 rem Recognition parity: GOAMD64=v3 would let the compiler fuse float math (FMA).
 set "GOAMD64=v1"
 go mod download || goto :fail
+rem The diagnostics modfile replaces Fyne with a junction into the module cache,
+rem so go.sum is never consulted for it: verify the cache before using it.
+go mod verify || goto :fail
 echo Preparing native draw diagnostics
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\fyne-diagnostics\prepare.ps1 || goto :fail
 echo [1/5] timer CLI
