@@ -201,4 +201,52 @@ bool ValidAccount(const std::string& s) {
     return n >= 2 && n <= 24;
 }
 
+// Go Engine.Analyze (side from accounts): exactly one side shows a name of mine (a complete account
+// beats one whose end is covered; both = no side). Else, when ours is covered, exactly one side with
+// a complete account that is not even the start of a name of mine is the opponent, so we are on the
+// other side (a mistyped 我的名字 can then give the wrong side, as on Windows).
+SideDecision DecideSide(const std::array<std::string, 2>& accounts, const std::vector<std::string>& names,
+                        const Dictionary& known) {
+    SideDecision out;
+    bool any = false;
+    for (const std::string& name : names) any = any || !name.empty();
+    if (!any) return out;
+    std::array<int, 2> level{};
+    std::array<std::string, 2> who, other;
+    for (size_t i = 0; i < 2; ++i) {
+        const std::string& seg = accounts[i];
+        if (seg.empty()) continue;
+        for (const std::string& name : names) {
+            const int m = MatchName(seg, name, known);
+            if (m > level[i]) {
+                level[i] = m;
+                who[i] = name;
+            }
+        }
+        if (level[i] == 0 && seg.size() > 2 && seg.back() == ')') {
+            const std::string inner = seg.substr(1, seg.size() - 2);
+            if (ValidAccount(inner)) other[i] = inner;
+        }
+    }
+    for (int want : {2, 1}) {
+        const bool a = level[0] == want, b = level[1] == want;
+        if (a && b) return out;  // both sides look like mine: no side
+        if (a != b) {
+            const size_t side = a ? 0 : 1;
+            out.side = static_cast<int>(side);
+            out.player = who[side];
+            out.opp = other[1 - side];
+            out.how = want == 2 ? "account" : "account start, end covered";
+            return out;
+        }
+    }
+    if (other[0].empty() != other[1].empty()) {
+        const size_t opp = other[0].empty() ? 1 : 0;
+        out.side = static_cast<int>(1 - opp);
+        out.opp = other[opp];
+        out.how = "other account not mine";
+    }
+    return out;
+}
+
 }  // namespace nt::hudtext

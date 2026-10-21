@@ -466,45 +466,19 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
                          (done->generation != generation_ ? "scene/hold changed" : at - done->at > resultMaxAge ? "too old" : "geometry changed"));
         }
     }
-    // Only 我的名字 decides: exactly one side shows a configured account (a complete one beats one
-    // whose end is covered). No "the other account is not mine" inference (see nt/hudtext.h).
+    // The Windows rule (Go Engine.Analyze): the one side showing 我的名字, else (ours covered) the
+    // side opposite the one complete account that is not mine. See DecideSide / nt/hudtext.h.
     bool used = false;
     if (res.PlayerSide.empty()) {
-        std::array<int, 2> level{};
-        std::array<std::string, 2> who;
-        for (size_t i = 0; i < 2; ++i) {
-            const std::string& seg = sides_[i].account.accepted;
-            if (seg.empty()) continue;
-            for (const std::string& name : names) {
-                const int m = MatchName(seg, name, known_);
-                if (m > level[i]) {
-                    level[i] = m;
-                    who[i] = name;
-                }
-            }
-        }
-        int side = -1;
-        for (int want : {2, 1}) {
-            const bool a = level[0] == want, b = level[1] == want;
-            if (a != b) {
-                side = a ? 0 : 1;
-                break;
-            }
-            if (a && b) break;  // both sides look like mine: no side
-        }
-        if (side >= 0) {
+        const SideDecision d = DecideSide({sides_[0].account.accepted, sides_[1].account.accepted}, names, known_);
+        if (d.side >= 0) {
             if (!reported_ && worker_ != nullptr) {
                 reported_ = true;
-                worker_->Log(std::string("text side: ") + (side == 0 ? "left" : "right") +
-                             (level[static_cast<size_t>(side)] == 2 ? " (account)" : " (account start, end covered)"));
+                worker_->Log(std::string("text side: ") + (d.side == 0 ? "left" : "right") + " (" + d.how + ")");
             }
-            res.PlayerSide = side == 0 ? "left" : "right";
-            res.PlayerName = who[static_cast<size_t>(side)];
-            const std::string& opp = sides_[static_cast<size_t>(1 - side)].account.accepted;
-            if (level[static_cast<size_t>(1 - side)] == 0 && opp.size() > 2 && opp.back() == ')') {
-                const std::string inner = opp.substr(1, opp.size() - 2);
-                if (ValidAccount(inner)) res.OppName = inner;
-            }
+            res.PlayerSide = d.side == 0 ? "left" : "right";
+            if (!d.player.empty()) res.PlayerName = d.player;  // elimination: PlayerName stays empty (Go)
+            if (!d.opp.empty()) res.OppName = d.opp;
             used = true;
         }
     }

@@ -174,8 +174,10 @@ android/
 - 同一个模型文件（APK `assets/ocr/recognizer.onnx`，不压缩）。行预处理、CTC 解码、分词、三取二、字形证据逐行对应 Go；
   网络结果与 ONNX Runtime 1.27.0 只差浮点累加顺序（随机输入最大差 7e-6；两段视频 166 帧的全部 996 个原文与
   Go/ORT 逐字相同，`tools/ocrhost` 对 `tools/ocrcheck`）。arm64 的矩阵乘允许 FMLA，x86_64 的 SSE/AVX 路径逐位相同。
-- 只取账号，不认忍者名（安卓忍者名仍走模板/头像）；与 Go 的差别（卡片挡住行尾、头像挡住账号末尾、装饰字、
-  不用排除法、保持期间留读法、时限 4 s）见 nt/hudtext.h 开头。
+- 只取账号，不认忍者名（安卓忍者名仍走模板/头像）。认边规则与 Go 相同（`hudtext::DecideSide`）：「我的名字」只在一侧
+  → 我方在那一侧；自己的名字被挡住时，只有一侧读出完整的、不是我的名字的账号 → 那是对面，我方在另一侧
+  （「我的名字」填错时可能认错边，两端一样）。与 Go 的差别（卡片挡住行尾、头像挡住账号末尾、装饰字、
+  保持期间留读法、时限 4 s）见 nt/hudtext.h 开头。
 - 线程：`hudtext::Worker` 一个常驻线程，一次一个任务（每个任务另起 1 个线程分行）；模型第一次需要时从 AssetManager
   读，空闲 20 s 释放（`nativeReleaseTextModel` 立即释放）。分析线程只做裁条、像素签名和字形核验，从不等待识别。
 - Kotlin 每帧 `nativeSetTextRecognition(session.wantsTextRecognition())`：只在「自动认边」且我方未知时读。
