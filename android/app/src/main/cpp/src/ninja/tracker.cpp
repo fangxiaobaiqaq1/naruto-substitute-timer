@@ -59,6 +59,8 @@ Readout Tracker::read(Reader* reader, const RGBA* img, Rect roi, double scale, c
         return Readout{};
     };
     if (!hint_.Name.empty()) {
+        // hint_.template_ and hint_.rect are the strip size that matched (the
+        // reader scores a few sizes around the nominal one), not the nominal.
         Rect region = hint_.rect.Inset(-1).Intersect(roi).Intersect(img->Bounds());
         if (!region.Empty()) {
             RGBA view = img->SubImage(region);

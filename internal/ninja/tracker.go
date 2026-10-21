@@ -50,6 +50,8 @@ func (t *Tracker) read(reader *Reader, img *image.RGBA, roi image.Rectangle, sca
 		return Readout{}
 	}
 	if t.hint.Name != "" {
+		// hint.template and hint.rect are the strip size that matched (the
+		// reader scores a few sizes around the nominal one), not the nominal.
 		region := t.hint.rect.Inset(-1).Intersect(roi).Intersect(img.Bounds())
 		if !region.Empty() {
 			view := img.SubImage(region).(*image.RGBA)
