@@ -239,6 +239,7 @@ type replayTracker struct {
 	layoutProfile         string
 	leftSlots, rightSlots int
 	observationSpace      app.ObservationSpace
+	cadence               app.ObservationCadence
 }
 
 type replayEvent struct {
@@ -248,11 +249,7 @@ type replayEvent struct {
 }
 
 func newReplayTracker(cfg config.Config, cd time.Duration) *replayTracker {
-	t := &replayTracker{cfg: cfg, cd: cd}
-	gap := max(150*time.Millisecond, time.Duration(cfg.UI.PollIntervalMS*3)*time.Millisecond)
-	t.left.SetObservationGap(gap)
-	t.right.SetObservationGap(gap)
-	return t
+	return &replayTracker{cfg: cfg, cd: cd}
 }
 
 func (t *replayTracker) invalidate(at time.Time) {
@@ -310,6 +307,8 @@ func (t *replayTracker) observeRoundOpening(f frame.Frame) {
 }
 
 func (t *replayTracker) resyncAfterRecordingGap() {
+	// The interval across unrecorded samples is not a cadence sample.
+	t.cadence.Next(time.Time{}, 0)
 	t.left.ResyncObservation()
 	t.right.ResyncObservation()
 	t.fightHits, t.leaveHits = 0, 0
@@ -319,6 +318,11 @@ func (t *replayTracker) resyncAfterRecordingGap() {
 }
 
 func (t *replayTracker) observe(f frame.Frame) []replayEvent {
+	// Same rule as the live session: every frame is a cadence sample, and the
+	// bound for this frame comes from the cadence before it.
+	gap := t.cadence.Next(f.CapturedAt, time.Duration(t.cfg.UI.PollIntervalMS)*time.Millisecond)
+	t.left.SetObservationGap(gap)
+	t.right.SetObservationGap(gap)
 	width, height := 0, 0
 	if f.Img != nil {
 		width, height = f.Img.Bounds().Dx(), f.Img.Bounds().Dy()
