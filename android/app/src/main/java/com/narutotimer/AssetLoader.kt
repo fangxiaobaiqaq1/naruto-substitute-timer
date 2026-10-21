@@ -26,7 +26,7 @@ import java.util.Locale
  *   templates/ 只加载 manifest.json 引用的 PNG（native scene 目录只按清单读模板）。
  * - 每个 .json 以 UTF-8 文本注册。game/ 下的 .json 仍在 APK 里，但 native 从不读取，不加载。
  * - 用户账号名图鉴：filesDir/identity/（含 seen/、fight/）下 png/jpg/jpeg，key 为 "identity/<相对路径>"。
- * - 最后设置我方账号名与区域校准，并 nativeFinishAssets() 构建引擎。
+ * - 最后设置我方账号名（读当时的设置，[applyPlayerNames]）与区域校准，并 nativeFinishAssets() 构建引擎。
  *
  * 读文件、去色彩块和像素拷贝都用复用的暂存缓冲，加载结束即释放（docs/性能优化-android-app.md）。
  */
@@ -56,6 +56,17 @@ object AssetLoader {
     private var stripped = ByteArray(0)
     private var pixels: ByteBuffer? = null
     private var sha256: MessageDigest? = null
+    /** Makes "read the setting, hand it to native" atomic, so the newest names are always the last applied. */
+    private val namesLock = Any()
+
+    /**
+     * Hands the current [Settings.playerNames] to native. Native keeps them across engine rebuilds
+     * (jni.cpp g_playerNames), so this may run at any time, also while assets load; names saved
+     * during a load are no longer lost (AND-08). Blocks on the native lock: never on the main thread.
+     */
+    fun applyPlayerNames(settings: Settings) = synchronized(namesLock) {
+        NativeCore.setPlayerNames(settings.playerNames)
+    }
 
     /** 完整加载并构建引擎。耗时（数百毫秒），必须在后台线程调用。 */
     @Synchronized
@@ -96,7 +107,7 @@ object AssetLoader {
             releaseScratch()
         }
         val decoded = System.nanoTime()
-        NativeCore.setPlayerNames(playerNames)
+        if (settings != null) applyPlayerNames(settings) else NativeCore.setPlayerNames(playerNames)
         if (settings != null && !NativeCore.setCalibration(settings)) errors += "calibration: ${NativeCore.lastError()}"
         val ready = NativeCore.nativeFinishAssets()
         val nativeError = if (ready) "" else NativeCore.lastError()
