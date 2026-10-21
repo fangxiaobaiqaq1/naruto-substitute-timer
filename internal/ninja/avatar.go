@@ -460,7 +460,105 @@ func (c *avatarCatalog) Match(img *image.RGBA, roi image.Rectangle, scale float6
 	for i := range best {
 		entries = append(entries, best[i].entry)
 	}
-	return c.matchEntries(view, gray, scale, entries)
+	out, scores := c.scoreEntries(view, gray, scale, entries)
+	if out.ID != "" {
+		return out
+	}
+	// Nothing passed: take the second look below. Only an identity it finds
+	// replaces this result; otherwise every field, the shortlist the tracker
+	// keeps included, stays exactly what the scan above produced.
+	if rescued := c.rescue(view, gray, scale, scores); rescued.ID != "" {
+		rescued.ids = out.ids
+		return rescued
+	}
+	return out
+}
+
+// The two catalog icon generations render at different sizes in the live HUD
+// portrait. Best factor of the true entry on native portraits (parity corpus
+// and two user videos, 1024x461..2880x1800): the 70px icons (161 of the 242
+// entries) 0.64-0.83, about 0.72, on 12 portraits of 9 ninjas; the 85px icons
+// 0.48-0.56 on 8 portraits of 5 ninjas. The full scan above locates with one
+// 0.60 factor and a 36² thumbnail of the whole 68-unit diamond neighbourhood
+// (centred for the right window), which suits neither: 神秘面具男 (90174, 70px)
+// ranked 34-37 of 242 in that locator, which keeps 24, and scored 0.41 at
+// 0.60 against 0.96 at 0.72; the left 宇智波佐助[侠隐江湖] (90464, 85px) ranked
+// 23-24. So when the scan finds no identity, a second look ranks every entry
+// by a thumbnail of the portrait itself (avatarPortraitSide units around the
+// measured diamond centre of the left or of the right window, the better of
+// the two) and scores the leading avatarRescueEntries at the display factors
+// of their generation. The verdict is the same strict gate over everything
+// scored for the frame, so an identity the scan finds is never changed.
+var (
+	avatarClassFactors70 = []float64{.64, .68, .72, .76, .80, .84}
+	avatarClassFactors85 = []float64{.49, .52, .55, .58}
+)
+
+const (
+	avatarRescueEntries = 6
+	avatarPortraitSide  = 48.0
+	avatarPortraitSlack = 6.0
+)
+
+// avatarClassFactors are the display factors of the entry's icon generation.
+func avatarClassFactors(entry *avatarEntry) []float64 {
+	if entry.gray.Bounds().Dx() >= 80 {
+		return avatarClassFactors85
+	}
+	return avatarClassFactors70
+}
+
+// avatarPortraitRect is the portrait square around a diamond centre at
+// (cx, avatarBoxCentreY) window units, in the window's own pixels (origin 0).
+func avatarPortraitRect(cx, scale float64) image.Rectangle {
+	const half = avatarPortraitSide / 2
+	return image.Rect(
+		int(math.Round((cx-half)*scale)),
+		int(math.Round((avatarBoxCentreY-half)*scale)),
+		int(math.Round((cx+half)*scale)),
+		int(math.Round((avatarBoxCentreY+half)*scale)),
+	)
+}
+
+// rescue is the second look of a full scan that found no identity (see
+// avatarClassFactors70). gray is the window's gray (origin at the window's
+// top left); scores holds everything the scan scored and receives the rest.
+func (c *avatarCatalog) rescue(view *image.RGBA, gray *image.Gray, scale float64, scores avatarScores) AvatarMatch {
+	var queries []*image.Gray
+	for _, cx := range []float64{avatarBoxLeftX, avatarBoxRightX} {
+		if r := avatarPortraitRect(cx, scale).Intersect(gray.Bounds()); !r.Empty() {
+			queries = append(queries, match.ScaleGray(gray.SubImage(r).(*image.Gray), 36, 36))
+		}
+	}
+	if len(queries) == 0 {
+		return AvatarMatch{}
+	}
+	ranked := make([]avatarFinalist, 0, len(c.entries))
+	for _, entry := range c.entries {
+		score := 0.0
+		for _, q := range queries {
+			score = max(score, coarseAvatarScore(q, entry.coarseGray, entry.coarseMask))
+		}
+		ranked = append(ranked, avatarFinalist{entry, score})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].entry.id < ranked[j].entry.id
+	})
+	if len(ranked) > avatarRescueEntries {
+		ranked = ranked[:avatarRescueEntries]
+	}
+	jobs := make([]avatarJob, 0, len(ranked)*len(avatarClassFactors70))
+	c.mu.Lock()
+	for _, f := range ranked {
+		scores.name[f.entry.id], scores.base[f.entry.id] = f.entry.name, f.entry.baseName
+		jobs = c.appendPortraitJobs(jobs, f.entry, scale, view.Bounds())
+	}
+	c.mu.Unlock()
+	scores.add(view, gray, jobs)
+	return scores.decide(AvatarMatch{})
 }
 
 // avatarAnchorRect maps the measured HUD diamond neighborhood into img pixels.
@@ -502,8 +600,9 @@ func coarseAvatarScore(query, templ, mask *image.Gray) float64 {
 }
 
 // avatarFactorsFull is the strict multi-scale display-factor sweep. The real
-// HUD renders the 85px catalog diamond near 0.6x the bead-derived scale; the
-// larger factors only serve exact-scale callers (tests, legacy captures).
+// HUD renders the 85px catalog diamond near 0.6x the bead-derived scale (0.55
+// measured; a 70px icon near 0.72, see avatarClassFactors70); the larger
+// factors only serve exact-scale callers (tests, legacy captures).
 var avatarFactorsFull = []float64{.55, .60, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45}
 
 // avatarFactorPrimary is the full-scan locator factor; avatarFactorsFine is
@@ -513,45 +612,86 @@ var (
 	avatarFactorsFine   = []float64{.55, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45}
 )
 
+// avatarScores is the best NCC score per identity over everything one match
+// scored, with the identity names. A single identity is evaluated at several
+// display scales; keeping only its best before calculating the runner-up
+// stops its second scale from counting as a different candidate, which could
+// reject an otherwise unambiguous portrait (best=.90, same-ID runner-up=.85).
+type avatarScores struct {
+	best       map[string]float64
+	name, base map[string]string
+}
+
+func newAvatarScores(n int) avatarScores {
+	return avatarScores{best: make(map[string]float64, n), name: make(map[string]string, n), base: make(map[string]string, n)}
+}
+
+// add scores jobs unlocked and in parallel on immutable prepared templates
+// and the caller's pixels, then reduces them in job order with the strict
+// '>', so the result equals the serial scan exactly.
+func (s avatarScores) add(view *image.RGBA, gray *image.Gray, jobs []avatarJob) {
+	parallelFor(len(jobs), func(i int) {
+		jobs[i].score = avatarJobScore(view, gray, jobs[i])
+	})
+	for _, job := range jobs {
+		if job.score > s.best[job.entry.id] {
+			s.best[job.entry.id] = job.score
+		}
+	}
+}
+
+// decide fills out's winner, runner-up and candidate and applies the strict
+// identity gate.
+func (s avatarScores) decide(out AvatarMatch) AvatarMatch {
+	var runnerName string
+	for id, score := range s.best {
+		if score > out.Score {
+			out.RunnerUp, runnerName = out.Score, out.Name
+			out.ID, out.Name, out.BaseName, out.Score = id, s.name[id], s.base[id], score
+		} else if id != out.ID && score > out.RunnerUp {
+			out.RunnerUp, runnerName = score, s.name[id]
+		}
+	}
+	out.Candidate = out.Name
+	if out.Score < .78 || out.Score-out.RunnerUp < .08 {
+		// A lookalike skin pair of the same cosmetic family (both golden Naruto
+		// forms under a glare) can compress the margin below the strict gate.
+		// Accept a very strong winner only when NEITHER candidate carries a
+		// special variant policy: geometry rules (slots/palette/row offset)
+		// stay strictly margined, so special-bead safety is unchanged.
+		if !(out.Score >= .90 && out.Score-out.RunnerUp >= .02 && !avatarVariantPolicy(out.Name) && !avatarVariantPolicy(runnerName)) {
+			out.ID, out.Name, out.BaseName = "", "", ""
+		}
+	}
+	return out
+}
+
 // gray is ToGray(view), converted once by the caller and shared by every NCC
 // query instead of being rebuilt per entry/factor; nil converts it here.
 //
 // The caller must not hold c.mu. The lock covers only the template cache
-// while the jobs are built; NCC scoring runs unlocked (and in
-// parallel) on immutable prepared templates and the caller's pixels. Scores
-// are reduced in the original entry/factor order with the same strict '>', so
-// the result equals the serial scan exactly.
+// while the jobs are built; NCC scoring runs unlocked (avatarScores.add).
 func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale float64, entries []*avatarEntry) AvatarMatch {
+	out, _ := c.scoreEntries(view, gray, scale, entries)
+	return out
+}
+
+// scoreEntries is matchEntries that also returns the scores behind its result.
+func (c *avatarCatalog) scoreEntries(view *image.RGBA, gray *image.Gray, scale float64, entries []*avatarEntry) (AvatarMatch, avatarScores) {
 	var out AvatarMatch
 	if gray == nil {
 		gray = match.ToGray(view)
 	}
-	// Keep the best score per identity before calculating the runner-up. A
-	// single identity is evaluated at several display scales; treating its
-	// second scale as a different candidate can reject an otherwise unambiguous
-	// portrait (best=.90, same-ID runner-up=.85).
-	bestByID := make(map[string]float64, len(entries))
-	nameByID := make(map[string]string, len(entries))
-	baseByID := make(map[string]string, len(entries))
+	scores := newAvatarScores(len(entries))
 	bounds := view.Bounds()
-	scoreAll := func(jobs []avatarJob) {
-		parallelFor(len(jobs), func(i int) {
-			jobs[i].score = avatarJobScore(view, gray, jobs[i].prepared)
-		})
-		for _, job := range jobs {
-			if job.score > bestByID[job.entry.id] {
-				bestByID[job.entry.id] = job.score
-			}
-		}
-	}
 	c.mu.Lock()
 	for _, entry := range entries {
 		if entry == nil {
 			continue
 		}
 		out.ids = append(out.ids, entry.id)
-		nameByID[entry.id] = entry.name
-		baseByID[entry.id] = entry.baseName
+		scores.name[entry.id] = entry.name
+		scores.base[entry.id] = entry.baseName
 	}
 	if len(entries) > 6 {
 		// Full scan, two-stage: the primary display factor (the live HUD
@@ -565,11 +705,11 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 			jobs = c.appendJobs(jobs, entry, scale, bounds, avatarFactorPrimary)
 		}
 		c.mu.Unlock()
-		scoreAll(jobs)
+		scores.add(view, gray, jobs)
 		primary := make([]stageEntry, 0, len(entries))
 		for _, entry := range entries {
 			if entry != nil {
-				primary = append(primary, stageEntry{entry, bestByID[entry.id]})
+				primary = append(primary, stageEntry{entry, scores.best[entry.id]})
 			}
 		}
 		sort.SliceStable(primary, func(i, j int) bool {
@@ -589,7 +729,7 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 				fine[entry.id] = true
 			}
 		}
-		// The primary factor's score is already in bestByID, exactly as a
+		// The primary factor's score is already in scores, exactly as a
 		// repeat would compute it (same template, same pixels), and an equal
 		// score never wins the strict '>', so the fine sweep skips it.
 		jobs = jobs[:0]
@@ -600,44 +740,35 @@ func (c *avatarCatalog) matchEntries(view *image.RGBA, gray *image.Gray, scale f
 			}
 		}
 		c.mu.Unlock()
-		scoreAll(jobs)
+		scores.add(view, gray, jobs)
 	} else {
-		jobs := make([]avatarJob, 0, len(entries)*len(avatarFactorsFull))
+		// The tracker's shortlist between full scans (or a tiny catalog). A
+		// lone entry is the identity AvatarTracker re-verifies between full
+		// scans: it is also scored at its generation's portrait factors, where
+		// the full scan's second look may have found it, so such a portrait is
+		// not lost on the frames in between. The six candidates of an
+		// unidentified side keep the plain sweep and its cost.
+		jobs := make([]avatarJob, 0, len(entries)*len(avatarFactorsFull)+len(avatarClassFactors70))
 		for _, entry := range entries {
 			jobs = c.appendJobs(jobs, entry, scale, bounds, avatarFactorsFull)
+			if len(entries) == 1 {
+				jobs = c.appendPortraitJobs(jobs, entry, scale, bounds)
+			}
 		}
 		c.mu.Unlock()
-		scoreAll(jobs)
+		scores.add(view, gray, jobs)
 	}
-	var runnerName string
-	for id, score := range bestByID {
-		if score > out.Score {
-			out.RunnerUp, runnerName = out.Score, out.Name
-			out.ID, out.Name, out.BaseName, out.Score = id, nameByID[id], baseByID[id], score
-		} else if id != out.ID && score > out.RunnerUp {
-			out.RunnerUp, runnerName = score, nameByID[id]
-		}
-	}
-	out.Candidate = out.Name
-	if out.Score < .78 || out.Score-out.RunnerUp < .08 {
-		// A lookalike skin pair of the same cosmetic family (both golden Naruto
-		// forms under a glare) can compress the margin below the strict gate.
-		// Accept a very strong winner only when NEITHER candidate carries a
-		// special variant policy: geometry rules (slots/palette/row offset)
-		// stay strictly margined, so special-bead safety is unchanged.
-		if !(out.Score >= .90 && out.Score-out.RunnerUp >= .02 && !avatarVariantPolicy(out.Name) && !avatarVariantPolicy(runnerName)) {
-			out.ID, out.Name, out.BaseName = "", "", ""
-		}
-	}
-	return out
+	return scores.decide(out), scores
 }
 
 // avatarJob is one entry at one display factor. prepared is nil when the
-// template is larger than the ROI: NCC cannot slide it, so the job keeps the
-// zero score instead of preparing and measuring a meaningless one.
+// template is larger than its search area: NCC cannot slide it, so the job
+// keeps the zero score instead of preparing and measuring a meaningless one.
+// roi is the search area; empty means the whole view.
 type avatarJob struct {
 	entry    *avatarEntry
 	prepared *match.PreparedNCC
+	roi      image.Rectangle
 	score    float64
 }
 
@@ -654,13 +785,48 @@ func (c *avatarCatalog) appendJobs(jobs []avatarJob, entry *avatarEntry, scale f
 	return jobs
 }
 
+// appendPortraitJobs fetches or prepares the entry's template at each display
+// factor of its icon generation (avatarClassFactors70), searched only where a
+// HUD portrait of that size sits: centres within avatarPortraitSlack units of
+// the measured left or right diamond centre (caller holds mu). Besides the
+// clutter of the rest of the window, this keeps the sparse first grid of a
+// large template's NCC scan from missing a sharp portrait peak: over the
+// whole window 春野樱[百豪] (90230) drawn at 0.65 scored 0.83 at 0.63 but 0.34
+// at 0.64, where the grid locked onto the title bar.
+func (c *avatarCatalog) appendPortraitJobs(jobs []avatarJob, entry *avatarEntry, scale float64, bounds image.Rectangle) []avatarJob {
+	for _, factor := range avatarClassFactors(entry) {
+		job := avatarJob{entry: entry}
+		w, h := avatarFactorSize(entry, scale, factor)
+		if roi := avatarPortraitBand(bounds, scale, w, h); w <= roi.Dx() && h <= roi.Dy() {
+			job.prepared, job.roi = c.prepared(entry, w, h), roi
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs
+}
+
+// avatarPortraitBand is the search area of a w x h portrait template in the
+// window bounds (see appendPortraitJobs).
+func avatarPortraitBand(bounds image.Rectangle, scale float64, w, h int) image.Rectangle {
+	return image.Rect(
+		bounds.Min.X+int(math.Round((avatarBoxRightX-avatarPortraitSlack)*scale))-w/2,
+		bounds.Min.Y+int(math.Round((avatarBoxCentreY-avatarPortraitSlack)*scale))-h/2,
+		bounds.Min.X+int(math.Round((avatarBoxLeftX+avatarPortraitSlack)*scale))+w-w/2,
+		bounds.Min.Y+int(math.Round((avatarBoxCentreY+avatarPortraitSlack)*scale))+h-h/2,
+	).Intersect(bounds)
+}
+
 // avatarJobScore only reads the immutable template and the caller's pixels,
 // so jobs may be scored concurrently.
-func avatarJobScore(view *image.RGBA, gray *image.Gray, prepared *match.PreparedNCC) float64 {
-	if prepared == nil {
+func avatarJobScore(view *image.RGBA, gray *image.Gray, job avatarJob) float64 {
+	if job.prepared == nil {
 		return 0
 	}
-	score, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: view.Bounds(), Prepared: prepared})
+	roi := job.roi
+	if roi.Empty() {
+		roi = view.Bounds()
+	}
+	score, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: roi, Prepared: job.prepared})
 	if err != nil {
 		return 0
 	}

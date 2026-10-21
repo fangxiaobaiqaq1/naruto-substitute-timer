@@ -114,12 +114,16 @@ type timedFrame struct {
 func hudSequence(tb testing.TB, w, h int, profile string) []timedFrame {
 	tb.Helper()
 	const names, avatars = "../../ninja/templates/", "../../../assets/avatars/"
+	// Each portrait is its title's own ninja, as in the game: a portrait of
+	// someone else contradicts the title and leaves the side unnamed (that
+	// is how the earlier mismatched pairs read once their 70px portraits
+	// were recognised).
 	steps := [][2]hudSide{
-		{{names + "madara.png", avatars + "90009.png", 4}, {names + "naruto_right.png", avatars + "90010.png", 2}},
-		{{names + "madara.png", avatars + "90009.png", 3}, {names + "naruto_right.png", avatars + "90010.png", 2}},
-		{{"", avatars + "90009.png", 3}, {names + "naruto_right.png", "", 1}},
-		{{names + "hashirama.png", avatars + "90011.png", 5}, {names + "sasuke_xiayin.png", avatars + "90012.png", 4}},
-		{{names + "hashirama.png", avatars + "90011.png", 6}, {names + "minato_kyubi.png", avatars + "90013.png", 0}},
+		{{names + "madara.png", avatars + "90485.png", 4}, {names + "naruto_right.png", avatars + "90474.png", 2}},
+		{{names + "madara.png", avatars + "90485.png", 3}, {names + "naruto_right.png", avatars + "90474.png", 2}},
+		{{"", avatars + "90485.png", 3}, {names + "naruto_right.png", "", 1}},
+		{{names + "hashirama.png", avatars + "90411.png", 5}, {names + "sasuke_xiayin.png", avatars + "90464.png", 4}},
+		{{names + "hashirama.png", avatars + "90411.png", 6}, {names + "minato_kyubi.png", avatars + "90316.png", 0}},
 		{{names + "obito.png", "", 2}, {"", "", 4}},
 	}
 	at := time.Unix(1700000000, 0)

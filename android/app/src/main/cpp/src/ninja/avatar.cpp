@@ -91,6 +91,29 @@ bool sortStage(const stageEntry& a, const stageEntry& b) {
 // them read-only with its ParallelFor helpers; AvatarTracker::Read trims them).
 thread_local match::grayPrefix t_viewPrefix;
 
+// viewPrefixFor builds the calling thread's prefix sums of a window's gray
+// (t_viewPrefix): every whole-window job scans all of it, so they share one
+// build instead of rebuilding it in each of up to ~130 NCC calls (band jobs
+// reuse it too: it covers their search area). nullptr when the rows are too
+// wide for uint32 sums. The two sides may run concurrently: one buffer per thread.
+const match::grayPrefix* viewPrefixFor(const Gray& gray) {
+    if (gray.Bounds().Dx() > match::maxDotRun) return nullptr;
+    match::newGrayPrefix(t_viewPrefix, gray, 0, 0, gray.Bounds().Dx(), gray.Bounds().Dy());
+    return &t_viewPrefix;
+}
+
+}  // namespace
+
+// Player-drawn portrait box (docs/区域校准.md): the bounding box of the
+// visible diamond portrait, frame included. Measured on 13 native portraits
+// (1280x720..2880x1800, camp and duel): its side is 68.5 reference units
+// (960-wide) and its centre sits at (42, 49.5) / (36, 49.5) inside the
+// automatic left / right AvatarRegion window.
+namespace {
+constexpr double avatarBoxSide = 68.5;
+constexpr double avatarBoxLeftX = 42.0;
+constexpr double avatarBoxRightX = 36.0;
+constexpr double avatarBoxCentreY = 49.5;
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -370,7 +393,89 @@ AvatarMatch AvatarCatalog::Match(const RGBA* img, Rect roi, double scale) {
     std::vector<avatarEntry*> list;
     list.reserve(best.size());
     for (const auto& b : best) list.push_back(b.entry);
-    return matchEntries(view, &gray, scale, list);
+    const avatarView v{view, &gray, viewPrefixFor(gray)};
+    avatarScores scores;
+    AvatarMatch out = scoreEntries(v, scale, list, scores);
+    if (!out.ID.empty()) return out;
+    // Nothing passed: take the second look below. Only an identity it finds
+    // replaces this result; otherwise every field, the shortlist the tracker
+    // keeps included, stays exactly what the scan above produced.
+    AvatarMatch rescued = rescue(v, scale, scores);
+    if (!rescued.ID.empty()) {
+        rescued.ids = out.ids;
+        return rescued;
+    }
+    return out;
+}
+
+// The two catalog icon generations render at different sizes in the live HUD
+// portrait. Best factor of the true entry on native portraits (parity corpus
+// and two user videos, 1024x461..2880x1800): the 70px icons (161 of the 242
+// entries) 0.64-0.83, about 0.72, on 12 portraits of 9 ninjas; the 85px icons
+// 0.48-0.56 on 8 portraits of 5 ninjas. The full scan above locates with one
+// 0.60 factor and a 36² thumbnail of the whole 68-unit diamond neighbourhood
+// (centred for the right window), which suits neither: 神秘面具男 (90174, 70px)
+// ranked 34-37 of 242 in that locator, which keeps 24, and scored 0.41 at
+// 0.60 against 0.96 at 0.72; the left 宇智波佐助[侠隐江湖] (90464, 85px) ranked
+// 23-24. So when the scan finds no identity, a second look ranks every entry
+// by a thumbnail of the portrait itself (avatarPortraitSide units around the
+// measured diamond centre of the left or of the right window, the better of
+// the two) and scores the leading avatarRescueEntries at the display factors
+// of their generation (avatarClassFactors70/85, nt/ninja_internal.h). The
+// verdict is the same strict gate over everything scored for the frame, so an
+// identity the scan finds is never changed.
+const std::vector<double>& avatarClassFactors(const avatarEntry* entry) {
+    if (entry->gray.Bounds().Dx() >= 80) return avatarClassFactors85;
+    return avatarClassFactors70;
+}
+
+// avatarPortraitRect is the portrait square around a diamond centre at
+// (cx, avatarBoxCentreY) window units, in the window's own pixels (origin 0).
+Rect avatarPortraitRect(double cx, double scale) {
+    const double half = avatarPortraitSide / 2;
+    return MakeRect(static_cast<int>(std::round((cx - half) * scale)),
+                    static_cast<int>(std::round((avatarBoxCentreY - half) * scale)),
+                    static_cast<int>(std::round((cx + half) * scale)),
+                    static_cast<int>(std::round((avatarBoxCentreY + half) * scale)));
+}
+
+// rescue is the second look of a full scan that found no identity (see
+// avatarClassFactors above). v.gray is the window's gray (origin at the
+// window's top left); scores holds everything the scan scored and receives the rest.
+AvatarMatch AvatarCatalog::rescue(const avatarView& v, double scale, avatarScores& scores) {
+    std::vector<Gray> queries;
+    for (double cx : {avatarBoxLeftX, avatarBoxRightX}) {
+        Rect r = avatarPortraitRect(cx, scale).Intersect(v.gray->Bounds());
+        if (!r.Empty()) {
+            Gray sub = v.gray->SubImage(r);
+            queries.push_back(match::ScaleGray(&sub, 36, 36));
+        }
+    }
+    if (queries.empty()) return AvatarMatch{};
+    std::vector<stageEntry> ranked;
+    ranked.reserve(entries.size());
+    for (const auto& entry : entries) {
+        double score = 0;
+        for (const Gray& q : queries) {
+            score = std::max(score, coarseAvatarScore(&q, &entry->coarseGray, &entry->coarseMask));
+        }
+        ranked.push_back(stageEntry{entry.get(), score});
+    }
+    std::stable_sort(ranked.begin(), ranked.end(), sortStage);
+    if (ranked.size() > static_cast<size_t>(avatarRescueEntries)) ranked.resize(avatarRescueEntries);
+    std::vector<avatarJob> jobs;
+    jobs.reserve(ranked.size() * avatarClassFactors70.size());
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        for (const auto& f : ranked) {
+            scores.order.push_back(f.entry);
+            if (!decode(f.entry)) continue;
+            scores.note(f.entry);
+            appendPortraitJobs(jobs, f.entry, scale, v.view.Bounds());
+        }
+    }
+    addScores(v, jobs, scores);
+    return scores.decide(AvatarMatch{});
 }
 
 // avatarAnchorRect maps the measured HUD diamond neighborhood into img pixels.
@@ -404,118 +509,42 @@ double coarseAvatarScore(const Gray* query, const Gray* templ, const Gray* mask)
     return 1 - static_cast<double>(difference) / static_cast<double>(255 * count);
 }
 
-// gray is ToGray(view), converted once by the caller and shared by every NCC
-// query instead of being rebuilt per entry/factor; nullptr converts it here.
-//
-// The caller must not hold mu. The lock covers only the lazy decode and the
-// template cache while the jobs are built; NCC scoring runs unlocked (and in
-// parallel) on immutable prepared templates and the caller's pixels. Scores
-// are reduced in the original entry/factor order with the same strict '>', so
-// the result equals the serial scan exactly.
-AvatarMatch AvatarCatalog::matchEntries(const RGBA& view, const Gray* grayIn, double scale,
-                                        const std::vector<avatarEntry*>& list) {
-    AvatarMatch out;
-    Gray owned;
-    const Gray* gray = grayIn;
-    if (gray == nullptr) {
-        owned = match::ToGray(&view);
-        gray = &owned;
-    }
-    // Every job scans the whole view: build its prefix sums once and share them
-    // (read-only) instead of rebuilding them in each of up to ~130 NCC calls.
-    // One buffer per calling thread (t_viewPrefix); the two sides may run concurrently.
-    match::grayPrefix& viewPrefix = t_viewPrefix;
-    const match::grayPrefix* prefix = nullptr;
-    if (gray->Bounds().Dx() <= match::maxDotRun) {
-        match::newGrayPrefix(viewPrefix, *gray, 0, 0, gray->Bounds().Dx(), gray->Bounds().Dy());
-        prefix = &viewPrefix;
-    }
-    // Keep the best score per identity before calculating the runner-up. A
-    // single identity is evaluated at several display scales; treating its
-    // second scale as a different candidate can reject an otherwise unambiguous
-    // portrait (best=.90, same-ID runner-up=.85).
-    std::unordered_map<std::string, double> bestByID;
-    std::unordered_map<std::string, std::string> nameByID, baseByID;
-    const Rect bounds = view.Bounds();
-    auto scoreAll = [&](std::vector<avatarJob>& jobs) {
-        ParallelFor(static_cast<int>(jobs.size()),
-                    [&](int i) { jobs[i].score = avatarJobScore(view, gray, jobs[i].prepared.get(), prefix); });
-        for (const auto& job : jobs) {
-            double& b = bestByID[job.entry->id];  // Go map 读缺省 0
-            if (job.score > b) b = job.score;
-        }
-    };
-    std::vector<avatarJob> jobs;
-    std::unique_lock<std::mutex> lk(mu);
-    beginScan();
-    for (avatarEntry* entry : list) {
-        if (!decode(entry)) continue;
-        out.ids.push_back(entry->id);
-        nameByID[entry->id] = entry->name;
-        baseByID[entry->id] = entry->baseName;
-    }
-    if (list.size() > 6) {
-        // Full scan, two-stage: the primary display factor (the live HUD
-        // renders near 0.6x bead scale) locates the portrait cheaply over the
-        // whole shortlist; the full multi-scale sweep below then re-runs only
-        // the leading candidates plus the coarse locator's first entries. The
-        // shortlist order itself is the recall fallback for render scales that
-        // are not the common HUD factor (exact-scale test callers).
-        jobs.reserve(list.size());
-        for (avatarEntry* entry : list) appendJobs(jobs, entry, scale, bounds, avatarFactorPrimary);
-        lk.unlock();
-        scoreAll(jobs);
-        std::vector<stageEntry> primary;
-        primary.reserve(list.size());
-        for (avatarEntry* entry : list) {
-            if (entry != nullptr) {
-                auto it = bestByID.find(entry->id);
-                primary.push_back(stageEntry{entry, it == bestByID.end() ? 0 : it->second});
-            }
-        }
-        std::stable_sort(primary.begin(), primary.end(), sortStage);
-        std::unordered_set<std::string> fine;
-        for (size_t i = 0; i < primary.size(); ++i) {
-            if (i < 6) fine.insert(primary[i].entry->id);
-        }
-        for (size_t i = 0; i < list.size(); ++i) {
-            if (list[i] != nullptr && i < 6) fine.insert(list[i]->id);
-        }
-        // The primary factor's score is already in bestByID, exactly as a
-        // repeat would compute it (same template, same pixels), and an equal
-        // score never wins the strict '>', so the fine sweep skips it.
-        jobs.clear();
-        lk.lock();
-        for (avatarEntry* entry : list) {
-            if (entry != nullptr && fine.count(entry->id)) appendJobs(jobs, entry, scale, bounds, avatarFactorsFine);
-        }
-        lk.unlock();
-        scoreAll(jobs);
-    } else {
-        jobs.reserve(list.size() * avatarFactorsFull.size());
-        for (avatarEntry* entry : list) appendJobs(jobs, entry, scale, bounds, avatarFactorsFull);
-        lk.unlock();
-        scoreAll(jobs);
-    }
-    // Go 遍历 map（随机顺序）；这里按 entries 顺序，结果只在分数恰好并列时才会不同（见文件头）。
+// note registers a decoded entry's names (Go nameByID/baseByID).
+void avatarScores::note(avatarEntry* entry) {
+    name[entry->id] = entry->name;
+    base[entry->id] = entry->baseName;
+}
+
+// decide fills out's winner, runner-up and candidate and applies the strict
+// identity gate. A single identity is evaluated at several display scales;
+// keeping only its best before calculating the runner-up stops its second
+// scale from counting as a different candidate, which could reject an
+// otherwise unambiguous portrait (best=.90, same-ID runner-up=.85).
+AvatarMatch avatarScores::decide(AvatarMatch out) const {
+    // Go 遍历 map（随机顺序）；这里按 order 顺序，结果只在分数恰好并列时才会不同（见文件头）。
     std::string runnerName;
     std::unordered_set<std::string> visited;
-    for (avatarEntry* entry : list) {
+    for (avatarEntry* entry : order) {
         if (entry == nullptr || !visited.insert(entry->id).second) continue;
-        auto it = bestByID.find(entry->id);
-        if (it == bestByID.end()) continue;
+        auto it = best.find(entry->id);
+        if (it == best.end()) continue;
         const std::string& id = it->first;
         double score = it->second;
+        // Go map 读缺省零值：没有登记名字的条目（未解码）名字为空。
+        const auto text = [](const std::unordered_map<std::string, std::string>& m, const std::string& key) {
+            auto t = m.find(key);
+            return t == m.end() ? std::string() : t->second;
+        };
         if (score > out.Score) {
             out.RunnerUp = out.Score;
             runnerName = out.Name;
             out.ID = id;
-            out.Name = nameByID[id];
-            out.BaseName = baseByID[id];
+            out.Name = text(name, id);
+            out.BaseName = text(base, id);
             out.Score = score;
         } else if (id != out.ID && score > out.RunnerUp) {
             out.RunnerUp = score;
-            runnerName = nameByID[id];
+            runnerName = text(name, id);
         }
     }
     out.Candidate = out.Name;
@@ -535,6 +564,106 @@ AvatarMatch AvatarCatalog::matchEntries(const RGBA& view, const Gray* grayIn, do
     return out;
 }
 
+// addScores scores jobs unlocked and in parallel on immutable prepared
+// templates and the caller's pixels, then reduces them in job order with the
+// strict '>', so the result equals the serial scan exactly.
+void AvatarCatalog::addScores(const avatarView& v, std::vector<avatarJob>& jobs, avatarScores& scores) {
+    ParallelFor(static_cast<int>(jobs.size()), [&](int i) {
+        jobs[i].score = avatarJobScore(v.view, v.gray, jobs[i].prepared.get(), v.prefix, jobs[i].roi);
+    });
+    for (const auto& job : jobs) {
+        double& b = scores.best[job.entry->id];  // Go map 读缺省 0
+        if (job.score > b) b = job.score;
+    }
+}
+
+// gray is ToGray(view), converted once by the caller and shared by every NCC
+// query instead of being rebuilt per entry/factor; nullptr converts it here.
+//
+// The caller must not hold mu. The lock covers only the lazy decode and the
+// template cache while the jobs are built; NCC scoring runs unlocked (addScores).
+AvatarMatch AvatarCatalog::matchEntries(const RGBA& view, const Gray* grayIn, double scale,
+                                        const std::vector<avatarEntry*>& list) {
+    Gray owned;
+    const Gray* gray = grayIn;
+    if (gray == nullptr) {
+        owned = match::ToGray(&view);
+        gray = &owned;
+    }
+    const avatarView v{view, gray, viewPrefixFor(*gray)};
+    avatarScores scores;
+    return scoreEntries(v, scale, list, scores);
+}
+
+// scoreEntries is matchEntries that also returns the scores behind its result.
+AvatarMatch AvatarCatalog::scoreEntries(const avatarView& v, double scale, const std::vector<avatarEntry*>& list,
+                                        avatarScores& scores) {
+    AvatarMatch out;
+    const Rect bounds = v.view.Bounds();
+    std::vector<avatarJob> jobs;
+    std::unique_lock<std::mutex> lk(mu);
+    beginScan();
+    for (avatarEntry* entry : list) {
+        if (entry != nullptr) scores.order.push_back(entry);
+        if (!decode(entry)) continue;
+        out.ids.push_back(entry->id);
+        scores.note(entry);
+    }
+    if (list.size() > 6) {
+        // Full scan, two-stage: the primary display factor (the live HUD
+        // renders near 0.6x bead scale) locates the portrait cheaply over the
+        // whole shortlist; the full multi-scale sweep below then re-runs only
+        // the leading candidates plus the coarse locator's first entries. The
+        // shortlist order itself is the recall fallback for render scales that
+        // are not the common HUD factor (exact-scale test callers).
+        jobs.reserve(list.size());
+        for (avatarEntry* entry : list) appendJobs(jobs, entry, scale, bounds, avatarFactorPrimary);
+        lk.unlock();
+        addScores(v, jobs, scores);
+        std::vector<stageEntry> primary;
+        primary.reserve(list.size());
+        for (avatarEntry* entry : list) {
+            if (entry != nullptr) {
+                auto it = scores.best.find(entry->id);
+                primary.push_back(stageEntry{entry, it == scores.best.end() ? 0 : it->second});
+            }
+        }
+        std::stable_sort(primary.begin(), primary.end(), sortStage);
+        std::unordered_set<std::string> fine;
+        for (size_t i = 0; i < primary.size(); ++i) {
+            if (i < 6) fine.insert(primary[i].entry->id);
+        }
+        for (size_t i = 0; i < list.size(); ++i) {
+            if (list[i] != nullptr && i < 6) fine.insert(list[i]->id);
+        }
+        // The primary factor's score is already in scores, exactly as a
+        // repeat would compute it (same template, same pixels), and an equal
+        // score never wins the strict '>', so the fine sweep skips it.
+        jobs.clear();
+        lk.lock();
+        for (avatarEntry* entry : list) {
+            if (entry != nullptr && fine.count(entry->id)) appendJobs(jobs, entry, scale, bounds, avatarFactorsFine);
+        }
+        lk.unlock();
+        addScores(v, jobs, scores);
+    } else {
+        // The tracker's shortlist between full scans (or a tiny catalog). A
+        // lone entry is the identity AvatarTracker re-verifies between full
+        // scans: it is also scored at its generation's portrait factors, where
+        // the full scan's second look may have found it, so such a portrait is
+        // not lost on the frames in between. The six candidates of an
+        // unidentified side keep the plain sweep and its cost.
+        jobs.reserve(list.size() * avatarFactorsFull.size() + avatarClassFactors70.size());
+        for (avatarEntry* entry : list) {
+            appendJobs(jobs, entry, scale, bounds, avatarFactorsFull);
+            if (list.size() == 1) appendPortraitJobs(jobs, entry, scale, bounds);
+        }
+        lk.unlock();
+        addScores(v, jobs, scores);
+    }
+    return scores.decide(std::move(out));
+}
+
 // appendJobs fetches or prepares the entry's template at each factor, in
 // factor order (caller holds mu).
 void AvatarCatalog::appendJobs(std::vector<avatarJob>& jobs, avatarEntry* entry, double scale, const Rect& bounds,
@@ -549,15 +678,49 @@ void AvatarCatalog::appendJobs(std::vector<avatarJob>& jobs, avatarEntry* entry,
     }
 }
 
+// appendPortraitJobs fetches or prepares the entry's template at each display
+// factor of its icon generation (avatarClassFactors), searched only where a
+// HUD portrait of that size sits: centres within avatarPortraitSlack units of
+// the measured left or right diamond centre (caller holds mu). Besides the
+// clutter of the rest of the window, this keeps the sparse first grid of a
+// large template's NCC scan from missing a sharp portrait peak: over the
+// whole window 春野樱[百豪] (90230) drawn at 0.65 scored 0.83 at 0.63 but 0.34
+// at 0.64, where the grid locked onto the title bar.
+void AvatarCatalog::appendPortraitJobs(std::vector<avatarJob>& jobs, avatarEntry* entry, double scale,
+                                       const Rect& bounds) {
+    for (double factor : avatarClassFactors(entry)) {
+        avatarJob job;
+        job.entry = entry;
+        int w = 0, h = 0;
+        avatarFactorSize(entry, scale, factor, w, h);
+        Rect roi = avatarPortraitBand(bounds, scale, w, h);
+        if (w <= roi.Dx() && h <= roi.Dy()) {
+            job.prepared = prepared(entry, w, h);
+            job.roi = roi;
+        }
+        jobs.push_back(std::move(job));
+    }
+}
+
+// avatarPortraitBand is the search area of a w x h portrait template in the
+// window bounds (see appendPortraitJobs).
+Rect avatarPortraitBand(const Rect& bounds, double scale, int w, int h) {
+    return MakeRect(bounds.Min.X + static_cast<int>(std::round((avatarBoxRightX - avatarPortraitSlack) * scale)) - w / 2,
+                    bounds.Min.Y + static_cast<int>(std::round((avatarBoxCentreY - avatarPortraitSlack) * scale)) - h / 2,
+                    bounds.Min.X + static_cast<int>(std::round((avatarBoxLeftX + avatarPortraitSlack) * scale)) + w - w / 2,
+                    bounds.Min.Y + static_cast<int>(std::round((avatarBoxCentreY + avatarPortraitSlack) * scale)) + h - h / 2)
+        .Intersect(bounds);
+}
+
 // avatarJobScore only reads the immutable template and the caller's pixels,
 // so jobs may be scored concurrently.
 double avatarJobScore(const RGBA& view, const Gray* gray, const match::PreparedNCC* prepared,
-                      const match::grayPrefix* prefix) {
+                      const match::grayPrefix* prefix, const Rect& roi) {
     if (prepared == nullptr) return 0;
     match::Query q;
     q.Image = &view;
     q.Gray = gray;
-    q.ROI = view.Bounds();
+    q.ROI = roi.Empty() ? view.Bounds() : roi;
     q.Prepared = prepared;
     q.Prefix = prefix;
     match::Score score;
@@ -755,18 +918,6 @@ Rect AvatarRegion(Point first, double scale, bool left) {
                     first.X + static_cast<int>(std::round(x1 * scale)),
                     first.Y + static_cast<int>(std::round(38 * scale)));
 }
-
-// Player-drawn portrait box (docs/区域校准.md): the bounding box of the
-// visible diamond portrait, frame included. Measured on 13 native portraits
-// (1280x720..2880x1800, camp and duel): its side is 68.5 reference units
-// (960-wide) and its centre sits at (42, 49.5) / (36, 49.5) inside the
-// automatic left / right AvatarRegion window.
-namespace {
-constexpr double avatarBoxSide = 68.5;
-constexpr double avatarBoxLeftX = 42.0;
-constexpr double avatarBoxRightX = 36.0;
-constexpr double avatarBoxCentreY = 49.5;
-}  // namespace
 
 Rect AvatarRegionFromBox(double x, double y, double w, double h, bool left, double& outScale) {
     const double scale = (w + h) / 2 / avatarBoxSide;
