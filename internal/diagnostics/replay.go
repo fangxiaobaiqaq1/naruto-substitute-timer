@@ -23,8 +23,8 @@ const (
 	defaultReplayDuration = 180 * time.Second
 	defaultReplayInterval = time.Second
 	defaultReplayBytes    = int64(64 << 20)
-	// Four full-resolution deep copies are enough to absorb short JPEG/disk
-	// stalls without turning a sampled replay into a large raw-pixel buffer.
+	// Four queued samples absorb short JPEG/disk stalls. Each is downscaled to
+	// replayMaxWidth while it is copied (≤ ~1.2 MiB), never a full frame.
 	defaultReplayQueue = 4
 	replayMaxWidth     = 720
 	replayJPEGQuality  = 75
@@ -156,20 +156,28 @@ type replayRecorder struct {
 	stopped      bool
 	cutoff       time.Time
 
+	// admitted holds the IDs of frames handed to the worker that are still in
+	// the replay window; only their UI snapshots are kept (protected by mu).
+	admitted map[uint64]struct{}
+
 	// worker-owned after construction
 	frames []replayFrame
 	bytes  int64
-	ui     map[uint64]ReplayUIState
+	ui     map[uint64]ReplayUIState // protected by mu
 }
 
 func newReplayRecorder(r *Recorder, dir string) *replayRecorder {
 	return &replayRecorder{parent: r, dir: dir, sessionDir: r.status.Directory, duration: r.opts.ReplayDuration,
 		interval: r.opts.ReplayInterval, capBytes: r.opts.MaxReplayBytes,
-		queue: make(chan replayWork, defaultReplayQueue), done: make(chan struct{}), ui: make(map[uint64]ReplayUIState)}
+		queue: make(chan replayWork, defaultReplayQueue), done: make(chan struct{}), ui: make(map[uint64]ReplayUIState),
+		admitted: make(map[uint64]struct{})}
 }
 
 // RecordReplayUIState is called by the UI only after it has computed the
 // display for id. It cannot retrofit a later display onto an older frame.
+// The UI reports every frame, but only frames admitted to the replay (at most
+// one per ReplayInterval, still inside the window) keep a snapshot (GE-08:
+// this used to keep one entry per frame for the whole session).
 func (r *Recorder) RecordReplayUIState(state ReplayUIState) {
 	if state.FrameID == 0 {
 		return
@@ -181,6 +189,9 @@ func (r *Recorder) RecordReplayUIState(state ReplayUIState) {
 	}
 	r.replay.mu.Lock()
 	defer r.replay.mu.Unlock()
+	if _, admitted := r.replay.admitted[state.FrameID]; !admitted {
+		return
+	}
 	if _, exists := r.replay.ui[state.FrameID]; !exists {
 		r.replay.ui[state.FrameID] = state
 	}
@@ -239,19 +250,34 @@ func (q *replayRecorder) enqueueLocked(f replayWork) {
 	if at.After(q.lastSampleAt) {
 		q.lastSampleAt = at
 	}
-	bounds := f.img.Bounds()
-	copyImg := image.NewRGBA(bounds)
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		src := f.img.PixOffset(bounds.Min.X, y)
-		dst := copyImg.PixOffset(bounds.Min.X, y)
-		copy(copyImg.Pix[dst:dst+bounds.Dx()*4], f.img.Pix[src:src+bounds.Dx()*4])
-	}
-	f.img = copyImg
+	// GE-14: sample while copying (≤ replayMaxWidth wide) instead of deep-copying
+	// the full frame under Recorder.mu; the JPEG pixels are unchanged.
+	f.img = sampleReplay(f.img)
 	select {
 	case q.queue <- f:
+		if q.admitted == nil {
+			q.admitted = make(map[uint64]struct{})
+		}
+		q.admitted[f.frameID] = struct{}{}
 	default:
 		q.parent.status.ReplayDropped++
 	}
+}
+
+// sampleReplay returns an owned image with exactly the pixels scaleReplay
+// produces from a full copy of src, without copying the full frame first.
+func sampleReplay(src *image.RGBA) *image.RGBA {
+	if src.Bounds().Dx() > replayMaxWidth {
+		return scaleReplay(src) // always a new image
+	}
+	bounds := src.Bounds()
+	out := image.NewRGBA(bounds)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		s := src.PixOffset(bounds.Min.X, y)
+		d := out.PixOffset(bounds.Min.X, y)
+		copy(out.Pix[d:d+bounds.Dx()*4], src.Pix[s:s+bounds.Dx()*4])
+	}
+	return out
 }
 
 func (q *replayRecorder) stop(cutoff time.Time) {
@@ -566,6 +592,15 @@ func (q *replayRecorder) prune(before time.Time) {
 			_ = q.evict(i)
 		}
 	}
+	// Frames that left the window are never annotated: drop their UI state.
+	q.mu.Lock()
+	for i := range q.frames {
+		if q.frames[i].CapturedAt.Before(before) {
+			delete(q.ui, q.frames[i].FrameID)
+			delete(q.admitted, q.frames[i].FrameID)
+		}
+	}
+	q.mu.Unlock()
 }
 
 func (q *replayRecorder) evict(index int) bool {
