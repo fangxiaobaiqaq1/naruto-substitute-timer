@@ -2,7 +2,7 @@
 
 Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 
-**BUG 反馈 QQ 群：1109044204**。遇到 MuMu SDK、截图或多开实例问题时，请在「诊断」中导出“支持诊断包（ZIP）”后反馈。
+官网（下载、教程）：https://hy.312166.xyz · **BUG 反馈 QQ 群：1109044204**。遇到 MuMu SDK、截图或多开实例问题时，请在「诊断」中导出“支持诊断包（ZIP）”后反馈。
 
 识别游戏画面的替身豆，在悬浮窗显示对方替身倒计时。模型、忍者资料、场景模板和 OCR 运行依赖均已内置。
 
@@ -10,7 +10,7 @@ Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 
 到 [最新发布页](https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest) 选择：
 
-- **Setup 安装包**：推荐首次使用。创建快捷方式和卸载入口，不需要管理员权限。
+- **naruto-timer-universal.apk**：Android 12 及以上手机版。
 - **timer-app.exe**：便携版，放在可写目录直接运行。
 - **完整 ZIP**：附带诊断工具和第三方许可。
 
@@ -44,7 +44,7 @@ Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 Windows 原生构建的验收路径需要 Go 1.26.10（`go.mod` 的 `toolchain`；旧的 Go 1.26.x 会自动下载它）、PowerShell 和 Fyne 所需的 Windows x64 C/C++ 工具链（cgo）。在 Developer PowerShell 中：
 
 ```powershell
-$env:TIMER_VERSION = "v0.2.9"
+$env:TIMER_VERSION = "v0.3.0"
 .\build.bat
 ```
 
