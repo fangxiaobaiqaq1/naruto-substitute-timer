@@ -13,6 +13,7 @@
 
 #include "nt/factory.h"
 #include "nt/hash.h"
+#include "nt/match.h"
 #include "nt/parallel.h"
 #include "nt/utf8.h"
 
@@ -227,6 +228,7 @@ Frame Pipeline::Analyze(const RGBA* img, TimeNs started, TimeNs capturedAt, cons
         return f;
     }
     Frame f = dedupe_.analyze(img, engine_.get(), mode_, started, capturedAt, method);
+    match::FrameDone();  // per-frame release of idle large buffers (nt/match.h)
     // boundedProvider 的交付判定：只有成功帧才进入序号与重复判定；失败帧不改变交付状态。
     if (img != nullptr && !f.HasErr) {
         sequence_++;
