@@ -106,19 +106,43 @@ std::shared_ptr<const PreparedNCC> PrepareNCC(const nt::Gray* templ, const nt::G
     return p;
 }
 
+namespace {
+// fitPrefix makes g hold at least n entries per buffer and applies the
+// kKeepPrefixBytes rule (nt/match.h) for a use of n entries.
+void fitPrefix(grayPrefix& g, size_t n) {
+    if (g.sum.size() < n) {
+        g.sum.resize(n);
+        g.square.resize(n);
+        g.oversizedBuilds = 0;
+    } else if (g.sum.size() * 2 * sizeof(uint32_t) > kKeepPrefixBytes && g.sum.size() / 4 > n) {
+        if (++g.oversizedBuilds >= kOversizedBuilds) {
+            g.sum.resize(n);
+            g.sum.shrink_to_fit();
+            g.square.resize(n);
+            g.square.shrink_to_fit();
+            g.oversizedBuilds = 0;
+        }
+    } else {
+        g.oversizedBuilds = 0;
+    }
+}
+}  // namespace
+
+void trimGrayPrefix(grayPrefix& g, int w, int h) {
+    const size_t n = static_cast<size_t>(h) * static_cast<size_t>(w + 1);
+    if (g.sum.size() >= n) fitPrefix(g, n);
+}
+
 // newGrayPrefix covers columns [x0,x0+w) and rows [y0,y0+h) of img.
 // Offsets are relative to img.Bounds().Min (the same offsets at uses).
-// Go 用 sync.Pool 复用；这里调用方传入可复用的 g（容量只增不减）。
+// Go 用 sync.Pool 复用；这里调用方传入可复用的 g（按 nt/match.h 的 kKeepPrefixBytes 规则收缩）。
 void newGrayPrefix(grayPrefix& g, const nt::Gray& img, int x0, int y0, int w, int h) {
     g.x0 = x0;
     g.y0 = y0;
     g.w = w;
     g.h = h;
     const size_t n = static_cast<size_t>(h) * static_cast<size_t>(w + 1);
-    if (g.sum.size() < n) {
-        g.sum.resize(n);
-        g.square.resize(n);
-    }
+    fitPrefix(g, n);
     uint32_t* sumData = g.sum.data();
     uint32_t* squareData = g.square.data();
     auto rows = [&](int ya, int yb) {

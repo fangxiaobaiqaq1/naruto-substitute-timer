@@ -87,6 +87,10 @@ bool sortStage(const stageEntry& a, const stageEntry& b) {
     return a.entry->id < b.entry->id;
 }
 
+// The calling thread's prefix sums of its avatar window (matchEntries shares
+// them read-only with its ParallelFor helpers; AvatarTracker::Read trims them).
+thread_local match::grayPrefix t_viewPrefix;
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -418,8 +422,8 @@ AvatarMatch AvatarCatalog::matchEntries(const RGBA& view, const Gray* grayIn, do
     }
     // Every job scans the whole view: build its prefix sums once and share them
     // (read-only) instead of rebuilding them in each of up to ~130 NCC calls.
-    // One buffer per calling thread; the two sides may run concurrently.
-    thread_local match::grayPrefix viewPrefix;
+    // One buffer per calling thread (t_viewPrefix); the two sides may run concurrently.
+    match::grayPrefix& viewPrefix = t_viewPrefix;
     const match::grayPrefix* prefix = nullptr;
     if (gray->Bounds().Dx() <= match::maxDotRun) {
         match::newGrayPrefix(viewPrefix, *gray, 0, 0, gray->Bounds().Dx(), gray->Bounds().Dy());
@@ -665,6 +669,9 @@ AvatarMatch AvatarTracker::Read(AvatarCatalog* c, const RGBA* img, Rect roi, dou
     roi_ = roi;
     scale_ = scale;
     bool same = memoOK_ && samePackedPix(memoPix_, img, roi);
+    // A memo hit scans nothing: it still counts towards cutting back this
+    // thread's view prefix after a larger window (NC-02, nt/match.h).
+    if (same) match::trimGrayPrefix(t_viewPrefix, roi.Dx(), roi.Dy());
     if (now < next_ && !ids_.empty()) {
         if (same && !memoFull_ && memoIDs_ == ids_) return memoOut_;
         // byID is written only by loadAvatarCatalog, so it is read lock-free;
@@ -701,7 +708,13 @@ AvatarMatch AvatarTracker::Read(AvatarCatalog* c, const RGBA* img, Rect roi, dou
 void AvatarTracker::remember(const RGBA* img, const Rect& roi, bool full, const AvatarMatch& out) {
     memoPix_.clear();
     const size_t row = static_cast<size_t>(4 * roi.Dx());
-    memoPix_.reserve(row * static_cast<size_t>(roi.Dy()));
+    const size_t need = row * static_cast<size_t>(roi.Dy());
+    // One side's window keeps its size: a memo far larger than it (an earlier
+    // resolution or calibration) is released (match::kKeepPrefixBytes rule, NC-02).
+    if (memoPix_.capacity() > match::kKeepPrefixBytes && memoPix_.capacity() / 4 > need) {
+        std::vector<uint8_t>().swap(memoPix_);
+    }
+    memoPix_.reserve(need);
     for (int y = roi.Min.Y; y < roi.Max.Y; ++y) {
         const uint8_t* p = img->Pix + img->PixOffset(roi.Min.X, y);
         memoPix_.insert(memoPix_.end(), p, p + row);

@@ -65,6 +65,8 @@ constexpr int maxDotRun = 66051;
 struct grayPrefix {
     int x0 = 0, y0 = 0, w = 0, h = 0;
     std::vector<uint32_t> sum, square;
+    // Consecutive builds that needed under a quarter of these buffers (newGrayPrefix).
+    int oversizedBuilds = 0;
 
     // covers 报告列 [x0,x1)、行 [y0,y1)（相对 Gray.Bounds().Min）是否在本前缀和内。
     bool covers(int cx0, int cy0, int cx1, int cy1) const {
@@ -120,8 +122,27 @@ std::shared_ptr<const PreparedNCC> PrepareNCC(const nt::Gray* templ, const nt::G
 int coarseStep(int tw, int th);
 int refineStep(int step);
 
+// Prefix (or memo) buffers above kKeepPrefixBytes do not stay resident at their
+// peak: a buffer that keeps being used for under a quarter of its size is cut
+// back to what it is used for after kOversizedBuilds builds in a row (one odd
+// frame, resolution or calibration must not pin tens of MiB on the pool
+// threads for good; audit NC-02). Alternating sizes reset the count.
+constexpr size_t kKeepPrefixBytes = static_cast<size_t>(512) << 10;
+constexpr int kOversizedBuilds = 8;
+
+// FrameDone is called once per analysed frame (frame::Pipeline::Analyze): the
+// shared buffer of prefixes above kKeepPrefixBytes is freed once no scan used
+// it for a few frames. LargePrefixSpareBytes is its current size (tests).
+void FrameDone();
+size_t LargePrefixSpareBytes();
+
 // newGrayPrefix covers columns [x0,x0+w) and rows [y0,y0+h) of img (w <= maxDotRun).
+// The buffers grow as needed and shrink by the kKeepPrefixBytes rule above.
 void newGrayPrefix(grayPrefix& g, const nt::Gray& img, int x0, int y0, int w, int h);
+// trimGrayPrefix counts a w×h use of g that needed no build (a memo hit) towards
+// that rule, so a buffer that is no longer rebuilt still comes down. The
+// contents are left alone (and are stale once trimmed).
+void trimGrayPrefix(grayPrefix& g, int w, int h);
 
 // ToGray 把采集帧（*image.RGBA，不预乘）转成灰度；输出原点 (0,0)。
 // 子图（带父 stride、非零原点）按其自身像素转换。nil 返回 0x0 灰度图。

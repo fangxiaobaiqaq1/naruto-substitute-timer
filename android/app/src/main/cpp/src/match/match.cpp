@@ -19,32 +19,55 @@ namespace {
 // Go 的 sync.Pool 复用 grayPrefix；Android 上 Match 只在调用线程上同步使用前缀和，
 // 用 thread_local 缓冲等价复用（ParallelFor 的每个工作线程各自一份）。
 thread_local grayPrefix tlsPrefix;
-// Prefix sums above kKeepPrefixBytes (wide screen regions: ~2 MiB at 1080p,
-// ~5 MiB at 2880x1800) do not stay resident on every pool thread: they come
-// from a process-wide pool that keeps ONE such buffer for the next large scan.
-constexpr size_t kKeepPrefixBytes = static_cast<size_t>(512) << 10;
+// Prefix sums above kKeepPrefixBytes (nt/match.h; wide screen regions: ~2 MiB
+// at 1080p, ~5 MiB at 2880x1800) do not stay resident on every pool thread:
+// they come from a process-wide pool that keeps ONE such buffer for the next
+// large scan (newGrayPrefix cuts it back when it stays oversized).
 
 class largePrefixPool {
 public:
     std::unique_ptr<grayPrefix> take() {
         std::lock_guard<std::mutex> lk(mu_);
+        idleFrames_ = 0;
         if (spare_) return std::move(spare_);
         return std::make_unique<grayPrefix>();
     }
     void give(std::unique_ptr<grayPrefix> p) {
         std::lock_guard<std::mutex> lk(mu_);
+        idleFrames_ = 0;
         if (!spare_ || spare_->sum.capacity() < p->sum.capacity()) spare_ = std::move(p);
+    }
+    // A spare no scan took for kIdleFrames frames is freed: frames whose scans
+    // all fit kKeepPrefixBytes (a smaller resolution) never cut it back.
+    void frameDone() {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (spare_ && ++idleFrames_ >= kIdleFrames) {
+            spare_.reset();
+            idleFrames_ = 0;
+        }
+    }
+    size_t spareBytes() {
+        std::lock_guard<std::mutex> lk(mu_);
+        return spare_ ? (spare_->sum.capacity() + spare_->square.capacity()) * sizeof(uint32_t) : 0;
     }
 
 private:
+    static constexpr int kIdleFrames = 8;
     std::mutex mu_;
     std::unique_ptr<grayPrefix> spare_;
+    int idleFrames_ = 0;
 };
 
 largePrefixPool& largePrefixes() {
     static largePrefixPool* pool = new largePrefixPool();  // process lifetime, like the thread pool
     return *pool;
 }
+}  // namespace
+
+void FrameDone() { largePrefixes().frameDone(); }
+size_t LargePrefixSpareBytes() { return largePrefixes().spareBytes(); }
+
+namespace {
 // kParallelScanWork (positions x template pixels) splits one scan over the
 // pool: ~1 ms of single-thread NCC work. Smaller scans (every avatar job,
 // name strips, hint windows) stay on their caller, which is already parallel.
