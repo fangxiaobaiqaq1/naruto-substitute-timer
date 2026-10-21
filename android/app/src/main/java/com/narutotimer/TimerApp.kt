@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.narutotimer.tracker.Session
+import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 
@@ -70,6 +71,7 @@ class TimerApp : Application() {
                 main.postDelayed(applyCalibration, CALIBRATION_DEBOUNCE_MS)
             }
         }
+        assetWorker.execute { cleanCaches() }
     }
 
     /**
@@ -110,6 +112,19 @@ class TimerApp : Application() {
         null to (t.message ?: t.javaClass.simpleName)
     }
 
+    /**
+     * Cache files that outlive what used them: calibration frames of an editor that never
+     * finished (process death; they show player names, AND-15) and update APKs / partial
+     * downloads (UR-04). Only files older than an hour, so an editor or an installer still
+     * reading one is left alone.
+     */
+    private fun cleanCaches() {
+        for (dir in listOf("calibration", "updates")) {
+            val n = runCatching { Housekeeping.deleteOlderThan(File(cacheDir, dir), STALE_CACHE_MS) }.getOrDefault(0)
+            if (n > 0) Log.i(TAG, "deleted $n stale file(s) in cache/$dir")
+        }
+    }
+
     private fun notifyNative() {
         main.post { for (l in nativeListeners) l() }
     }
@@ -127,6 +142,7 @@ class TimerApp : Application() {
     companion object {
         private const val TAG = "TimerApp"
         private const val CALIBRATION_DEBOUNCE_MS = 100L
+        private const val STALE_CACHE_MS = 60 * 60 * 1000L
         lateinit var instance: TimerApp
             private set
     }
