@@ -57,6 +57,24 @@ type Client struct {
 func NewClient() *Client {
 	return &Client{HTTP: &http.Client{Timeout: 20 * time.Second}, Base: APIBase}
 }
+
+// metadataRedirect keeps release metadata (which carries the trusted digest and
+// the Gitee release/attachment IDs) on the API host it was requested from, over
+// HTTPS. Go's default policy would follow any host and even plain HTTP.
+func metadataRedirect(base string) func(*http.Request, []*http.Request) error {
+	origin, err := url.Parse(base)
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("更新信息跳转次数过多")
+		}
+		u := req.URL
+		if err != nil || u.Scheme != "https" || u.User != nil || u.Host == "" || !strings.EqualFold(u.Host, origin.Host) {
+			return errors.New("更新信息跳转到所选源以外的地址")
+		}
+		return nil
+	}
+}
+
 func (c *Client) get(ctx context.Context, path string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.Base+path, nil)
 	if err != nil {
@@ -71,7 +89,9 @@ func (c *Client) get(ctx context.Context, path string, dst any) error {
 	if c.Source == Gitee {
 		name = "Gitee"
 	}
-	resp, err := c.HTTP.Do(req)
+	client := *c.HTTP
+	client.CheckRedirect = metadataRedirect(c.Base)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("无法连接 %s，请检查网络后重试: %w", name, err)
 	}
@@ -102,8 +122,10 @@ func (c *Client) Check(ctx context.Context) (Feed, error) {
 	if !validRelease(f.Latest) {
 		return f, errors.New("GitHub 最新正式版信息无效")
 	}
+	// The history only fills the changelog picker. When it cannot be read, the
+	// verified latest release is still offered instead of failing the check.
 	if err := c.get(ctx, "/releases?per_page=100", &f.Releases); err != nil {
-		return f, err
+		f.Releases = []Release{f.Latest}
 	}
 	var kept []Release
 	for _, r := range f.Releases {
@@ -304,13 +326,7 @@ func (c *Client) Download(ctx context.Context, r Release, progress func(int64, i
 	defer file.Close()
 	client := *c.HTTP
 	client.Timeout = 15 * time.Minute
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		h := req.URL.Hostname()
-		if len(via) > 5 || req.URL.Scheme != "https" || (h != "github.com" && h != "release-assets.githubusercontent.com" && h != "objects.githubusercontent.com") {
-			return errors.New("更新下载跳转到非 GitHub 地址")
-		}
-		return nil
-	}
+	client.CheckRedirect = assetRedirect(GitHub)
 	req, err := http.NewRequestWithContext(ctx, "GET", a.URL, nil)
 	if err != nil {
 		return "", err

@@ -24,11 +24,9 @@ func PruneCache(now time.Time) {
 			continue
 		}
 		name := item.Name()
-		hash := false
-		if len(name) == 64 {
-			_, e := hex.DecodeString(name)
-			hash = e == nil
-		}
+		// Downloads live in <sha256> (GitHub) or gitee-<sha256> (Gitee, the
+		// default source); both hold the same known files.
+		hash := isSHA256Hex(name) || (strings.HasPrefix(name, "gitee-") && isSHA256Hex(strings.TrimPrefix(name, "gitee-")))
 		helper := strings.HasPrefix(name, "apply-")
 		if !hash && !helper {
 			continue
@@ -59,4 +57,12 @@ func PruneCache(now time.Time) {
 		}
 		_ = os.Remove(dir)
 	}
+}
+
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
