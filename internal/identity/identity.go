@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,12 @@ const (
 	minGap              = 0.08
 	fightMinScore       = 0.80
 	recognitionInterval = 500 * time.Millisecond
+	// maxSeenCrops bounds SeenDir (GE-05). Every crop there is decoded when the
+	// book loads and matched on every VS/death-swap read in the capture worker,
+	// so an unbounded folder turned those reads into multi-second stalls and
+	// grew RAM by ~140 MiB per 1000 crops. Only the newest crops are loaded,
+	// and older crops written by the timer are deleted after each new save.
+	maxSeenCrops = 100
 )
 
 var (
@@ -115,26 +122,68 @@ func LoadBook(cfg config.Config) []Named {
 		out = append(out, Named{Name: label, Image: img, Mine: mine[label], Scene: scene})
 	}
 
-	scanDir := func(dir, scene string) {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			low := strings.ToLower(e.Name())
-			if !strings.HasSuffix(low, ".png") && !strings.HasSuffix(low, ".jpg") && !strings.HasSuffix(low, ".jpeg") {
-				continue
-			}
-			addFile(filepath.Join(dir, e.Name()), labelFromFile(e.Name()), scene)
+	scanDir := func(dir, scene string, limit int) {
+		for _, name := range bookImageNames(dir, limit) {
+			addFile(filepath.Join(dir, name), labelFromFile(name), scene)
 		}
 	}
-	scanDir(AssetDir, "vs")
-	scanDir(SeenDir, "vs")
-	scanDir(FightDir, "fight")
+	scanDir(AssetDir, "vs", 0)
+	scanDir(SeenDir, "vs", maxSeenCrops)
+	scanDir(FightDir, "fight", 0)
 	return out
+}
+
+func isBookImage(name string) bool {
+	low := strings.ToLower(name)
+	return strings.HasSuffix(low, ".png") || strings.HasSuffix(low, ".jpg") || strings.HasSuffix(low, ".jpeg")
+}
+
+type datedFile struct {
+	name string
+	mod  time.Time
+}
+
+// newestFirst orders files by modification time, newest first (name breaks ties).
+func newestFirst(files []datedFile) {
+	sort.Slice(files, func(i, j int) bool {
+		if !files[i].mod.Equal(files[j].mod) {
+			return files[i].mod.After(files[j].mod)
+		}
+		return files[i].name > files[j].name
+	})
+}
+
+// bookImageNames lists the image files of dir in name order. With limit > 0
+// only the limit most recently modified files are returned (still in name
+// order, which for saved crops is their time order).
+func bookImageNames(dir string, limit int) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var files []datedFile
+	for _, e := range entries {
+		if e.IsDir() || !isBookImage(e.Name()) {
+			continue
+		}
+		var mod time.Time
+		if limit > 0 {
+			if info, err := e.Info(); err == nil {
+				mod = info.ModTime()
+			}
+		}
+		files = append(files, datedFile{name: e.Name(), mod: mod})
+	}
+	if limit > 0 && len(files) > limit {
+		newestFirst(files)
+		files = files[:limit]
+		sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
+	}
+	names := make([]string, len(files))
+	for i, f := range files {
+		names[i] = f.name
+	}
+	return names
 }
 
 func labelFromFile(name string) string {
@@ -500,7 +549,8 @@ func oppCrop(img *image.RGBA, side string, mode detect.ContentMode) *image.RGBA 
 	return crop
 }
 
-// saveOppCrop writes an owned crop (oppCrop) to SeenDir, at most once per 8 s.
+// saveOppCrop writes an owned crop (oppCrop) to SeenDir, at most once per 8 s,
+// then trims SeenDir to the newest maxSeenCrops crops.
 func saveOppCrop(crop *image.RGBA) {
 	saveMu.Lock()
 	defer saveMu.Unlock()
@@ -510,16 +560,65 @@ func saveOppCrop(crop *image.RGBA) {
 	if err := os.MkdirAll(SeenDir, 0o755); err != nil {
 		return
 	}
-	path := filepath.Join(SeenDir, fmt.Sprintf("opp-%s.png", time.Now().Format("20060102-150405")))
-	f, err := os.Create(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	if err := png.Encode(f, crop); err != nil {
+	path := filepath.Join(SeenDir, fmt.Sprintf("%s%s.png", seenCropPrefix, time.Now().Format("20060102-150405")))
+	if err := writePNGAtomic(path, crop); err != nil {
 		return
 	}
 	lastSave = time.Now()
+	pruneSeenCrops(SeenDir, maxSeenCrops)
+}
+
+// seenCropPrefix marks crops written by saveOppCrop; only those are pruned.
+const seenCropPrefix = "opp-"
+
+// writePNGAtomic never leaves a truncated PNG under its final name (LoadBook
+// would read it on the next start): it writes a temporary file and renames it.
+func writePNGAtomic(path string, img image.Image) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+seenCropPrefix+"*.png.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	if err := png.Encode(tmp, img); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// pruneSeenCrops deletes the oldest timer-written crops beyond keep, plus
+// temporary files left by an interrupted save. Other files are left alone.
+func pruneSeenCrops(dir string, keep int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var crops []datedFile
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		name := e.Name()
+		switch {
+		case strings.HasPrefix(name, "."+seenCropPrefix) && strings.HasSuffix(name, ".png.tmp"):
+			if time.Since(info.ModTime()) > time.Hour {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
+		case strings.HasPrefix(name, seenCropPrefix) && strings.HasSuffix(strings.ToLower(name), ".png"):
+			crops = append(crops, datedFile{name: name, mod: info.ModTime()})
+		}
+	}
+	if len(crops) <= keep {
+		return
+	}
+	newestFirst(crops)
+	for _, f := range crops[keep:] {
+		_ = os.Remove(filepath.Join(dir, f.name))
+	}
 }
 
 // NormalizeName 去掉空白和路径字符，方便当文件名、当配置项。
