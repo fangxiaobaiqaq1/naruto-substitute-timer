@@ -12,16 +12,11 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
-)
 
-type Options struct {
-	InstallDir string `json:"install_dir"`
-	DLLPath    string `json:"dll_path,omitempty"`
-	Instance   int    `json:"instance"`
-	DisplayID  int    `json:"display_id"`
-	Package    string `json:"package,omitempty"`
-}
+	"narutotimer/internal/win"
+)
 
 type Client struct {
 	mu                           sync.Mutex
@@ -30,8 +25,17 @@ type Client struct {
 	handle                       uintptr
 	opts                         Options
 	dllPath                      string
-	pixels                       []byte
+	frames                       frameRingBuffer
+	// The game display id rarely changes; resolving it on every capture is an
+	// avoidable SDK round trip. It is refreshed at a bounded interval and on
+	// every capture failure.
+	displayID      int
+	displayValid   bool
+	displayReadAt  time.Time
+	displayRefresh time.Duration
 }
+
+const displayIDRefresh = 500 * time.Millisecond
 
 func nativeCallError(err error) string {
 	if err == nil {
@@ -80,7 +84,8 @@ func Open(o Options) (*Client, error) {
 	if err != nil {
 		return nil, stageError(ProbeStageFindSDK, err)
 	}
-	dll, err := syscall.LoadDLL(path)
+	// Resolve the SDK's own imports from its folder and System32 only.
+	dll, err := win.LoadDLLWithDependencies(path)
 	if err != nil {
 		return nil, stageError(ProbeStageLoadSDK, fmt.Errorf("load MuMu screenshot SDK: %w", err))
 	}
@@ -125,23 +130,54 @@ func (c *Client) DLLPath() string {
 // Capture returns an owned top-down RGBA image. The SDK has no source frame
 // timestamp; callers must report acquisition times rather than invent one.
 func (c *Client) Capture() (*image.RGBA, error) {
+	img, _, err := c.CaptureRowHashes(nil, nil)
+	return img, err
+}
+
+// CaptureRowHashes implements capture.RowHashClient: Capture, plus hash(row)
+// of every delivered row (top to bottom) taken while the row is in cache.
+// The SDK writes straight into the next ring slot, which is flipped and made
+// opaque in place: the pixels are exactly those of the former staging copy.
+func (c *Client) CaptureRowHashes(hash func([]byte) uint64, hashes []uint64) (*image.RGBA, []uint64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	img, err := c.captureLocked()
+	if err != nil {
+		return nil, nil, err
+	}
+	hashes = c.frames.flipOpaqueInPlace(img, hash, hashes)
+	c.frames.advance()
+	return img, hashes, nil
+}
+
+// captureLocked fills the next ring slot with the SDK's bottom-up pixels.
+// A failed call may leave that slot partly written; it is only handed out
+// (advanced) after a successful capture, like the previous staging copy.
+func (c *Client) captureLocked() (*image.RGBA, error) {
 	if c.handle == 0 {
 		return nil, stageError(ProbeStageConnect, fmt.Errorf("MuMu capture is closed"))
 	}
 	id := c.opts.DisplayID
 	if c.opts.Package != "" && c.display != nil {
-		pkg, err := syscall.BytePtrFromString(c.opts.Package)
-		if err != nil {
-			return nil, stageError(ProbeStageDisplay, err)
+		refresh := c.displayRefresh
+		if refresh <= 0 {
+			refresh = displayIDRefresh
 		}
-		result, _, _ := c.display.Call(c.handle, uintptr(unsafe.Pointer(pkg)), 0)
-		runtime.KeepAlive(pkg)
-		if int32(result) < 0 {
-			return nil, stageError(ProbeStageDisplay, fmt.Errorf("MuMu display for %q is unavailable", c.opts.Package))
+		now := time.Now()
+		if !c.displayValid || now.Sub(c.displayReadAt) >= refresh {
+			pkg, err := syscall.BytePtrFromString(c.opts.Package)
+			if err != nil {
+				return nil, stageError(ProbeStageDisplay, err)
+			}
+			result, _, _ := c.display.Call(c.handle, uintptr(unsafe.Pointer(pkg)), 0)
+			runtime.KeepAlive(pkg)
+			if int32(result) < 0 {
+				c.displayValid = false
+				return nil, stageError(ProbeStageDisplay, fmt.Errorf("MuMu display for %q is unavailable", c.opts.Package))
+			}
+			c.displayID, c.displayValid, c.displayReadAt = int(int32(result)), true, now
 		}
-		id = int(int32(result))
+		id = c.displayID
 	}
 	var width, height int32
 	result, _, callErr := c.capture.Call(c.handle, uintptr(id), 0, uintptr(unsafe.Pointer(&width)), uintptr(unsafe.Pointer(&height)), 0)
@@ -156,15 +192,12 @@ func (c *Client) Capture() (*image.RGBA, error) {
 		return nil, stageError(ProbeStageDimensions, fmt.Errorf("invalid MuMu capture size %dx%d", width, height))
 	}
 	size := int(width) * int(height) * 4
-	if cap(c.pixels) < size {
-		c.pixels = make([]byte, size)
-	} else {
-		c.pixels = c.pixels[:size]
-	}
+	slot := c.frames.slot(int(width), int(height))
 	wantedWidth, wantedHeight := width, height
-	result, _, callErr = c.capture.Call(c.handle, uintptr(id), uintptr(size), uintptr(unsafe.Pointer(&width)), uintptr(unsafe.Pointer(&height)), uintptr(unsafe.Pointer(&c.pixels[0])))
-	runtime.KeepAlive(c.pixels)
+	result, _, callErr = c.capture.Call(c.handle, uintptr(id), uintptr(size), uintptr(unsafe.Pointer(&width)), uintptr(unsafe.Pointer(&height)), uintptr(unsafe.Pointer(&slot.Pix[0])))
+	runtime.KeepAlive(slot)
 	if int32(result) != 0 {
+		c.displayValid = false
 		detail := fmt.Sprintf("MuMu capture pixels: api_return=%d", int32(result))
 		if nativeErr := nativeCallError(callErr); nativeErr != "" {
 			detail += "; win32_last_error=" + nativeErr
@@ -172,21 +205,10 @@ func (c *Client) Capture() (*image.RGBA, error) {
 		return nil, stageError(ProbeStagePixels, errors.New(detail))
 	}
 	if width != wantedWidth || height != wantedHeight {
+		c.displayValid = false
 		return nil, stageError(ProbeStagePixels, fmt.Errorf("MuMu display resized during capture"))
 	}
-	return fromBottomUpRGBA(c.pixels, int(width), int(height)), nil
-}
-
-func fromBottomUpRGBA(src []byte, width, height int) *image.RGBA {
-	image := image.NewRGBA(image.Rect(0, 0, width, height))
-	stride := width * 4
-	for y := 0; y < height; y++ {
-		copy(image.Pix[y*stride:(y+1)*stride], src[(height-1-y)*stride:(height-y)*stride])
-	}
-	for index := 3; index < len(image.Pix); index += 4 {
-		image.Pix[index] = 255
-	}
-	return image
+	return slot, nil
 }
 
 func (c *Client) Close() error {
@@ -197,7 +219,7 @@ func (c *Client) Close() error {
 	}
 	c.disconnect.Call(c.handle)
 	c.handle = 0
-	c.pixels = nil
+	c.frames = frameRingBuffer{}
 	return c.dll.Release()
 }
 

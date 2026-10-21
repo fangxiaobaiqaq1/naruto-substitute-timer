@@ -33,7 +33,7 @@ func BenchmarkUnknownNameSearch(b *testing.B) {
 		for b.Loop() {
 			view := img.SubImage(roi).(*image.RGBA)
 			gray := match.ToGray(view)
-			for _, templ := range reader.prepared {
+			for _, templ := range reader.testPrepared() {
 				if _, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: roi, Prepared: templ.ncc}); err != nil {
 					b.Fatal(err)
 				}

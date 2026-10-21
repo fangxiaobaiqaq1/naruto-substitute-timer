@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package overlay 提供透明置顶覆盖层：把菱形检测框直接画在 MuMu 窗口上。
 //
 // 用途：校准——确认豆位算法算出的菱形框是否套准游戏中的豆子。
@@ -183,7 +185,11 @@ func (o *Overlay) draw(w, h int) {
 	r := rect{0, 0, int32(w), int32(h)}
 	u32.NewProc("FillRect").Call(dc, uintptr(unsafe.Pointer(&r)), br)
 
-	pos := detect.Layout(w, h, detect.ModeAuto, detect.DefaultBeads())
+	// The overlay has no pixels with which to prove letterboxing. MuMu's
+	// native SurfaceView follows the NGUI full-surface HUD, so use the native
+	// surface transform here; the main analyzer uses the same rule after it
+	// inspects the frame for actual bars.
+	pos := detect.Layout(w, h, detect.ModeStretch, detect.DefaultBeads())
 	pen, _, _ := g32.NewProc("CreatePen").Call(psSolid, 2, uintptr(o.cfg.BeadColor))
 	if pen == 0 {
 		return

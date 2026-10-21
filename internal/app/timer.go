@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// recoveryReuseWindow is how far from a cooldown end a one-frame +1 still
+// counts as that bean's recovery. The clock starts at the first frame that
+// showed the drop, so the recovery shows up within about one capture interval
+// of the computed end; the window adds margin for jitter.
+const recoveryReuseWindow = 250 * time.Millisecond
+
 // SideClock 跟踪一侧替身冷却。
 // 掉 1 颗豆 = 放替身；一次掉光（4 或 6）= 大招，不计时。
 // 开钟时刻 = 第一次看到掉豆的那一帧 CapturedAt。
@@ -14,9 +20,11 @@ type SideClock struct {
 	lastReady       int
 	hasPrev         bool
 	ends            []time.Time
+	due             []time.Time // Ends passed within recoveryReuseWindow, not yet matched by a recovery.
 	pendingReady    int
 	pendingAt       time.Time
 	pendingHits     int
+	pendingRecovery time.Time // The cooldown end a pending +1 matches; zero if none.
 	observedAt      time.Time
 	validAt         time.Time
 	maxGap          time.Duration
@@ -57,9 +65,17 @@ func (c *SideClock) Observe(ready int, fighting bool, capturedAt time.Time, cd t
 		return
 	}
 	if ready == c.lastReady {
-		c.inheritedReturn = false
-		c.clearPending()
-		return
+		if !c.reuseAfterRecovery(ready) {
+			c.inheritedReturn = false
+			c.clearPending()
+			return
+		}
+		// A bean used again as soon as it recovers is lit for at most one frame.
+		// That +1 matched the bean's cooldown end, so it was the recovery, and
+		// this frame is the first evidence of the next substitute: confirm it
+		// like any other drop, from this frame.
+		c.useRecovery(c.pendingRecovery)
+		c.lastReady = ready + 1
 	}
 	// 恢复也需要连续的新观测，至少两帧才能排除单帧闪亮。
 	// 不能因另一颗豆还在冷却就禁止恢复，否则恢复后再使用会漏计。
@@ -73,11 +89,20 @@ func (c *SideClock) Observe(ready int, fighting bool, capturedAt time.Time, cd t
 		c.pendingReady = ready
 		c.pendingAt = capturedAt
 		c.pendingHits = 1
+		c.pendingRecovery = time.Time{}
+		if ready == c.lastReady+1 && !c.inheritedReturn {
+			c.pendingRecovery = c.expectedRecovery(capturedAt)
+		}
 	} else {
 		c.pendingHits++
 	}
 	if c.pendingHits < confirmNeed {
 		return
+	}
+	if ready > c.lastReady {
+		// A confirmed recovery accounts for its cooldown end: a later glint
+		// near the same end must not pair with it again.
+		c.useRecovery(c.pendingRecovery)
 	}
 	// A lower count on the far side of a character-swap animation establishes
 	// what is visible NOW. Even repeated lower frames cannot prove a drop was
@@ -125,10 +150,69 @@ func (c *SideClock) InvalidateObservation(capturedAt time.Time) {
 	c.clearPending()
 }
 
+// HoldObservation maintains continuity only for a newly acquired, identical
+// pixel frame matching the latest observed count. It never adds a confirmation
+// vote, repairs an expired gap, or accepts a synthetic heartbeat/replayed time.
+func (c *SideClock) HoldObservation(ready int, capturedAt time.Time) bool {
+	if capturedAt.IsZero() || !c.hasPrev || c.validAt.IsZero() || !capturedAt.After(c.observedAt) {
+		return false
+	}
+	expected := c.lastReady
+	if c.pendingHits > 0 {
+		expected = c.pendingReady
+	}
+	if ready != expected || (c.maxGap > 0 && capturedAt.Sub(c.validAt) > c.maxGap) {
+		return false
+	}
+	c.observedAt, c.validAt = capturedAt, capturedAt
+	return true
+}
+
 func (c *SideClock) clearPending() {
 	c.pendingReady = 0
 	c.pendingAt = time.Time{}
 	c.pendingHits = 0
+	c.pendingRecovery = time.Time{}
+}
+
+// reuseAfterRecovery reports whether the pending candidate is exactly one
+// fresh frame of ready+1 that matched a cooldown end. Any interruption since
+// (unknown frame, swap, other count) has cleared or replaced the candidate.
+func (c *SideClock) reuseAfterRecovery(ready int) bool {
+	return c.pendingHits == 1 && c.pendingReady == ready+1 && !c.pendingRecovery.IsZero()
+}
+
+// expectedRecovery returns a cooldown end within recoveryReuseWindow of at
+// (the first in event order), or zero. due holds ends that have passed, ends
+// the running ones.
+func (c *SideClock) expectedRecovery(at time.Time) time.Time {
+	for _, end := range c.due {
+		if at.Sub(end) <= recoveryReuseWindow {
+			return end
+		}
+	}
+	for _, end := range c.ends {
+		if end.Sub(at) <= recoveryReuseWindow {
+			return end
+		}
+	}
+	return time.Time{}
+}
+
+// useRecovery removes a matched cooldown end, so one recovery pairs with at
+// most one observation. A running clock it ends early has visibly recovered.
+func (c *SideClock) useRecovery(end time.Time) {
+	if end.IsZero() {
+		return
+	}
+	for _, list := range []*[]time.Time{&c.due, &c.ends} {
+		for i, value := range *list {
+			if value.Equal(end) {
+				*list = append((*list)[:i], (*list)[i+1:]...)
+				return
+			}
+		}
+	}
 }
 
 func (c *SideClock) expire(now time.Time) {
@@ -136,9 +220,19 @@ func (c *SideClock) expire(now time.Time) {
 	for _, end := range c.ends {
 		if end.After(now) {
 			alive = append(alive, end)
+		} else {
+			c.due = append(c.due, end)
 		}
 	}
 	c.ends = alive
+	// An end older than the window can no longer pair with a +1 seen from now on.
+	recent := c.due[:0]
+	for _, end := range c.due {
+		if now.Sub(end) <= recoveryReuseWindow {
+			recent = append(recent, end)
+		}
+	}
+	c.due = recent
 }
 
 func (c *SideClock) Remaining(now time.Time) []float64 {
@@ -203,6 +297,7 @@ func (c *SideClock) Reset() {
 	c.lastReady = 0
 	c.hasPrev = false
 	c.ends = c.ends[:0]
+	c.due = c.due[:0]
 	c.observedAt = time.Time{}
 	c.validAt = time.Time{}
 	c.lastEventEnd = time.Time{}
@@ -219,6 +314,7 @@ func (c *SideClock) ResetRound() {
 	c.lastReady = 0
 	c.hasPrev = false
 	c.ends = c.ends[:0]
+	c.due = c.due[:0]
 	c.observedAt = time.Time{}
 	c.validAt = time.Time{}
 	c.lastEventEnd = time.Time{}

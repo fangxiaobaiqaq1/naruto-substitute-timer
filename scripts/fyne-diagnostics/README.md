@@ -15,7 +15,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fyne-diagnostics/pre
 go build -modfile bin/fyne-diagnostics/diagnostics.mod -overlay bin/fyne-diagnostics/overlay.json -o bin/timer-app-debug.exe ./cmd/timer-app
 ```
 
-For a Linux-hosted cgo cross-build, `prepare-linux.sh` is the auditable equivalent: it requires Bash, Python 3, Go 1.26.1 and an already-installed x64 MinGW-w64/llvm-mingw compiler; it creates a symlink alias where Windows uses a junction. It verifies the same module version and source anchors, and writes only the chosen output directory:
+For a Linux-hosted cgo cross-build, `prepare-linux.sh` is the auditable equivalent: it requires Bash, Python 3, Go 1.26.10 (the `toolchain` line in `go.mod`) and an already-installed x64 MinGW-w64/llvm-mingw compiler; it creates a symlink alias where Windows uses a junction. It verifies the same module version and source anchors, and writes only the chosen output directory:
 
 ```bash
 export GOOS=windows GOARCH=amd64 CGO_ENABLED=1

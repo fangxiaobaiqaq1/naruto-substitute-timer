@@ -1,0 +1,8 @@
+node_modules/
+.vitepress/dist/
+.vitepress/cache/
+.wrangler/
+# 游戏宣传视频/音乐有版权：不进 GitHub 仓库（DMCA 会连累整个项目和自动更新），只从本机部署
+public/media/
+# 根目录 .gitignore 忽略了 *.txt；字体许可证必须跟着字体文件走
+!public/fonts/OFL.txt

@@ -8,31 +8,7 @@ import (
 	"image"
 )
 
-type Options struct {
-	InstallDir  string
-	ConsolePath string
-	ADBPath     string
-	Index       int
-	Serial      string
-	Package     string
-	Connect     bool
-}
-
 type Client struct{}
-
-type Instance struct {
-	Root           string
-	Index          int
-	Name           string
-	Running        bool
-	ProcessStarted bool
-	AndroidStarted bool
-	PID            int
-	Serial         string
-	Resolution     string
-}
-
-type ProbeResult struct{}
 
 func Open(Options) (*Client, error) { return nil, errors.New("雷电适配仅支持 Windows amd64") }
 func OpenAuto(Options) (*Client, error) {

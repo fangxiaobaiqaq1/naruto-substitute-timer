@@ -3,9 +3,10 @@
 package rgb
 
 import (
-	"fmt"
 	"image"
 	"math"
+	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
 	"narutotimer/internal/ninja"
+	"narutotimer/internal/safego"
 )
 
 // Engine 保存同步保护的布局偏好，可并发调用。
@@ -33,6 +35,20 @@ func New(layout engine.LayoutProvider) *Engine {
 
 func NewConfigured(layout engine.LayoutProvider, vision config.VisionConfig) *Engine {
 	return &Engine{layout: layout, vision: vision, names: ninja.NewReader()}
+}
+
+// SetCalibration replaces the player's region calibration (engine.Calibrator).
+func (e *Engine) SetCalibration(c *config.RegionCalibration) {
+	if l, ok := e.layout.(engine.Calibrator); ok {
+		l.SetCalibration(c)
+	}
+}
+
+func (e *Engine) CalibrationRevision() uint64 {
+	if l, ok := e.layout.(engine.Calibrator); ok {
+		return l.CalibrationRevision()
+	}
+	return 0
 }
 
 // Prefer receives a template's explicit layout binding, or clears it at an end scene.
@@ -62,7 +78,8 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	var calibrated *engine.ConfiguredLayout
 	vision := e.vision
 	if p, ok := e.layout.(*engine.ConfiguredLayout); ok {
-		calibrated = p
+		// One region calibration for the whole frame.
+		calibrated = p.Pinned()
 		var supported bool
 		area, supported = p.ContentArea(img)
 		if !supported {
@@ -71,15 +88,16 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 			return res
 		}
 		ref := p.ReferenceSize()
-		vision.SampleWidthReferencePX *= float64(detect.LogicWidth) / float64(ref.X)
-		vision.SampleHeightReferencePX *= float64(detect.LogicHeight) / float64(ref.Y)
+		scale := float64(detect.LogicHeight) / float64(ref.Y)
+		vision.SampleWidthReferencePX *= scale
+		vision.SampleHeightReferencePX *= scale
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	prefer := e.prefer
 	positions := func(name string) []detect.BeadPosition {
 		if calibrated != nil {
-			return calibrated.PositionsIn(name, area)
+			return calibrated.PositionsInImage(name, img, area)
 		}
 		if p, ok := e.layout.(engine.ProfiledLayout); ok {
 			return p.PositionsFor(name, w, h)
@@ -89,14 +107,17 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		}
 		return e.layout.Positions(w, h)
 	}
-	readouts := map[string][2]ninja.Readout{}
-	sample := func(name string) []engine.BeadInfo {
-		if _, calibrated := e.layout.(engine.ProfiledLayout); calibrated {
-			pos, identified := e.specialPositionsForAt(name, img, positions(name), area, at)
-			readouts[name] = identified
-			return sampleCalibratedSpecial(img, pos, area, vision, identified)
+	// sample writes only its own readout, geometry and its profile's trackers,
+	// so camp and duel can run concurrently. Non-profiled layouts leave them zero.
+	sample := func(name string, pos []detect.BeadPosition, readout *[2]ninja.Readout, geometry *[2]engine.SideGeometry) []engine.BeadInfo {
+		if _, profiled := e.layout.(engine.ProfiledLayout); profiled {
+			special, identified, sides := e.specialRowsAt(name, img, pos, area, at)
+			*readout = identified
+			beads := sampleCalibratedSpecial(img, special, area, vision, identified)
+			*geometry = completeGeometry(sides, calibrated, name, img, area, pos, special, beads)
+			return beads
 		}
-		return sampleLayout(img, positions(name))
+		return sampleLayout(img, pos)
 	}
 	if p, ok := e.layout.(engine.ProfiledLayout); ok {
 		if manual := p.PreferredProfile(); manual == "camp" || manual == "duel" {
@@ -106,19 +127,38 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	if prefer == "camp" || prefer == "duel" {
 		res.Name = "rgb-" + prefer
 		res.LayoutProfile = prefer
-		res.Beads = sample(prefer)
-		applyNames(&res, readouts[prefer])
+		var readout [2]ninja.Readout
+		res.Beads = sample(prefer, positions(prefer), &readout, &res.Geometry)
+		applyNames(&res, readout)
 		e.locked = prefer
 		return res
 	}
-	camp := sample("camp")
-	duel := sample("duel")
+	// Layout positions are resolved here so only sampling leaves this goroutine.
+	campPositions, duelPositions := positions("camp"), positions("duel")
+	var camp, duel []engine.BeadInfo
+	var campReadout, duelReadout [2]ninja.Readout
+	var campGeometry, duelGeometry [2]engine.SideGeometry
+	if parallelSides {
+		// A panic on either side reaches this goroutine after both finished.
+		var wg safego.Group
+		wg.Go(func() { duel = sample("duel", duelPositions, &duelReadout, &duelGeometry) })
+		wg.Run(func() { camp = sample("camp", campPositions, &campReadout, &campGeometry) })
+		wg.Wait()
+	} else {
+		camp = sample("camp", campPositions, &campReadout, &campGeometry)
+		duel = sample("duel", duelPositions, &duelReadout, &duelGeometry)
+	}
 	chosen, name := pickLayout(camp, duel)
 	chosen, name = e.stickLayout(camp, duel, chosen, name)
 	res.Name = "rgb-" + name
 	res.LayoutProfile = name
 	res.Beads = chosen
-	applyNames(&res, readouts[name])
+	readout, geometry := campReadout, campGeometry
+	if name == "duel" {
+		readout, geometry = duelReadout, duelGeometry
+	}
+	res.Geometry = geometry
+	applyNames(&res, readout)
 	return res
 }
 
@@ -174,10 +214,19 @@ func sampleUnverifiedSpecial(img *image.RGBA, p detect.BeadPosition, w, h, guard
 }
 
 func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, identified [2]ninja.Readout) []engine.BeadInfo {
-	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*float64(area.W)/detect.LogicWidth)))
-	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*float64(area.H)/detect.LogicHeight)))
 	var out []engine.BeadInfo
 	for index, side := range []engine.Side{engine.Left, engine.Right} {
+		var row []detect.BeadPosition
+		start := len(out)
+		for _, p := range positions {
+			if p.Side == side.String() {
+				row = append(row, p)
+			}
+		}
+		// A calibrated side has its own scale.
+		scale := detect.RowHUDScale(row, area, detect.LogicWidth, detect.LogicHeight)
+		w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*scale)))
+		h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*scale)))
 		palette := identified[index].Palette
 		if identified[index].Unverified {
 			palette = identified[index].PaletteHint
@@ -186,20 +235,13 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 		if xiayin {
 			palette = xiayinPalette(img, positions, side.String(), w, h)
 		}
-		var row []detect.BeadPosition
-		start := len(out)
-		for _, p := range positions {
-			if p.Side == side.String() {
-				row = append(row, p)
-			}
-		}
 		var states []detect.BeadState
 		if identified[index].Unverified {
 			for _, p := range row {
 				// Keep the row topology, but decide each bean from this frame only.
 				// Hints permit current saturated purple bodies; Xiayin also permits
 				// spatially isolated red cores. White flares/gold remain unknown.
-				guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
+				guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*scale*1.2)))
 				hint := identified[index].PaletteHint
 				if xiayin {
 					hint = palette
@@ -221,7 +263,7 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 			// it on a bounded offset grid and keep the best legal row. Identity
 			// stays independent; all evidence is still this frame's pixels.
 			rowInfos, rowStates := sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], image.Point{})
-			if allUnknownStates(rowStates) && len(row) >= 2 {
+			if identified[index].RowOffsetY != 0 && allUnknownStates(rowStates) && len(row) >= 2 {
 				for _, delta := range []image.Point{{3, 0}, {-3, 0}, {0, -3}, {0, 3}, {6, 0}, {-6, 0}, {0, -6}, {0, 6}} {
 					candidateInfos, candidateStates := sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], delta)
 					if rowInfosScore(candidateInfos) > rowInfosScore(rowInfos) {
@@ -230,6 +272,16 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 					if !allUnknownStates(rowStates) {
 						break
 					}
+				}
+			}
+			// Without an identity offset, an energy gauge may still cover the
+			// default row. Re-read the 13px@540 row; keep it only when complete
+			// and legal. Special palettes and offset identities are excluded.
+			if identified[index].RowOffsetY == 0 && palette == "" && !xiayin && len(row) == 4 && energyGaugeBand(img, row, area) {
+				dy := int(math.Round(ninja.EnergyGaugeRowOffset * detect.RowHUDScale(row, area, 960, 540)))
+				candidateInfos, candidateStates := sampleCalibratedRow(img, row, area, cfg, palette, xiayin, identified[index], image.Pt(0, dy))
+				if detect.IsLegalPrefix(candidateStates) && !slices.Contains(candidateStates, detect.StateUnknown) {
+					rowInfos, rowStates = candidateInfos, candidateStates
 				}
 			}
 			out = append(out, rowInfos...)
@@ -250,8 +302,9 @@ func sampleCalibratedSpecial(img *image.RGBA, positions []detect.BeadPosition, a
 // centers shifted by delta. It is the strict core sampler; the retry grid only
 // re-centers the diamond, every judgment stays at the calibrated thresholds.
 func sampleCalibratedRow(img *image.RGBA, row []detect.BeadPosition, area detect.ContentArea, cfg config.VisionConfig, palette ninja.Palette, xiayin bool, identified ninja.Readout, delta image.Point) ([]engine.BeadInfo, []detect.BeadState) {
-	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*float64(area.W)/detect.LogicWidth)))
-	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*float64(area.H)/detect.LogicHeight)))
+	scale := detect.RowHUDScale(row, area, detect.LogicWidth, detect.LogicHeight)
+	w := max(2, int(math.Round(cfg.SampleWidthReferencePX*cfg.CoreScale*scale)))
+	h := max(2, int(math.Round(cfg.SampleHeightReferencePX*cfg.CoreScale*scale)))
 	var infos []engine.BeadInfo
 	var states []detect.BeadState
 	for _, p := range row {
@@ -353,9 +406,10 @@ func sampleCalibratedRow(img *image.RGBA, row []detect.BeadPosition, area detect
 		if st == detect.StateUnknown && darkGlintBody(img, p, w, h, palette) {
 			st, conf = detect.StateDark, 1
 		}
-		guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*float64(area.H)/detect.LogicHeight*1.2)))
-		// Xiayin's alternate red skin still needs its own bounded body.
-		// Red bars/effects alone must not convert a purple row into ready beans.
+		guard := max(3, int(math.Round(cfg.SampleHeightReferencePX*scale*1.2)))
+		// Xiayin's extra gauge can leave a thin red band inside the wash
+		// guard. An exact name is not evidence of filled diamonds: require
+		// each red core to be distinct from both slot gaps even when verified.
 		if st == detect.StateLight && xiayin && palette == ninja.Red && !isolatedRedHalo(img, p, guard) {
 			st = detect.StateUnknown
 		}
@@ -499,13 +553,19 @@ func knownCount(beads []engine.BeadInfo) int {
 	return n
 }
 
+// beadLabels are the L1..L6 / R1..R6 labels: no formatting per bean and frame.
+var beadLabels = [2][6]string{{"L1", "L2", "L3", "L4", "L5", "L6"}, {"R1", "R2", "R3", "R4", "R5", "R6"}}
+
 // label 生成豆子编号（L1..L6 / R1..R6）。
 func label(side engine.Side, idx int) string {
-	prefix := "L"
+	prefix, row := "L", 0
 	if side == engine.Right {
-		prefix = "R"
+		prefix, row = "R", 1
 	}
-	return fmt.Sprintf("%s%d", prefix, idx+1)
+	if idx >= 0 && idx < len(beadLabels[row]) {
+		return beadLabels[row][idx]
+	}
+	return prefix + strconv.Itoa(idx+1)
 }
 
 // locateBead 在标定附近找豆。亮豆中间有一条暗青装饰带，中心常被判暗，

@@ -58,7 +58,15 @@ type Frame struct {
 	Sequence            uint64
 	Duplicate           bool // Identical pixels; never count as an independent confirmation.
 	Err                 error
+	Geometry            [2]SideGeometry // Left, right: what this frame used; zero if not analysed.
+
+	fingerprint   uint64 // Pixel/geometry/source hash computed once per capture.
+	fingerprinted bool
 }
+
+// SideGeometry is engine.SideGeometry (docs/区域校准.md 每帧几何): sampled
+// bead centres, name/portrait regions and the default calibration boxes.
+type SideGeometry = engine.SideGeometry
 
 // Provider 每次调用返回最新一帧。由 UI 定时/事件触发调用。
 type Provider func() Frame
@@ -67,12 +75,31 @@ type Provider func() Frame
 // 返回的函数可直接作为 frame.Provider 使用。
 func NewSnapshotter(eng engine.Engine, mode detect.ContentMode) Provider {
 	return func() Frame {
-		return snapshot(eng, mode)
+		return snapshotFingerprinted(eng, mode, nil)
 	}
 }
 
-func snapshot(eng engine.Engine, mode detect.ContentMode) Frame {
-	var f Frame
+// captureRing reuses PrintWindow output images like the MuMu SDK client's
+// ring: a delivered image stays valid while the next capture runs, the
+// contract of the selectable snapshotter's single capture worker (consumers
+// that keep pixels longer copy them). nil allocates every frame.
+type captureRing struct {
+	frames [2]*image.RGBA
+	next   int
+}
+
+func (r *captureRing) slot(width, height int) *image.RGBA {
+	out := r.frames[r.next]
+	if out == nil || out.Rect.Dx() != width || out.Rect.Dy() != height {
+		out = image.NewRGBA(image.Rect(0, 0, width, height))
+		r.frames[r.next] = out
+	}
+	return out
+}
+
+func (r *captureRing) advance() { r.next = (r.next + 1) % len(r.frames) }
+
+func snapshot(eng engine.Engine, mode detect.ContentMode, ring *captureRing) (f Frame) {
 	f.CaptureStarted = time.Now()
 	f.CaptureMethod = "printwindow-fullcontent"
 
@@ -84,7 +111,13 @@ func snapshot(eng engine.Engine, mode detect.ContentMode) Frame {
 		return f
 	}
 	w := pickGameWindow(wins)
-	img, err := win.CaptureClient(w.HWND)
+	var img *image.RGBA
+	var err error
+	if ring != nil {
+		img, err = win.CaptureClientInto(w.HWND, ring.slot)
+	} else {
+		img, err = win.CaptureClient(w.HWND)
+	}
 	if err != nil {
 		f.Hold = true
 		if win.IsBusyFrame(err) {
@@ -99,6 +132,9 @@ func snapshot(eng engine.Engine, mode detect.ContentMode) Frame {
 		f.Hold = true
 		f.Err = fmt.Errorf("抓取模拟器返回空图像")
 		return f
+	}
+	if ring != nil {
+		ring.advance() // the slot is delivered with this frame
 	}
 	f.CapturedAt = time.Now()
 	f.Img = img
@@ -116,6 +152,7 @@ func snapshot(eng engine.Engine, mode detect.ContentMode) Frame {
 		f.Status = fmt.Sprintf("已连接 %s · 空帧，沿用上次", w.Title)
 		return f
 	}
+	defer recoverAnalysis(&f)
 	f.AnalysisStarted = time.Now()
 	res := eng.Analyze(img)
 	f.AnalyzedAt = time.Now()
@@ -165,6 +202,7 @@ func fillFromEngine(f *Frame, w win.Window, img *image.RGBA, res engine.Result) 
 	f.PlayerSide = res.PlayerSide
 	f.PlayerName = res.PlayerName
 	f.OppName = res.OppName
+	f.Geometry = res.Geometry
 	if res.PlayerName != "" || res.OppName != "" {
 		who := strings.TrimSpace(res.PlayerName + " vs " + res.OppName)
 		if res.OppName == "" {

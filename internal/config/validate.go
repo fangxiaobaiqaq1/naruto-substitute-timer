@@ -10,7 +10,7 @@ func Validate(c Config) error {
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("schemaVersion: got %d, want %d", c.SchemaVersion, SchemaVersion)
 	}
-	if c.Capture.Provider != "" && c.Capture.Provider != "auto" && c.Capture.Provider != "mumu-sdk" && c.Capture.Provider != "leidian-adb" && c.Capture.Provider != "printwindow-fullcontent" {
+	if c.Capture.Provider != "" && c.Capture.Provider != "auto" && !captureMethod(c.Capture.Provider) {
 		return fmt.Errorf("capture.provider: unsupported value %q", c.Capture.Provider)
 	}
 	if c.Capture.Leidian.Selection != "" && c.Capture.Leidian.Selection != "auto" && c.Capture.Leidian.Selection != "manual" {
@@ -18,6 +18,9 @@ func Validate(c Config) error {
 	}
 	if c.Capture.Leidian.Index < 0 {
 		return fmt.Errorf("capture.leidian.index: must be nonnegative")
+	}
+	if c.Capture.Leidian.ADBServerPort < 0 || c.Capture.Leidian.ADBServerPort > 65535 {
+		return fmt.Errorf("capture.leidian.adbServerPort: must be in [0,65535]")
 	}
 	if c.Capture.Leidian.Serial != "" && !strings.Contains(c.Capture.Leidian.Serial, ":") {
 		return fmt.Errorf("capture.leidian.serial: expected host:port")
@@ -35,7 +38,7 @@ func Validate(c Config) error {
 		return fmt.Errorf("capture.mumu: instance and displayId must be nonnegative")
 	}
 	for _, method := range c.Capture.PreferredMethods {
-		if method != "mumu-sdk" && method != "leidian-adb" && method != "printwindow-fullcontent" {
+		if !captureMethod(method) {
 			return fmt.Errorf("capture.preferredMethods: unsupported method %q", method)
 		}
 	}
@@ -97,6 +100,22 @@ func Validate(c Config) error {
 				if !unit(point.X) || !unit(point.Y) {
 					return fmt.Errorf("%s.nominalCenters[%d]: coordinates must be in [0,1]", path, i)
 				}
+			}
+		}
+	}
+	if cal := c.Layout.Calibration; cal != nil {
+		if cal.Profile != "camp" && cal.Profile != "duel" {
+			return fmt.Errorf("layout.calibration.profile: must be camp or duel")
+		}
+		for name, r := range map[string]*NormalizedRect{"leftBeads": cal.LeftBeads, "rightBeads": cal.RightBeads, "leftAvatar": cal.LeftAvatar, "rightAvatar": cal.RightAvatar} {
+			if r == nil {
+				continue
+			}
+			if err := validateRect("layout.calibration."+name, *r); err != nil {
+				return err
+			}
+			if err := validateCalibrationLimits(name, *r); err != nil {
+				return err
 			}
 		}
 	}
@@ -165,15 +184,30 @@ func Validate(c Config) error {
 	if c.UI.WindowOpacity < 0.40 || c.UI.WindowOpacity > 1.00 {
 		return fmt.Errorf("ui.windowOpacity: must be in [0.40,1.00]")
 	}
-	if c.UI.FontScale < 0.80 || c.UI.FontScale > 1.60 {
-		return fmt.Errorf("ui.fontScale: must be in [0.80,1.60]")
+	if c.UI.MiniOpacity < 0.20 || c.UI.MiniOpacity > 1.00 {
+		return fmt.Errorf("ui.miniOpacity: must be in [0.20,1.00]")
+	}
+	if c.UI.FontScale < 0.25 || c.UI.FontScale > 3.00 {
+		return fmt.Errorf("ui.fontScale: must be in [0.25,3.00]")
+	}
+	if c.UI.OverlayMode != "full" && c.UI.OverlayMode != "mini" {
+		return fmt.Errorf("ui.overlayMode: must be full or mini")
 	}
 	switch c.UI.PlayerSide {
 	case "ask", "left", "right", "auto":
 	default:
 		return fmt.Errorf("ui.playerSide: must be ask, left, right or auto")
 	}
-	return nil
+	return validateRanges(c)
+}
+
+// captureMethod reports whether method is an accepted capture method name.
+func captureMethod(method string) bool {
+	switch method {
+	case "mumu-sdk", "leidian-adb", "leidian-adb-raw", "leidian-window", "printwindow-fullcontent":
+		return true
+	}
+	return false
 }
 
 func validateScene(s SceneConfig) error {

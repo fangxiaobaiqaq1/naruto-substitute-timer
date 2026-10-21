@@ -9,14 +9,14 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -28,10 +28,16 @@ import (
 	"narutotimer/internal/identity"
 	"narutotimer/internal/ninja"
 	"narutotimer/internal/updates"
-	"narutotimer/internal/win32"
 )
 
 var overlayTitle = "替身 · " + buildinfo.Version
+
+// postUI and refreshUI are the overlay's per-frame Fyne calls. They are package
+// seams so tests can count posted closures and widget refreshes.
+var (
+	postUI    = fyne.Do
+	refreshUI = func(o fyne.CanvasObject) { o.Refresh() }
+)
 
 type session struct {
 	captureCancel        context.CancelFunc
@@ -58,7 +64,14 @@ type session struct {
 	textStatusLabel       *widget.Label
 	cfg                   config.Config
 	cfgPath               string
+	cfgWriter             config.Writer // Orders settings saves made outside s.mu.
 	provider              frame.Provider
+
+	// Region calibration (calibrate.go). The feed copies frames only while
+	// calibrationWin is open; calibrationWin is UI goroutine only.
+	calibrationApply func(*config.RegionCalibration)
+	calibrationFeed  calibrationFeed
+	calibrationWin   *calibrationWindow
 
 	mu                  sync.Mutex
 	beads               []frame.Bead
@@ -72,8 +85,7 @@ type session struct {
 	roundBaseline       [2]bool // Each side leaves opening calibration independently.
 	roundOpeningActive  bool    // Opening marker can briefly disappear behind animation effects.
 	roundOpeningSeenAt  time.Time
-	lastBeadAt          time.Time
-	cadenceEMA          time.Duration
+	cadence             timerapp.ObservationCadence
 	syncLeft            bool
 	syncRight           bool
 	scene               string
@@ -110,14 +122,38 @@ type session struct {
 	lastAlt         string
 	lastAltColor    color.Color
 	lastDual        bool
-	clockRevision   uint64
-	overlayRevision uint64
+	lastLeftBoth    string
+	lastRightBoth   string
+	lastLeftColor   color.Color
+	lastRightColor  color.Color
+	lastMiniDisplay string
+	lastMiniCaption string
+	clockRevision   uint64 // Accessed only through sync/atomic.
+	overlayRevision uint64 // Accessed only through sync/atomic.
+	overlayPosted   overlayPost
+	overlayPostOK   bool // overlayPosted describes the newest posted overlay closure.
+	altDirty        bool // UI goroutine only: altCD changed while hidden.
+	leftBothDirty   bool // UI goroutine only: leftBothCD changed while hidden.
+	rightBothDirty  bool // UI goroutine only: rightBothCD changed while hidden.
+	clockPending    latestCoalescer[clockUpdate]
+	slowCapture     slowCaptureStreak
+	slowCaptureRuns uint64 // Accessed only through sync/atomic.
 
 	overlay            *fyne.Container
 	win                fyne.Window
+	miniWin            fyne.Window
 	settings           fyne.Window
 	settingsSide       *widget.RadioGroup
+	settingsMini       *widget.RadioGroup
+	settingsBoth       *widget.Check
 	cd                 *canvas.Text
+	leftBothCD         *canvas.Text
+	rightBothCD        *canvas.Text
+	leftBothLabel      *canvas.Text
+	rightBothLabel     *canvas.Text
+	accent             *canvas.Rectangle
+	bothSideBox        *fyne.Container
+	singleClockRow     *fyne.Container
 	altCD              *canvas.Text
 	primaryLabel       *canvas.Text
 	alternateBox       *fyne.Container
@@ -127,9 +163,36 @@ type session struct {
 	tag                *canvas.Text
 	info               *canvas.Text
 	updateButton       *widget.Button
+	footer             *fyne.Container
+	miniMode           bool
+	miniLayer          *fyne.Container
+	miniControls       *fyne.Container
+	miniSurface        *miniSurface
+	miniBothButton     *miniButton
+	miniSurfaceHover   bool // UI goroutine only
+	miniButtonHover    bool // UI goroutine only
+	floatingApplied    bool
+	savedStyle         uintptr
+	floatingHook       func(bool) error   // test seam for the native frame/topmost change
+	moveHook           func(dx, dy int32) // test seam for native window drags
+	dragAnchor         *miniDragAnchor    // UI goroutine only
+	detachedDragAnchor *miniDragAnchor    // UI goroutine only
+	hoverSettleHook    func(func())       // test seam for the delayed hover hide check
 	topmost            bool
 	overlayOpacity     func(fyne.Window, float64) error // test seam for native HWND application
 	appearanceError    string
+	miniRoot           *fyne.Container
+	miniPillBox        *fyne.Container
+	miniPill           *canvas.Rectangle
+	miniEdges          *fyne.Container
+	miniStatus         *canvas.Text
+	miniCaption        *canvas.Text
+	miniWindowSurface  *miniSurface
+	miniWindowControls *fyne.Container
+	miniWindowButtons  []*scaledMiniButton
+	miniWindowBoth     *scaledMiniButton
+	miniWindowExpanded bool
+	miniAdaptiveScale  float32
 }
 
 type Option func(*session)
@@ -149,6 +212,13 @@ func WithSupportContext(executable, root string) Option {
 	}
 }
 
+// WithCalibrationApply lets the engine apply the player's region calibration
+// live. It is called on the UI goroutine with a private copy after the
+// calibration window saves (nil after 全部恢复自动 = automatic layout).
+func WithCalibrationApply(apply func(*config.RegionCalibration)) Option {
+	return func(s *session) { s.calibrationApply = apply }
+}
+
 func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	if provider == nil {
 		return fmt.Errorf("provider 不能为 nil")
@@ -157,31 +227,34 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 		return err
 	}
 	identity.SetMineNames(cfg.UI.PlayerNames)
-	a := app.NewWithID("narutotimer.app")
+	a := newFyneApp()
+	if a == nil {
+		return fmt.Errorf("当前平台没有桌面窗口后端")
+	}
 	a.Settings().SetTheme(newChromaTheme())
 	w := a.NewWindow(overlayTitle)
 	w.SetMaster() // Closing the timer also quits hidden settings windows.
-	s := &session{
-		done:        make(chan struct{}),
-		cfg:         cfg,
-		cfgPath:     config.DefaultPath,
-		provider:    provider,
-		supportRoot: cfg.Debug.Directory,
-		remember:    cfg.UI.RememberSide,
-		side:        "",
-		win:         w,
-		topmost:     cfg.UI.AlwaysOnTop,
-	}
+	s := newSession(cfg, provider, w)
 	for _, option := range options {
 		option(s)
 	}
 	w.SetOnClosed(s.stop)
+	// Record the position while the HWND still exists; OnClosed is too late.
+	w.SetCloseIntercept(func() {
+		s.rememberWindowPosition()
+		w.Close()
+	})
 	defer func() { s.stop(); s.diagnosticWriters.Wait() }()
 	if len(cfg.UI.PlayerNames) > 0 {
 		s.myName = cfg.UI.PlayerNames[0]
 	}
 	s.restoreSide()
 	w.SetContent(s.overlayContent())
+	s.setupDetachedMiniWindow(a)
+	addToggleMiniShortcut(w, s)
+	if s.miniWin != nil {
+		addToggleMiniShortcut(s.miniWin, s)
+	}
 	s.installDrawTrace()
 	if cfg.DebugOn() {
 		if err := s.startDiagnostics(false); err != nil {
@@ -192,6 +265,18 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	s.fitOverlayWindow()
 	w.SetFixedSize(true)
 	w.CenterOnScreen()
+	if s.miniMode {
+		w.Hide()
+		s.miniWin.CenterOnScreen()
+		s.miniWin.Show()
+		fyne.Do(func() {
+			if !s.stopped() {
+				s.applyInitialWindowAppearance()
+			}
+		})
+	} else {
+		s.miniWin.Hide()
+	}
 	go s.loop()
 	s.startAutomaticUpdateChecks()
 	go func() {
@@ -209,14 +294,38 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 		w.Show()
 		s.openAbout()
 	}
-	w.ShowAndRun()
+	// ShowAndRun always shows its receiver. A saved mini-mode session must
+	// keep the full overlay hidden while the detached window owns the UI loop.
+	if s.miniMode && !s.initialAbout {
+		a.Run()
+	} else {
+		w.ShowAndRun()
+	}
 	return nil
+}
+
+func newSession(cfg config.Config, provider frame.Provider, w fyne.Window) *session {
+	return &session{
+		done:        make(chan struct{}),
+		cfg:         cfg,
+		cfgPath:     config.DefaultPath,
+		provider:    provider,
+		supportRoot: cfg.Debug.Directory,
+		remember:    cfg.UI.RememberSide,
+		side:        "",
+		win:         w,
+		topmost:     cfg.UI.AlwaysOnTop,
+		miniMode:    cfg.UI.OverlayMode == "mini",
+	}
 }
 
 func (s *session) overlayContent() fyne.CanvasObject {
 	s.mu.Lock()
 	scale := s.cfg.UI.FontScale
+	// New widgets show their defaults, not the last posted overlay values.
+	s.overlayPostOK = false
 	s.mu.Unlock()
+	s.altDirty, s.leftBothDirty, s.rightBothDirty = false, false, false
 	scale = normalizedOverlayScale(scale)
 	s.cd = canvas.NewText("—", clockIdle)
 	s.cd.TextSize = overlayTextSize(44, scale)
@@ -237,10 +346,28 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	s.alternateSeparator.TextSize = overlayTextSize(24, scale)
 	s.alternateBox = container.NewHBox(container.NewCenter(s.alternateSeparator), container.NewVBox(s.alternateLabel, s.altCD))
 	s.alternateBox.Hide()
+	s.leftBothCD = canvas.NewText("—", clockIdle)
+	s.leftBothCD.TextSize, s.leftBothCD.TextStyle = overlayTextSize(36, scale), fyne.TextStyle{Bold: true}
+	s.rightBothCD = canvas.NewText("—", clockIdle)
+	s.rightBothCD.TextSize, s.rightBothCD.TextStyle = overlayTextSize(36, scale), fyne.TextStyle{Bold: true}
+	s.leftBothLabel = canvas.NewText("左", tagIdle)
+	s.rightBothLabel = canvas.NewText("右", tagIdle)
+	s.leftBothLabel.TextSize = overlayTextSize(12, scale)
+	s.rightBothLabel.TextSize = overlayTextSize(12, scale)
+	leftBoth := container.NewVBox(container.NewCenter(s.leftBothLabel), container.NewCenter(s.leftBothCD))
+	rightBoth := container.NewVBox(container.NewCenter(s.rightBothLabel), container.NewCenter(s.rightBothCD))
+	divider := canvas.NewRectangle(panelBorder)
+	divider.SetMinSize(fyne.NewSize(1, 0))
+	s.bothSideBox = container.NewHBox(leftBoth, container.NewPadded(divider), rightBoth)
+	s.bothSideBox.Hide()
 	primaryBox := container.NewVBox(s.primaryLabel, s.cd)
 	s.eventTag = canvas.NewText("第 0 次", tagIdle)
 	s.eventTag.TextSize = overlayTextSize(13, scale)
 	s.eventTag.TextStyle = fyne.TextStyle{Bold: true}
+	// The event count is a small chip beside the clock, not loose text.
+	chip := canvas.NewRectangle(panelBtn)
+	chip.CornerRadius = 9
+	eventChip := container.NewStack(chip, container.New(layout.NewCustomPaddedLayout(2, 2, 8, 8), s.eventTag))
 	s.tag = canvas.NewText("对面·待认边", tagIdle)
 	s.tag.TextSize = overlayTextSize(13, scale)
 	s.tag.Alignment = fyne.TextAlignCenter
@@ -248,6 +375,7 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	s.info.TextSize = overlayTextSize(11, scale)
 	s.info.Alignment = fyne.TextAlignCenter
 
+	// Text-only: four icon buttons would not fit the 280 px compact width.
 	set := widget.NewButton("设置", s.openSettings)
 	swap := widget.NewButton("换边", s.swapSide)
 	diag := widget.NewButton("诊断", s.openDiagnostics)
@@ -255,25 +383,102 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	s.updateButton = widget.NewButtonWithIcon("发现新版本", theme.DownloadIcon(), s.openAbout)
 	s.updateButton.Importance = widget.HighImportance
 	s.updateButton.Hide()
-	about.Importance = widget.LowImportance
-	set.Importance = widget.LowImportance
-	swap.Importance = widget.LowImportance
-	diag.Importance = widget.LowImportance
 	glass := canvas.NewRectangle(glassBG)
-	footer := container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about))
-	body := container.NewBorder(nil, footer, nil, nil,
+	// State stripe: cyan while the opponent's substitute cools down, amber in
+	// the last three seconds, neutral otherwise (same as the Android card).
+	s.accent = canvas.NewRectangle(panelBorder)
+	s.accent.SetMinSize(fyne.NewSize(3, 0))
+	s.footer = container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about))
+	s.singleClockRow = container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(eventChip))
+	body := container.NewBorder(nil, container.NewPadded(s.footer), s.accent, nil,
 		container.NewVBox(
 			container.NewCenter(s.tag),
-			container.NewCenter(container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(s.eventTag))),
+			container.NewCenter(s.singleClockRow),
+			container.NewCenter(s.bothSideBox),
 			container.NewCenter(s.info),
 		),
 	)
-	s.overlay = container.NewStack(glass, body)
+	s.overlay = container.NewStack(glass, body, s.buildMiniControls())
+	s.applyMiniVisibility()
+	s.applyBothSideVisibility()
 	return s.overlay
 }
 
+func (s *session) applyBothSideVisibility() {
+	if s.bothSideBox == nil {
+		return
+	}
+	s.mu.Lock()
+	both := s.cfg.UI.ShowBothSides
+	s.mu.Unlock()
+	if both {
+		s.bothSideBox.Show()
+		if s.singleClockRow != nil {
+			s.singleClockRow.Hide()
+		}
+	} else {
+		s.bothSideBox.Hide()
+		if s.singleClockRow != nil {
+			s.singleClockRow.Show()
+		}
+	}
+	s.bothSideBox.Refresh()
+	if s.singleClockRow != nil {
+		s.singleClockRow.Refresh()
+	}
+}
+
+func (s *session) applyMiniVisibility() {
+	mini := s.isMini()
+	if s.miniLayer != nil {
+		if mini {
+			s.miniLayer.Show()
+		} else {
+			s.miniLayer.Hide()
+		}
+	}
+	s.syncMiniControls()
+	if mini {
+		if s.tag != nil {
+			s.tag.Hide()
+		}
+		if s.info != nil {
+			s.info.Hide()
+		}
+		if s.eventTag != nil {
+			s.eventTag.Hide()
+		}
+		if s.footer != nil {
+			s.footer.Hide()
+		}
+	} else {
+		if s.tag != nil {
+			s.tag.Show()
+		}
+		if s.info != nil {
+			s.info.Show()
+		}
+		if s.eventTag != nil {
+			s.eventTag.Show()
+		}
+		if s.footer != nil {
+			s.footer.Show()
+		}
+	}
+	if s.overlay != nil {
+		s.overlay.Refresh()
+	}
+	if s.win != nil {
+		s.fitOverlayWindow()
+	}
+}
+
+func (s *session) toggleMini() {
+	showSettingsError(s.setMiniMode(!s.isMini()), s.dialogWindow())
+}
+
 // The current policy is user-confirmed: all primary clocks are 15 seconds.
-// Only 照美冥[五代目水影] additionally displays a simultaneous 10-second estimate.
+// Only 照美冥[五代目水影] and 半藏[秽土转生] also display a simultaneous 10-second estimate.
 func (s *session) cooldown() time.Duration { return ninja.DefaultCooldown }
 
 func (s *session) opponentNinja() string {
@@ -324,12 +529,62 @@ func (s *session) loop() {
 		}
 		started := time.Now()
 		s.captureOnce()
+		interval, elapsed := s.poll(), time.Since(started)
+		if s.slowCapture.Observe(elapsed, interval) {
+			runs := atomic.AddUint64(&s.slowCaptureRuns, 1)
+			s.mu.Lock()
+			s.debugf("capture slow: %d consecutive frames over poll interval %s (last %s, streaks=%d)",
+				slowCaptureFrames, interval, elapsed.Round(time.Millisecond), runs)
+			s.mu.Unlock()
+		}
 		// 采集和检测已经占用了本轮预算；处理超时则从下一轮重新计时，
 		// 不积压旧帧，也不在每轮处理结束后再额外等一个完整间隔。
-		if !s.wait(nextCaptureWait(s.poll(), time.Since(started))) {
+		if !s.wait(nextCaptureWait(interval, elapsed)) {
 			return
 		}
 	}
+}
+
+// slowCaptureFrames is how many consecutive over-budget captures are reported
+// as one diagnostic streak.
+const slowCaptureFrames = 10
+
+// slowCaptureStreak counts consecutive captures whose elapsed time exceeds the
+// poll interval. It is used only by the capture loop goroutine.
+type slowCaptureStreak struct {
+	run int
+}
+
+// Observe reports true each time the current streak reaches another multiple of
+// slowCaptureFrames. Any capture within budget ends the streak.
+func (c *slowCaptureStreak) Observe(elapsed, interval time.Duration) bool {
+	if elapsed <= interval {
+		c.run = 0
+		return false
+	}
+	c.run++
+	return c.run%slowCaptureFrames == 0
+}
+
+// latestCoalescer keeps only the newest value and lets at most one consumer be
+// scheduled at a time. Offer returns true when the caller must schedule a
+// consumer; the consumer calls Take, which may return nil if a previous
+// consumer already took the newest value.
+type latestCoalescer[T any] struct {
+	pending atomic.Bool
+	latest  atomic.Pointer[T]
+}
+
+func (c *latestCoalescer[T]) Offer(v *T) bool {
+	c.latest.Store(v)
+	return c.pending.CompareAndSwap(false, true)
+}
+
+func (c *latestCoalescer[T]) Take() *T {
+	// Clear pending before taking, so an Offer racing with this consumer either
+	// is seen here or schedules a new consumer.
+	c.pending.Store(false)
+	return c.latest.Swap(nil)
 }
 
 func (s *session) stop() {
@@ -351,6 +606,9 @@ func (s *session) stop() {
 		}
 		if updateService != nil {
 			updateService.Close()
+		}
+		if s.miniWin != nil {
+			s.miniWin.Hide()
 		}
 	})
 }
@@ -401,11 +659,21 @@ func (s *session) nextTenthWait() time.Duration {
 	s.mu.Lock()
 	now := time.Now()
 	secs := s.oppRemaining(now)
+	if s.cfg.UI.ShowBothSides {
+		secs = append(secs, s.left.LatestRemaining(now)...)
+		secs = append(secs, s.right.LatestRemaining(now)...)
+	}
 	s.mu.Unlock()
 	if len(secs) == 0 {
 		return 200 * time.Millisecond
 	}
-	return timerapp.NextTenthDelay(secs[0])
+	minimum := secs[0]
+	for _, value := range secs[1:] {
+		if value < minimum {
+			minimum = value
+		}
+	}
+	return timerapp.NextTenthDelay(minimum)
 }
 
 func (s *session) oppRemaining(now time.Time) []float64 {
@@ -462,7 +730,11 @@ func (s *session) captureOnce() {
 	}()
 
 	recorder := s.currentDiagnostics()
+	// Read before the capture: its analysis uses this calibration or a newer one.
+	calibrationGen := s.calibrationFeed.gen.Load()
 	f := s.provider()
+	// One atomic load unless the calibration window is open.
+	s.offerCalibrationFrame(f, calibrationGen)
 	trace := traceRef{recorder: recorder}
 	if recorder != nil {
 		trace.id = recorder.Observe(f, time.Now())
@@ -477,6 +749,11 @@ func (s *session) captureOnce() {
 		return
 	}
 	s.traceFrame = trace
+	// Every delivered frame is a cadence sample, holds and duplicates included;
+	// the bound for this frame comes from the cadence before it.
+	gap := s.cadence.Next(f.CapturedAt, time.Duration(s.cfg.UI.PollIntervalMS)*time.Millisecond)
+	s.left.SetObservationGap(gap)
+	s.right.SetObservationGap(gap)
 	width, height := 0, 0
 	if f.Img != nil {
 		width, height = f.Img.Bounds().Dx(), f.Img.Bounds().Dy()
@@ -559,19 +836,24 @@ func (s *session) captureOnce() {
 		_, rightBefore := s.right.LastEvent()
 		s.observeBeads(f)
 		s.traceConfirmed(trace, leftBefore, rightBefore, time.Now())
-		lc, rc := countReady(f.Beads)
-		s.debugf("fight=%v scene=%s hold=%v beads L=%d R=%d side=%s leftCD=%s rightCD=%s",
-			f.Fighting, f.Scene, f.Hold, lc, rc, s.side,
-			timerapp.FormatCD(s.left.Remaining(f.CapturedAt)),
-			timerapp.FormatCD(s.right.Remaining(f.CapturedAt)))
+		// Formatting the debug line costs allocations on every fighting
+		// frame; build it only when debug output is on.
+		if s.cfg.DebugOn() {
+			lc, rc := countReady(f.Beads)
+			s.debugf("fight=%v scene=%s hold=%v beads L=%d R=%d side=%s leftCD=%s rightCD=%s",
+				f.Fighting, f.Scene, f.Hold, lc, rc, s.side,
+				timerapp.FormatCD(s.left.Remaining(f.CapturedAt)),
+				timerapp.FormatCD(s.right.Remaining(f.CapturedAt)))
+		}
 	}
 	dump := s.dumpNext
 	s.dumpNext = false
+	debugCfg := s.cfg.Debug
 	beads := append([]frame.Bead(nil), s.beads...)
 	s.mu.Unlock()
 
 	if dump && f.Img != nil {
-		path, err := timerapp.SaveBeadDump(f.Img, beads)
+		path, err := timerapp.SaveBeadDump(debugCfg, f.Img, beads)
 		s.mu.Lock()
 		if err != nil {
 			s.status = "保存截图失败: " + err.Error()
@@ -650,44 +932,25 @@ func (s *session) observeRoundOpening(f frame.Frame) {
 	s.armRoundBaseline()
 }
 
+// observeBeads feeds one usable fight frame to the clocks. captureOnce has
+// already set their observation gap from the capture cadence.
 func (s *session) observeBeads(f frame.Frame) {
-	// The same pixels may be polled repeatedly, especially at reduced source FPS.
-	if f.Duplicate {
-		return
-	}
-	// The observation gap guards against bridging unrelated states across a
-	// capture blackout. It must therefore scale with the REAL frame cadence:
-	// engine work (recognition scans) can push inter-frame intervals far past
-	// the poll interval, and a fixed floor would then treat every frame as a
-	// discontinuity, resetting the baseline so a real bead drop can never
-	// gather its confirmation frames. Track an EMA of actual intervals.
-	interval := time.Duration(0)
-	if !s.lastBeadAt.IsZero() && f.CapturedAt.After(s.lastBeadAt) {
-		interval = f.CapturedAt.Sub(s.lastBeadAt)
-	}
-	if s.cadenceEMA <= 0 {
-		s.cadenceEMA = interval
-	} else if interval > 0 {
-		s.cadenceEMA = s.cadenceEMA*3/4 + interval/4
-	}
-	s.lastBeadAt = f.CapturedAt
-	gap := time.Duration(s.cfg.UI.PollIntervalMS*3) * time.Millisecond
-	if adaptive := s.cadenceEMA * 3; adaptive > gap {
-		gap = adaptive
-	}
-	if gap < 150*time.Millisecond {
-		gap = 150 * time.Millisecond
-	}
-	if gap > 8*time.Second {
-		gap = 8 * time.Second
-	}
-	s.left.SetObservationGap(gap)
-	s.right.SetObservationGap(gap)
 	lc, rc := countReady(f.Beads)
 	cd := s.cooldown()
 	need := s.cfg.Tracking.MinimumConfirmFrames
 	leftObserved := sideObservable(f.Beads, true) && len(sideBeads(f.Beads, true)) == s.expectedSlots(true)
 	rightObserved := sideObservable(f.Beads, false) && len(sideBeads(f.Beads, false)) == s.expectedSlots(false)
+	if f.Duplicate {
+		// These are newly captured identical pixels, not a timer heartbeat.
+		// Keep continuity without giving pending drops another vote.
+		if !leftObserved || !s.left.HoldObservation(lc, f.CapturedAt) {
+			s.left.InvalidateObservation(f.CapturedAt)
+		}
+		if !rightObserved || !s.right.HoldObservation(rc, f.CapturedAt) {
+			s.right.InvalidateObservation(f.CapturedAt)
+		}
+		return
+	}
 
 	// A round-opening fade can make an empty slot briefly look available. While
 	// the verified 60-second opening marker remains visible, beans are baseline
@@ -927,6 +1190,23 @@ func (s *session) refreshClock() {
 	s.refreshClockAt(time.Now())
 }
 
+// clockUpdate is one prepared clock refresh. Only the newest pending update is
+// applied on the Fyne thread.
+type clockUpdate struct {
+	revision              uint64
+	trace                 traceRef
+	leftEvent, rightEvent uint64
+	txt, eventText        string
+	col                   color.NRGBA
+	dual                  bool
+	altText               string
+	altColor              color.NRGBA
+	leftText, rightText   string
+	leftColor, rightColor color.NRGBA
+	miniText, miniCaption string
+	scale                 float64
+}
+
 func (s *session) refreshClockAt(now time.Time) {
 	if s.stopped() || s.cd == nil {
 		return
@@ -937,9 +1217,20 @@ func (s *session) refreshClockAt(now time.Time) {
 	txt := timerapp.FormatCD(secs)
 	col := clockColor(secs)
 	dual, altText, altColor := s.dualClockText(now)
-	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor
+	leftSecs := s.left.LatestRemaining(now)
+	rightSecs := s.right.LatestRemaining(now)
+	leftText, leftColor := timerapp.FormatCD(leftSecs), clockColor(leftSecs)
+	rightText, rightColor := timerapp.FormatCD(rightSecs), clockColor(rightSecs)
+	miniText, miniCaption := s.miniTextLocked(txt, altText, leftText, rightText, dual), s.miniSideTextLocked()
+	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor && s.lastLeftBoth == leftText && s.lastRightBoth == rightText && s.lastLeftColor == leftColor && s.lastRightColor == rightColor && s.lastMiniDisplay == miniText && s.lastMiniCaption == miniCaption
 	trace := s.traceFrame
+	if same && (trace.id == 0 || trace == s.traceClock) {
+		// The applied trace already recorded this exact UI state (first write wins).
+		s.mu.Unlock()
+		return
+	}
 	leftEvent, rightEvent := s.visibleEventSerials()
+	var replay diagnostics.ReplayUIState
 	if trace.recorder != nil && trace.id != 0 {
 		opponentSide := ""
 		opponentNinja := ""
@@ -949,80 +1240,162 @@ func (s *session) refreshClockAt(now time.Time) {
 		case "right":
 			opponentSide, opponentNinja = "left", s.leftNinja
 		}
-		trace.recorder.RecordReplayUIState(diagnostics.ReplayUIState{FrameID: trace.id,
+		replay = diagnostics.ReplayUIState{FrameID: trace.id,
 			PlayerSide: s.side, OpponentSide: opponentSide, OpponentNinja: opponentNinja,
 			PrimaryText: txt, AlternateText: altText, EventText: eventText,
-			LeftEventCount: s.left.EventCount(), RightEventCount: s.right.EventCount(), PreparedAt: time.Now()})
-	}
-	if same && (trace.id == 0 || trace == s.traceClock) {
-		s.mu.Unlock()
-		return
+			LeftEventCount: s.left.EventCount(), RightEventCount: s.right.EventCount()}
 	}
 	s.lastCD, s.lastEventText, s.lastClockColor = txt, eventText, col
 	s.lastDual, s.lastAlt, s.lastAltColor = dual, altText, altColor
-	s.clockRevision++
-	revision := s.clockRevision
+	s.lastLeftBoth, s.lastRightBoth = leftText, rightText
+	s.lastLeftColor, s.lastRightColor = leftColor, rightColor
+	s.lastMiniDisplay, s.lastMiniCaption = miniText, miniCaption
+	update := &clockUpdate{revision: atomic.AddUint64(&s.clockRevision, 1), trace: trace,
+		leftEvent: leftEvent, rightEvent: rightEvent, txt: txt, eventText: eventText, col: col,
+		dual: dual, altText: altText, altColor: altColor,
+		leftText: leftText, rightText: rightText, leftColor: leftColor, rightColor: rightColor,
+		miniText: miniText, miniCaption: miniCaption,
+		scale: s.cfg.UI.FontScale}
+	// Offer under s.mu so the coalescer always holds the highest revision;
+	// Offer is only atomic stores.
+	schedule := s.clockPending.Offer(update)
 	s.mu.Unlock()
+	if replay.FrameID != 0 {
+		// The recorder has its own locks; keep it off the session lock.
+		replay.PreparedAt = time.Now()
+		trace.recorder.RecordReplayUIState(replay)
+	}
 	trace.mark("queued", time.Now())
-	fyne.Do(func() {
-		if s.stopped() {
-			return
+	if schedule {
+		postUI(s.applyPendingClock)
+	}
+}
+
+// applyPendingClock runs on the Fyne thread and applies only the newest
+// prepared clock update.
+func (s *session) applyPendingClock() {
+	u := s.clockPending.Take()
+	if u == nil || s.stopped() {
+		return
+	}
+	if atomic.LoadUint64(&s.clockRevision) != u.revision {
+		return
+	}
+	trace := u.trace
+	// Both-side labels track the clocks even while hidden, so turning the
+	// option on never shows a stale value until the next change. Showing the
+	// box refreshes its children; a change made while hidden is also redrawn
+	// on the first update after it becomes visible.
+	if s.bothSideBox != nil {
+		visible := s.bothSideBox.Visible()
+		s.leftBothDirty = applyClockText(s.leftBothCD, u.leftText, u.leftColor, visible, s.leftBothDirty)
+		s.rightBothDirty = applyClockText(s.rightBothCD, u.rightText, u.rightColor, visible, s.rightBothDirty)
+	}
+	clockSize := s.cd.MinSize()
+	layoutChanged := false
+	if s.alternateBox != nil {
+		layoutChanged = s.alternateBox.Visible() != u.dual || s.altCD.Text != u.altText
+		if u.dual {
+			s.primaryLabel.Show()
+			s.alternateBox.Show()
+			s.cd.TextSize = overlayTextSize(32, u.scale)
+		} else {
+			s.primaryLabel.Hide()
+			s.alternateBox.Hide()
+			s.cd.TextSize = overlayTextSize(44, u.scale)
 		}
-		s.mu.Lock()
-		current := s.clockRevision == revision
-		s.mu.Unlock()
-		if !current {
-			return
+		s.altDirty = applyClockText(s.altCD, u.altText, u.altColor, u.dual, s.altDirty)
+	}
+	var badgeSize fyne.Size
+	if s.eventTag != nil {
+		badgeSize = s.eventTag.MinSize()
+	}
+	if s.cd.Text != u.txt || s.cd.Color != u.col {
+		s.cd.Text = u.txt
+		s.cd.Color = u.col
+		refreshUI(s.cd)
+	}
+	if s.accent != nil {
+		both := s.bothSideBox != nil && s.bothSideBox.Visible()
+		if accent := stripeColor(u, both); s.accent.FillColor != accent {
+			s.accent.FillColor = accent
+			refreshUI(s.accent)
 		}
-		clockSize := s.cd.MinSize()
-		layoutChanged := false
-		if s.alternateBox != nil {
-			layoutChanged = s.alternateBox.Visible() != dual || s.altCD.Text != altText
-			s.mu.Lock()
-			scale := s.cfg.UI.FontScale
-			s.mu.Unlock()
-			if dual {
-				s.primaryLabel.Show()
-				s.alternateBox.Show()
-				s.cd.TextSize = overlayTextSize(32, scale)
-			} else {
-				s.primaryLabel.Hide()
-				s.alternateBox.Hide()
-				s.cd.TextSize = overlayTextSize(44, scale)
-			}
-			s.altCD.Text, s.altCD.Color = altText, altColor
-			s.altCD.Refresh()
+	}
+	if s.eventTag != nil && s.eventTag.Text != u.eventText {
+		s.eventTag.Text = u.eventText
+		refreshUI(s.eventTag)
+	}
+	if s.miniWin != nil {
+		s.applyDetachedMiniClockText(u.miniCaption, u.miniText, u.col)
+	}
+	// canvas.Text.Refresh repaints but does not reflow the neighboring badge.
+	// Going from "—" to a multi-digit clock must also recompute its row layout.
+	if s.overlay != nil && (layoutChanged || s.cd.MinSize() != clockSize || (s.eventTag != nil && s.eventTag.MinSize() != badgeSize)) {
+		refreshUI(s.overlay)
+		s.fitOverlayWindow()
+	}
+	if trace.recorder != nil && trace.id != 0 {
+		trace.recorder.CarryEvents(trace.id, u.leftEvent, u.rightEvent)
+	}
+	s.traceApplied(trace, false)
+}
+
+// stripeColor is the state stripe beside the clock: the running countdown's
+// colour (cyan, or amber in the last 3 s), otherwise the neutral border.
+func stripeColor(u *clockUpdate, both bool) color.NRGBA {
+	if both {
+		if u.leftColor == clockWarn || u.rightColor == clockWarn {
+			return clockWarn
 		}
-		var badgeSize fyne.Size
-		if s.eventTag != nil {
-			badgeSize = s.eventTag.MinSize()
+		if u.leftColor == clockLive || u.rightColor == clockLive {
+			return clockLive
 		}
-		if s.cd.Text != txt || s.cd.Color != col {
-			s.cd.Text = txt
-			s.cd.Color = col
-			s.cd.Refresh()
-		}
-		if s.eventTag != nil && s.eventTag.Text != eventText {
-			s.eventTag.Text = eventText
-			s.eventTag.Refresh()
-		}
-		// canvas.Text.Refresh repaints but does not reflow the neighboring badge.
-		// Going from "—" to a multi-digit clock must also recompute its row layout.
-		if s.overlay != nil && (layoutChanged || s.cd.MinSize() != clockSize || (s.eventTag != nil && s.eventTag.MinSize() != badgeSize)) {
-			s.overlay.Refresh()
-			s.fitOverlayWindow()
-		}
-		if trace.recorder != nil && trace.id != 0 {
-			trace.recorder.CarryEvents(trace.id, leftEvent, rightEvent)
-		}
-		s.traceApplied(trace, false)
-	})
+		return panelBorder
+	}
+	if u.col == clockIdle {
+		return panelBorder
+	}
+	return u.col
+}
+
+// applyClockText stores a clock label's text and colour and refreshes it only
+// when it is visible and differs from what it last drew. It returns whether a
+// change is still waiting to be drawn because the label is hidden.
+func applyClockText(t *canvas.Text, text string, col color.NRGBA, visible, dirty bool) bool {
+	if t.Text != text || t.Color != col {
+		t.Text, t.Color = text, col
+		dirty = true
+	}
+	if dirty && visible {
+		refreshUI(t)
+		return false
+	}
+	return dirty
+}
+
+// overlayPost is everything a posted overlay closure applies or that the open
+// diagnostics label reads. An identical post would only repeat the same work.
+type overlayPost struct {
+	label, info, textStatus string
+	col                     color.NRGBA
+	trace                   traceRef
+	status, textError       string
+	rawTextStatus           string
+	diagnosticError         string
+	captureLost             bool
 }
 
 func (s *session) refreshOverlay() {
 	if s.stopped() || s.tag == nil {
 		return
 	}
+	// A recorder's live counters and finalization only reach the diagnostics
+	// label through this closure, so keep posting every frame while one exists.
+	s.diagnosticMu.Lock()
+	diagnosing := s.diagnosticLast != nil
+	diagnosticError := s.diagnosticError
+	s.diagnosticMu.Unlock()
 	s.mu.Lock()
 	side := s.side
 	trainingNeedsSide := s.scene == "fight" && s.layoutProfile == "camp" && !manualSide(side)
@@ -1039,11 +1412,7 @@ func (s *session) refreshOverlay() {
 	}
 	info := s.statusLine()
 	textStatus := s.textStatusText()
-	s.overlayRevision++
-	revision := s.overlayRevision
 	trace := s.traceFrame
-	s.mu.Unlock()
-	trace.mark("queued", time.Now())
 	label := "对面·待认边"
 	if trainingNeedsSide {
 		label = "训练场·请选我方边"
@@ -1069,14 +1438,26 @@ func (s *session) refreshOverlay() {
 			label += " · 忍者未确认"
 		}
 	}
-	fyne.Do(func() {
+	post := overlayPost{label: label, info: info, textStatus: textStatus, col: col, trace: trace,
+		status: s.status, textError: s.textError, rawTextStatus: s.textStatus,
+		diagnosticError: diagnosticError, captureLost: s.captureLost}
+	// The newest posted closure always applies (its revision is the latest),
+	// so a frame equal to it, including its trace, would repeat that work.
+	if !diagnosing && s.overlayPostOK && post == s.overlayPosted {
+		s.mu.Unlock()
+		trace.mark("queued", time.Now())
+		s.refreshClock()
+		return
+	}
+	s.overlayPosted, s.overlayPostOK = post, true
+	revision := atomic.AddUint64(&s.overlayRevision, 1)
+	s.mu.Unlock()
+	trace.mark("queued", time.Now())
+	postUI(func() {
 		if s.stopped() {
 			return
 		}
-		s.mu.Lock()
-		current := s.overlayRevision == revision
-		s.mu.Unlock()
-		if !current {
+		if atomic.LoadUint64(&s.overlayRevision) != revision {
 			return
 		}
 		layoutChanged := s.tag.Text != label || (s.info != nil && s.info.Text != info)
@@ -1086,14 +1467,14 @@ func (s *session) refreshOverlay() {
 		if s.tag.Text != label || s.tag.Color != col {
 			s.tag.Text = label
 			s.tag.Color = col
-			s.tag.Refresh()
+			refreshUI(s.tag)
 		}
 		if s.info != nil && s.info.Text != info {
 			s.info.Text = info
-			s.info.Refresh()
+			refreshUI(s.info)
 		}
 		if layoutChanged && s.overlay != nil {
-			s.overlay.Refresh()
+			refreshUI(s.overlay)
 			s.fitOverlayWindow()
 		}
 		s.traceApplied(trace, true)
@@ -1246,25 +1627,6 @@ func splitNames(s string) []string {
 	return out
 }
 
-func applyTopmost(title string, on bool) {
-	ptr, err := syscall.UTF16PtrFromString(title)
-	if err != nil {
-		return
-	}
-	user32 := syscall.NewLazyDLL("user32.dll")
-	find := user32.NewProc("FindWindowW")
-	hwnd, _, _ := find.Call(0, uintptr(unsafe.Pointer(ptr)))
-	if hwnd == 0 {
-		return
-	}
-	h := win32.HWNDNoTopMost
-	if on {
-		h = win32.HWNDTopMost
-	}
-	win32.ProcSetWindowPos.Call(hwnd, h, 0, 0, 0, 0,
-		uintptr(win32.SWPNoMove|win32.SWPNoSize|win32.SWPNoActivate))
-}
-
 func (s *session) updateFeeds() *updates.FeedService {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1286,13 +1648,19 @@ func (s *session) setUpdateSource(source updates.Source) error {
 	oldService, oldCancel := s.updateService, s.updateCancel
 	s.cfg.UI.UpdateSource, s.updateService, s.updateCancel = string(source), nil, nil
 	s.updateFeed, s.updateNotice = updates.Feed{}, ""
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if oldCancel != nil {
 		oldCancel()
 	}
 	if oldService != nil {
 		oldService.Close()
+	}
+	// The old source's "发现新版本" notice no longer applies.
+	if s.updateButton != nil {
+		s.updateButton.Hide()
+		s.fitOverlayWindow()
 	}
 	if err == nil {
 		s.startAutomaticUpdateChecks()
@@ -1375,10 +1743,23 @@ func (s *session) handleAutomaticUpdateResult(result updates.MonitorResult) {
 	})
 }
 
+// addToggleMiniShortcut binds Ctrl+M on one window; the settings promise it
+// works from every timer window, including the settings window.
+func addToggleMiniShortcut(w fyne.Window, s *session) {
+	w.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyM, Modifier: fyne.KeyModifierControl},
+		func(fyne.Shortcut) { s.toggleMini() })
+}
+
 func (s *session) applyInitialWindowAppearance() {
 	s.mu.Lock()
-	opacity, top := s.cfg.UI.WindowOpacity, s.topmost
+	opacity, top, mini := s.effectiveOpacityLocked(), s.topmost, s.miniMode
 	s.mu.Unlock()
+	if mini {
+		s.restoreMiniPosition()
+		s.applyMiniWindowState()
+		return
+	}
+	s.restoreWindowPosition()
 	if opacity < 1 {
 		if err := s.nativeOverlayOpacity(opacity); err != nil {
 			s.mu.Lock()
@@ -1388,7 +1769,7 @@ func (s *session) applyInitialWindowAppearance() {
 		}
 	}
 	if top {
-		applyTopmost(overlayTitle, true)
+		s.applyFullTopmost()
 	}
 }
 

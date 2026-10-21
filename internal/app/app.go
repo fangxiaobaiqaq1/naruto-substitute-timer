@@ -324,7 +324,7 @@ func (a *app) consumePending() {
 	a.mu.Unlock()
 
 	if needDump {
-		path, err := SaveBeadDump(pending.Img, pending.Beads)
+		path, err := SaveBeadDump(a.cfg.Debug, pending.Img, pending.Beads)
 		a.mu.Lock()
 		if err != nil {
 			a.statusStr = "保存截图失败: " + err.Error()

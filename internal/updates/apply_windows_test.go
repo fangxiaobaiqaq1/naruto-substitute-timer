@@ -11,6 +11,9 @@ import (
 )
 
 func TestApplyReplacesOnlyExeAndRetainsRecoverableOldVersion(t *testing.T) {
+	if elevatedSplitToken() {
+		t.Skip("the updater refuses to run elevated; run the tests from an unelevated shell")
+	}
 	cache := t.TempDir()
 	t.Setenv("LOCALAPPDATA", cache)
 	dir := t.TempDir()
@@ -25,7 +28,7 @@ func TestApplyReplacesOnlyExeAndRetainsRecoverableOldVersion(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "config.json"), config, 0600)
 	hash := sha256.Sum256(next)
 	p := Plan{Parent: 0xfffffffc, Target: target, Incoming: incoming, Hash: hex.EncodeToString(hash[:]), Size: int64(len(next)), Version: "v0.2.0"}
-	if e := apply(p, false); e != nil {
+	if e := apply(p, "", false); e != nil {
 		t.Fatal(e)
 	}
 	got, _ := os.ReadFile(target)
@@ -41,7 +44,7 @@ func TestApplyReplacesOnlyExeAndRetainsRecoverableOldVersion(t *testing.T) {
 		t.Fatal("settings changed")
 	}
 	os.WriteFile(incoming, []byte("tampered"), 0700)
-	if e := apply(p, false); e == nil {
+	if e := apply(p, "", false); e == nil {
 		t.Fatal("tampered update installed")
 	}
 	got, _ = os.ReadFile(target)

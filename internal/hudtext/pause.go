@@ -21,7 +21,7 @@ func (e *Engine) pauseText(img *image.RGBA, res engine.Result, at time.Time) boo
 	if !e.pausedAt.IsZero() && at.Sub(e.pausedAt) > textPauseTTL {
 		return false
 	}
-	regions, ok := nameRegions(img, e.cfg.Layout, res.LayoutProfile)
+	regions, ok := e.nameRegions(img, res.LayoutProfile)
 	if !ok || e.key != (frameKey{bounds: img.Bounds(), regions: regions, profile: res.LayoutProfile}) {
 		return false
 	}

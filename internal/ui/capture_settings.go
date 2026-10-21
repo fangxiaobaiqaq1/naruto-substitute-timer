@@ -553,6 +553,8 @@ func (s *session) captureControls(w fyne.Window) fyne.CanvasObject {
 		} else {
 			status.SetText("正在扫描 MuMu 安装目录、实例号和窗口进程…")
 		}
+		// Entry text is UI state: read it here, never from the scan goroutine.
+		ldPath, muPath := strings.TrimSpace(ldRoot.Text), strings.TrimSpace(mumuRoot.Text)
 		go func() {
 			ctx, cancel := context.WithTimeout(base, 15*time.Second)
 			defer cancel()
@@ -560,9 +562,9 @@ func (s *session) captureControls(w fyne.Window) fyne.CanvasObject {
 			var ldFound []leidian.Instance
 			var err error
 			if isLD {
-				ldFound, err = leidian.ListInstances(ctx, strings.TrimSpace(ldRoot.Text))
+				ldFound, err = leidian.ListInstances(ctx, ldPath)
 			} else {
-				muFound, err = mumu.ListProcessChoices(ctx, strings.TrimSpace(mumuRoot.Text))
+				muFound, err = mumu.ListProcessChoices(ctx, muPath)
 			}
 			fyne.Do(func() {
 				if base.Err() != nil || s.stopped() || !captureDiscoveryCanApply(w, s.settings, now, generation, scannedProvider, captureProviderFromLabel(provider.Selected)) {
@@ -578,7 +580,7 @@ func (s *session) captureControls(w fyne.Window) fyne.CanvasObject {
 					choices.Refresh()
 					ldSelected = 0
 					for index, item := range ldItems {
-						if (current.Leidian.Selection == "manual" || (current.Leidian.Selection == "" && current.Leidian.InstallDir != "")) && item.Index == current.Leidian.Index && strings.EqualFold(item.Root, current.Leidian.InstallDir) {
+						if (draft.Leidian.Selection == "manual" || (draft.Leidian.Selection == "" && draft.Leidian.InstallDir != "")) && item.Index == draft.Leidian.Index && strings.EqualFold(item.Root, draft.Leidian.InstallDir) {
 							ldSelected = index + 1
 							break
 						}
@@ -601,7 +603,7 @@ func (s *session) captureControls(w fyne.Window) fyne.CanvasObject {
 					choices.Refresh()
 					selected = 0
 					for index, item := range muItems {
-						if (current.MuMu.Selection == "manual" || (current.MuMu.Selection == "" && current.MuMu.InstallDir != "")) && item.Index == current.MuMu.Instance && strings.EqualFold(item.Root, current.MuMu.InstallDir) {
+						if (draft.MuMu.Selection == "manual" || (draft.MuMu.Selection == "" && draft.MuMu.InstallDir != "")) && item.Index == draft.MuMu.Instance && strings.EqualFold(item.Root, draft.MuMu.InstallDir) {
 							selected = index + 1
 							break
 						}

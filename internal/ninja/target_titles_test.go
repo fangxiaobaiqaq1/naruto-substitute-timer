@@ -26,7 +26,7 @@ func TestReviewedTargetTitlesRecognizeWithoutGameplayInference(t *testing.T) {
 		{"hashirama_edo.png", "hashirama_edo.source.png", HashiramaEdo},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			data, err := templates.ReadFile("templates/" + tc.file)
+			data, err := diskTemplates.ReadFile("templates/" + tc.file)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -34,7 +34,7 @@ func TestReviewedTargetTitlesRecognizeWithoutGameplayInference(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			sourceData, err := templates.ReadFile("templates/" + tc.source)
+			sourceData, err := diskTemplates.ReadFile("templates/" + tc.source)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -80,23 +80,36 @@ func TestReviewedTargetTitlesRecognizeWithoutGameplayInference(t *testing.T) {
 						}
 						var tracker Tracker
 						got := tracker.Read(reader, img, roi, scale, time.Unix(100, 0))
-						wantOffset := float64(0)
+						wantOffset, wantSlots := float64(0), 0
 						if tc.name == MinatoKyubi {
-							wantOffset = EnergyGaugeRowOffset
+							// Ordinary four slots/palette; only the energy row moves.
+							wantOffset, wantSlots = EnergyGaugeRowOffset, 4
 						}
-						if got.Name != tc.name || got.Slots != 0 || got.Palette != "" || got.RowOffsetY != wantOffset || got.Unverified {
-							t.Fatalf("readout=%+v, want offset=%v", got, wantOffset)
+						if got.Name != tc.name || got.Slots != wantSlots || got.Palette != "" || got.RowOffsetY != wantOffset || got.Unverified {
+							t.Fatalf("readout=%+v, want offset=%v slots=%d", got, wantOffset, wantSlots)
 						}
 						if ShortLabel(got.Name) == got.Name {
 							t.Fatalf("missing concise label for %q", got.Name)
 						}
 
-						// Destroying half the current lettering must neither keep the
-						// identity nor introduce an unverified special geometry hint.
+						// Destroying half the current lettering must not keep the identity.
+						// The reader sees nothing; the tracker may only keep a verified
+						// four-slot row as an unverified geometry hint for at most 1s,
+						// exactly like the other four-slot specials (Minato's row).
 						draw.Draw(img, image.Rect(box.Min.X+box.Dx()/2, box.Min.Y, box.Max.X, box.Max.Y), image.Black, image.Point{}, draw.Src)
+						if got := reader.Read(img, roi, scale); got != (Readout{}) {
+							t.Fatalf("partial title was read: %+v", got)
+						}
+						want := Readout{}
+						if wantSlots > 0 {
+							want = Readout{Slots: wantSlots, RowOffsetY: wantOffset, Unverified: true}
+						}
 						got = tracker.Read(reader, img, roi, scale, time.Unix(100, 0).Add(16*time.Millisecond))
-						if got != (Readout{}) {
-							t.Fatalf("partial title retained a rule: %+v", got)
+						if got != want {
+							t.Fatalf("partial title retained %+v, want %+v", got, want)
+						}
+						if got := tracker.Read(reader, img, roi, scale, time.Unix(100, 0).Add(1100*time.Millisecond)); got != (Readout{}) {
+							t.Fatalf("geometry hint outlived expiry: %+v", got)
 						}
 					})
 				}

@@ -79,7 +79,7 @@ func TestAppearancePreviewPersistsOnlyOnSaveAndReportsNativeErrors(t *testing.T)
 }
 
 func TestAppearanceRejectsUnsupportedRanges(t *testing.T) {
-	for _, tc := range [][2]float64{{0.39, 1}, {1.01, 1}, {1, 0.79}, {1, 1.61}} {
+	for _, tc := range [][2]float64{{0.39, 1}, {1.01, 1}, {1, 0.24}, {1, 3.01}} {
 		if err := validOverlayAppearance(tc[0], tc[1]); err == nil {
 			t.Fatal("invalid appearance accepted", tc)
 		}

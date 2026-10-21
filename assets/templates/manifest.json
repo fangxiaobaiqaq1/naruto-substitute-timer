@@ -6,7 +6,38 @@
   },
   "templates": [
     {
+      "id": "training-exit-continuity",
+      "anchor": "screen",
+      "file": "training_exit.png",
+      "scene": "fight",
+      "layoutProfile": "duel",
+      "continuationOnly": true,
+      "threshold": 0.88,
+      "roi": {
+        "x": 0,
+        "y": 0.12,
+        "width": 0.22,
+        "height": 0.36
+      }
+    },
+    {
+      "id": "camp-reset-top-continuity",
+      "anchor": "center",
+      "file": "camp_reset_top.png",
+      "scene": "fight",
+      "layoutProfile": "camp",
+      "continuationOnly": true,
+      "threshold": 0.87,
+      "roi": {
+        "x": 0.37916666666666665,
+        "y": 0.011111111111111112,
+        "width": 0.053125,
+        "height": 0.10925925925925926
+      }
+    },
+    {
       "id": "raw-camp-key-expanded-toolbar",
+      "anchor": "center",
       "file": "raw_camp_key_text.png",
       "scene": "fight",
       "layoutProfile": "camp",
@@ -21,6 +52,7 @@
     },
     {
       "id": "raw-camp-key",
+      "anchor": "center",
       "file": "raw_camp_key_text.png",
       "scene": "fight",
       "layoutProfile": "camp",
@@ -34,6 +66,7 @@
     },
     {
       "id": "raw-duel-round",
+      "anchor": "center",
       "file": "raw_duel_round.png",
       "mask": "raw_duel_round.mask.png",
       "scene": "fight",
@@ -48,6 +81,7 @@
     },
     {
       "id": "raw-duel-opening-60",
+      "anchor": "center",
       "file": "raw_duel_opening_60.png",
       "mask": "raw_duel_opening_60.mask.png",
       "scene": "fight",
@@ -64,6 +98,7 @@
     },
     {
       "id": "raw-duel-opening-60-alt",
+      "anchor": "center",
       "file": "raw_duel_opening_60.png",
       "mask": "raw_duel_opening_60.mask.png",
       "scene": "fight",
@@ -80,6 +115,7 @@
     },
     {
       "id": "raw-lobby-labels",
+      "anchor": "left",
       "file": "raw_lobby_ninja.png",
       "scene": "lobby",
       "threshold": 0.88,
@@ -92,6 +128,7 @@
     },
     {
       "id": "fight-scene-key",
+      "anchor": "center",
       "file": "fight_scene_key.png",
       "scene": "fight",
       "roi": {
@@ -105,6 +142,7 @@
     },
     {
       "id": "fight-scene-key-alt",
+      "anchor": "center",
       "file": "fight_scene_key_alt.png",
       "scene": "fight",
       "roi": {
@@ -118,6 +156,7 @@
     },
     {
       "id": "fight-scene-key-alt2",
+      "anchor": "center",
       "file": "fight_scene_key_alt2.png",
       "scene": "fight",
       "roi": {
@@ -131,6 +170,7 @@
     },
     {
       "id": "fight-reset",
+      "anchor": "center",
       "file": "fight_reset.png",
       "scene": "fight",
       "roi": {
@@ -144,6 +184,7 @@
     },
     {
       "id": "fight-round",
+      "anchor": "center",
       "file": "fight_round.png",
       "mask": "fight_round.mask.png",
       "scene": "fight",
@@ -158,6 +199,7 @@
     },
     {
       "id": "fight-round-r1",
+      "anchor": "center",
       "file": "fight_round_r1.png",
       "mask": "fight_round_r1.mask.png",
       "scene": "fight",
@@ -172,6 +214,7 @@
     },
     {
       "id": "lobby-bottom",
+      "anchor": "left",
       "file": "lobby_bottom.png",
       "scene": "lobby",
       "roi": {
@@ -184,6 +227,7 @@
     },
     {
       "id": "vs-mark",
+      "anchor": "center",
       "file": "vs_mark.png",
       "scene": "vs",
       "roi": {
@@ -196,6 +240,7 @@
     },
     {
       "id": "vs-mark-alt",
+      "anchor": "center",
       "file": "vs_mark_alt.png",
       "scene": "vs",
       "roi": {
@@ -208,6 +253,7 @@
     },
     {
       "id": "queue-search",
+      "anchor": "center",
       "file": "queue_search.png",
       "scene": "queue",
       "roi": {
@@ -220,6 +266,7 @@
     },
     {
       "id": "pick-lock",
+      "anchor": "right",
       "file": "pick_lock.png",
       "scene": "pick",
       "roi": {
@@ -232,6 +279,7 @@
     },
     {
       "id": "result-detail",
+      "anchor": "left",
       "file": "result_detail.png",
       "scene": "result",
       "roi": {
@@ -244,6 +292,7 @@
     },
     {
       "id": "result-actions",
+      "anchor": "right",
       "file": "result_actions.png",
       "scene": "result",
       "roi": {
@@ -256,6 +305,7 @@
     },
     {
       "id": "raw-ban-title",
+      "anchor": "center",
       "file": "raw_ban_title.png",
       "scene": "ban",
       "threshold": 0.88,
@@ -268,6 +318,7 @@
     },
     {
       "id": "raw-ban-unlock",
+      "anchor": "center",
       "file": "raw_ban_unlock.png",
       "scene": "ban",
       "threshold": 0.88,
@@ -279,34 +330,59 @@
       }
     },
     {
+      "id": "substitute-control-small",
+      "anchor": "screen",
+      "file": "substitute_continuity.png",
+      "mask": "substitute_continuity.mask.png",
+      "scene": "fight",
+      "continuationOnly": true,
+      "templateScale": 0.7,
+      "threshold": 0.85,
+      "roi": { "x": 0.55, "y": 0.72, "width": 0.45, "height": 0.28 }
+    },
+    {
+      "id": "substitute-control-medium",
+      "anchor": "screen",
+      "file": "substitute_continuity.png",
+      "mask": "substitute_continuity.mask.png",
+      "scene": "fight",
+      "continuationOnly": true,
+      "templateScale": 0.75,
+      "threshold": 0.85,
+      "roi": { "x": 0.55, "y": 0.72, "width": 0.45, "height": 0.28 }
+    },
+    {
       "id": "substitute-control-continuity",
+      "anchor": "screen",
       "file": "substitute_continuity.png",
       "mask": "substitute_continuity.mask.png",
       "scene": "fight",
       "continuationOnly": true,
       "threshold": 0.85,
       "roi": {
-        "x": 0.63,
-        "y": 0.81,
-        "width": 0.09,
-        "height": 0.17
+        "x": 0.55,
+        "y": 0.72,
+        "width": 0.45,
+        "height": 0.28
       }
     },
     {
       "id": "raw-attack-continuity",
+      "anchor": "screen",
       "file": "raw_attack_core.png",
       "scene": "fight",
       "continuationOnly": true,
       "threshold": 0.85,
       "roi": {
-        "x": 0.8675,
-        "y": 0.7822222222222223,
-        "width": 0.05375,
-        "height": 0.10333333333333333
+        "x": 0.8,
+        "y": 0.7,
+        "width": 0.2,
+        "height": 0.3
       }
     },
     {
       "id": "duel-lobby-ninjutsu",
+      "anchor": "left",
       "file": "duel_lobby_ninjutsu.png",
       "mask": "duel_lobby_ninjutsu.mask.png",
       "scene": "lobby",
@@ -320,6 +396,7 @@
     },
     {
       "id": "duel-lobby-ranked",
+      "anchor": "left",
       "file": "duel_lobby_ranked.png",
       "mask": "duel_lobby_ranked.mask.png",
       "scene": "lobby",

@@ -5,10 +5,16 @@ import (
 	"math"
 	"time"
 
+	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
 	"narutotimer/internal/ninja"
+	"narutotimer/internal/safego"
 )
+
+// parallelSides lets tests compare concurrent side/profile sampling against
+// the original sequential order.
+var parallelSides = true
 
 func (e *Engine) specialPositions(img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea) ([]detect.BeadPosition, [2]ninja.Readout) {
 	return e.specialPositionsFor("camp", img, positions, area)
@@ -19,16 +25,26 @@ func (e *Engine) specialPositionsFor(profile string, img *image.RGBA, positions 
 }
 
 func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea, at time.Time) ([]detect.BeadPosition, [2]ninja.Readout) {
+	rows, identified, _ := e.specialRowsAt(profile, img, positions, area, at)
+	return rows, identified
+}
+
+// specialRowsAt also returns each side's name/portrait regions and portrait
+// box (frame geometry).
+func (e *Engine) specialRowsAt(profile string, img *image.RGBA, positions []detect.BeadPosition, area detect.ContentArea, at time.Time) ([]detect.BeadPosition, [2]ninja.Readout, [2]engine.SideGeometry) {
 	profileIndex := 0
 	if profile == "duel" {
 		profileIndex = 1
 	}
 	var identified [2]ninja.Readout
-	var out []detect.BeadPosition
-	for index, side := range []string{"left", "right"} {
+	var rows [2][]detect.BeadPosition
+	var geometry [2]engine.SideGeometry
+	// Each side touches only its own trackers and its own result slots; the
+	// shared Reader and catalog are safe for concurrent tracker calls.
+	side := func(index int, name string) {
 		var row []detect.BeadPosition
 		for _, p := range positions {
-			if p.Side == side {
+			if p.Side == name {
 				row = append(row, p)
 			}
 		}
@@ -36,19 +52,45 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			// Stored name strips use the 960-wide HUD reference. Individual
 			// integer-rounded bean centers may alternate 15/16px; their first
 			// interval must not accidentally stretch all of the name lettering.
-			scale := float64(area.W) / 960
+			// Use the same fitted HUD scale as the centers and sampling cores.
+			scale := detect.RowHUDScale(row, area, 960, 540)
 			first := image.Pt(row[0].X, row[0].Y)
-			identified[index] = e.nameTracker[profileIndex][index].ReadWithAvatar(e.names, &e.avatarTracker[profileIndex][index], img, ninja.NameRegion(first, scale, index == 0), ninja.AvatarRegion(first, scale, index == 0), scale, at)
+			cal := row[0].Cal
+			nameROI, avatarROI, avatarScale := ninja.NameRegion(first, scale, index == 0), ninja.AvatarRegion(first, scale, index == 0), scale
+			tracker, avatar := &e.nameTracker[profileIndex][index], &e.avatarTracker[profileIndex][index]
+			if cal != nil {
+				// A drawn portrait box wins over the bead-derived window.
+				if cal.Portrait() {
+					avatarROI, avatarScale = ninja.AvatarRegionFromBox(cal.Avatar.X, cal.Avatar.Y, cal.Avatar.W, cal.Avatar.H, index == 0)
+				}
+				identified[index] = tracker.ReadCalibrated(e.names, avatar, img, nameROI, avatarROI, scale, avatarScale, index == 1, at)
+			} else {
+				identified[index] = tracker.ReadWithAvatar(e.names, avatar, img, nameROI, avatarROI, scale, at)
+			}
+			geometry[index] = regionGeometry(img.Bounds(), nameROI, avatarROI, avatarScale, index == 0)
 			// Only a recognized six-slot NAME permits usable slots five and six.
 			// A brief label gap retains six UNKNOWN placeholders, never extra votes.
 			if len(row) == 4 && identified[index].Slots == 6 {
-				dx, dy := 30.0, 0.0
-				if row[1].LX < row[0].LX {
-					dx = -dx
+				// Extend the calibrated pitch in its own 1600x900 units, not
+				// the old 1920-wide 30px constant (which skips slots 5/6).
+				last := row[len(row)-1]
+				dx := (last.LX - row[0].LX) / float64(len(row)-1)
+				dy := (last.LY - row[0].LY) / float64(len(row)-1)
+				xOffset := 0
+				if !cal.Beads() {
+					xOffset = row[0].X - area.MapHUDPixel(row[0].LX, row[0].LY, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight).X
 				}
 				for i := 4; i < 6; i++ {
 					lx, ly := row[0].LX+float64(i)*dx, row[0].LY+float64(i)*dy
-					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: side, Idx: i, LX: lx, LY: ly}, X: area.X + int(math.Round(lx*float64(area.W)/detect.LogicWidth)), Y: area.Y + int(math.Round(ly*float64(area.H)/detect.LogicHeight))})
+					var mapped image.Point
+					if cal.Beads() {
+						// Calibrated rows extrapolate their own pixel pitch.
+						mapped = cal.Map(lx, ly)
+					} else {
+						mapped = area.MapHUDPixel(lx, ly, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight)
+						mapped.X += xOffset
+					}
+					row = append(row, detect.BeadPosition{Bead: detect.Bead{Side: name, Idx: i, LX: lx, LY: ly}, X: mapped.X, Y: mapped.Y, Cal: cal})
 				}
 			}
 			// Some exact variants have an extra energy bar above their ordinary
@@ -57,14 +99,72 @@ func (e *Engine) specialPositionsForAt(profile string, img *image.RGBA, position
 			// subsequent frames. This applies to Sasuke Xiayin and Minato Kyubi.
 			if offset := identified[index].RowOffsetY; offset != 0 {
 				for i := range row {
-					row[i].LY += offset * detect.LogicHeight / 540
-					row[i].Y = area.Y + int(math.Round(row[i].LY*float64(area.H)/detect.LogicHeight))
+					row[i].LY += offset * detect.HUDReferenceHeight / 540
+					if cal.Beads() {
+						row[i].Y = cal.Map(row[i].LX, row[i].LY).Y
+					} else {
+						row[i].Y = area.MapHUDPixel(row[i].LX, row[i].LY, name, detect.HUDReferenceWidth, detect.HUDReferenceHeight).Y
+					}
 				}
 			}
 		}
-		out = append(out, row...)
+		rows[index] = row
 	}
-	return out, identified
+	if parallelSides {
+		var wg safego.Group
+		wg.Go(func() { side(1, "right") })
+		wg.Run(func() { side(0, "left") })
+		wg.Wait()
+	} else {
+		side(0, "left")
+		side(1, "right")
+	}
+	return append(rows[0], rows[1]...), identified, geometry
+}
+
+// regionGeometry is a side's search regions and the portrait box that
+// reproduces its window.
+func regionGeometry(frame, nameROI, avatarROI image.Rectangle, avatarScale float64, left bool) engine.SideGeometry {
+	g := engine.SideGeometry{NameROI: nameROI, AvatarROI: avatarROI}
+	if !avatarROI.Empty() && avatarScale > 0 && !frame.Empty() {
+		x, y, w, h := ninja.AvatarBoxFromRegion(avatarROI, avatarScale, left)
+		g.AvatarBox = fraction(x, y, w, h, frame)
+	}
+	return g
+}
+
+// fraction is a pixel box as fractions of frame.
+func fraction(x, y, w, h float64, frame image.Rectangle) config.NormalizedRect {
+	fw, fh := float64(frame.Dx()), float64(frame.Dy())
+	return config.NormalizedRect{X: (x - float64(frame.Min.X)) / fw, Y: (y - float64(frame.Min.Y)) / fh, Width: w / fw, Height: h / fh}
+}
+
+// completeGeometry adds the sampled centres and, on a configured layout, the
+// default bead boxes of the layout rows (before identity offsets) that also
+// reproduce the rows derived from them (special: identity drop, slots 5/6).
+func completeGeometry(sides [2]engine.SideGeometry, layout *engine.ConfiguredLayout, profile string, img *image.RGBA, area detect.ContentArea, positions, special []detect.BeadPosition, beads []engine.BeadInfo) [2]engine.SideGeometry {
+	for i, name := range [2]string{"left", "right"} {
+		if layout != nil {
+			var row, derived []detect.BeadPosition
+			for _, p := range positions {
+				if p.Side == name {
+					row = append(row, p)
+				}
+			}
+			for _, p := range special {
+				if p.Side == name {
+					derived = append(derived, p)
+				}
+			}
+			sides[i].BeadBox, _ = layout.DefaultBeadBox(profile, row, img.Bounds(), area, derived...)
+		}
+		for _, b := range beads {
+			if len(b.Label) > 0 && b.Label[0] == "LR"[i] {
+				sides[i].Beads = append(sides[i].Beads, image.Pt(b.X, b.Y))
+			}
+		}
+	}
+	return sides
 }
 
 func applyNames(res *engine.Result, readouts [2]ninja.Readout) {
@@ -76,6 +176,40 @@ func applyNames(res *engine.Result, readouts [2]ninja.Readout) {
 			res.RightSlots++
 		}
 	}
+}
+
+// energyGaugeBand is the unidentified energy-gauge signature on the default
+// row: a THIN gold band through every slot center (not gold 4px@540 above and
+// below, unlike real gold diamonds or a broad wash) that runs unbroken from
+// slot to slot (gold at every quarter of each interval). Blank cores alone are
+// no band: gold diamonds sampled near their tips (a box misdrawn by a few
+// pixels) are thin and unreadable there too, but leave a gap of about a third
+// of the pitch between two diamonds. It only permits a re-read; never a vote.
+func energyGaugeBand(img *image.RGBA, row []detect.BeadPosition, area detect.ContentArea) bool {
+	gold := func(x, y int) bool {
+		if !image.Pt(x, y).In(img.Bounds()) {
+			return false
+		}
+		c := img.RGBAAt(x, y)
+		r, g, b := int(c.R), int(c.G), int(c.B)
+		return r >= 190 && g >= 110 && r-b >= 80 && g-b >= 70
+	}
+	d := max(2, int(math.Round(4*detect.RowHUDScale(row, area, 960, 540))))
+	for i, p := range row {
+		if !gold(p.X, p.Y) || gold(p.X, p.Y-d) || gold(p.X, p.Y+d) {
+			return false
+		}
+		if i == 0 {
+			continue
+		}
+		q := row[i-1]
+		for k := 1; k < 4; k++ {
+			if !gold(q.X+(p.X-q.X)*k/4, q.Y+(p.Y-q.Y)*k/4) {
+				return false
+			}
+		}
+	}
+	return len(row) > 0
 }
 
 func specialPixel(palette ninja.Palette, r, g, b int) detect.BeadState {

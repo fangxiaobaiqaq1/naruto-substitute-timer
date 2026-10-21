@@ -2,7 +2,7 @@
 
 Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 
-**BUG 反馈 QQ 群：1109044204**。遇到 MuMu SDK、截图或多开实例问题时，请在「诊断」中导出“支持诊断包（ZIP）”后反馈。
+官网（下载、教程）：https://hy.312166.xyz · **BUG 反馈 QQ 群：1109044204**。遇到 MuMu SDK、截图或多开实例问题时，请在「诊断」中导出“支持诊断包（ZIP）”后反馈。
 
 识别游戏画面的替身豆，在悬浮窗显示对方替身倒计时。模型、忍者资料、场景模板和 OCR 运行依赖均已内置。
 
@@ -10,7 +10,7 @@ Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 
 到 [最新发布页](https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest) 选择：
 
-- **Setup 安装包**：推荐首次使用。创建快捷方式和卸载入口，不需要管理员权限。
+- **naruto-timer-universal.apk**：Android 12 及以上手机版。
 - **timer-app.exe**：便携版，放在可写目录直接运行。
 - **完整 ZIP**：附带诊断工具和第三方许可。
 
@@ -33,17 +33,18 @@ Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 - 安装版配置和诊断录制：`%APPDATA%\NarutoTimer`；便携版：程序目录中的 `config.json` 和 `debug`。
 - OCR 与更新缓存：`%LOCALAPPDATA%\naruto-timer`。卸载程序保留个人设置和日志。
 - 「设置 → 常规 → 外观与更新」可调整**计时浮窗**不透明度（40%–100%）和字号（80%–160%）；拖动立即预览，松开后保存。设置、更新和错误窗口始终不透明，避免影响操作。
+- 迷你模式使用独立的无标题栏悬浮屏，窗口就是计时底板本身，和安卓迷你卡片一样显示「我方·…」和倒计时；拖动底板移动，拖右边缘调长度、下边缘调高度（数字随高度缩放），大小和位置都会记住。点击计时区域展开设置、换边、两边计时和「退出迷你」（回到完整浮窗），主设置仍从「设置」窗口进入。可用 `Ctrl+M` 切换。
 - 「诊断」可查看采集来源、OCR 状态、延迟报告和原帧录制；也可独立验证 MuMu SDK，导出支持诊断 ZIP。ZIP 默认不含原帧 PNG，包含实际配置、MuMu 安装目录、实例号、PID、SDK DLL、连接阶段和日志。
 - 采集函数耗时不等于端到端延迟；没有有效帧或真实绘制回调时不报告完整端到端数据。
 
-详见 [使用说明](docs/使用说明.md)、[诊断说明](docs/诊断说明.md)。
+详见 [使用说明](docs/使用说明.md)、[诊断说明](docs/诊断说明.md) 和 [Android 原生开发](docs/安卓原生开发.md)。
 
 ## 开发
 
-Windows 原生构建的验收路径需要 Go 1.26.1、PowerShell 和 Fyne 所需的 Windows x64 C/C++ 工具链（cgo）。在 Developer PowerShell 中：
+Windows 原生构建的验收路径需要 Go 1.26.10（`go.mod` 的 `toolchain`；旧的 Go 1.26.x 会自动下载它）、PowerShell 和 Fyne 所需的 Windows x64 C/C++ 工具链（cgo）。在 Developer PowerShell 中：
 
 ```powershell
-$env:TIMER_VERSION = "v0.2.5"
+$env:TIMER_VERSION = "v0.3.0"
 .\build.bat
 ```
 

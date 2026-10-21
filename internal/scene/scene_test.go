@@ -28,6 +28,14 @@ func TestColorGateMapsClassifyScreen(t *testing.T) {
 	}
 }
 
+func TestAnchoredCenterKeepsLetterboxedOrigin(t *testing.T) {
+	ca := detect.ContentArea{X: 80, Y: 0, W: 1280, H: 720}
+	got := mapAnchoredPoint(ca, 0.5, 0.5, 1920, 1080, "center")
+	if got != image.Pt(720, 360) {
+		t.Fatalf("center point = %v, want (720,360)", got)
+	}
+}
+
 func TestCatalogFightWins(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 192, 108))
 	fill(img, img.Bounds(), color.RGBA{R: 40, G: 40, B: 50, A: 255})
@@ -180,10 +188,10 @@ type scoreSequence struct {
 	index  int
 }
 
-func (m *scoreSequence) Match(match.Query) (match.Score, error) {
+func (m *scoreSequence) Match(q match.Query) (match.Score, error) {
 	v := m.values[m.index]
 	m.index++
-	return match.Score{Value: v}, nil
+	return match.Score{Value: v, Peak: q.ROI.Min}, nil
 }
 
 func TestCatalogScoresStayBoundToAcceptedTemplate(t *testing.T) {

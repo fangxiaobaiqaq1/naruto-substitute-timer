@@ -38,7 +38,7 @@ func TestUserSpecialNames(t *testing.T) {
 			got := r.Read(img, NameRegion(image.Pt(int(float64(tc.x)*scale), int(float64(tc.y)*scale)), scale, true), scale)
 			if got.Name != tc.name {
 				t.Errorf("%s scale=%v got=%+v want=%q", tc.file, scale, got, tc.name)
-				for _, templ := range r.prepared {
+				for _, templ := range r.testPrepared() {
 					score, _ := (match.NCC{}).Match(match.Query{Image: img, ROI: NameRegion(image.Pt(int(float64(tc.x)*scale), int(float64(tc.y)*scale)), scale, true), Prepared: templ.ncc})
 					t.Logf("candidate %s score=%+v", templ.readout.Name, score)
 				}

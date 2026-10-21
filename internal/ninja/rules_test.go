@@ -19,13 +19,13 @@ func TestMadaraUsesCanonicalCorpusSpelling(t *testing.T) {
 	}
 }
 
-func TestDualCooldownIsOnlyFifthMizukage(t *testing.T) {
-	for _, name := range []string{FifthMizukage, "照美冥【五代目水影】", " 照美冥 （五代目水影） "} {
+func TestDualCooldownIsOnlyFifthMizukageAndHanzo(t *testing.T) {
+	for _, name := range []string{FifthMizukage, "照美冥【五代目水影】", " 照美冥 （五代目水影） ", HanzoEdo, "半藏【秽土转生】"} {
 		if !DualCooldown(name) {
 			t.Fatalf("missed exact variant %q", name)
 		}
 	}
-	for _, name := range []string{"", "照美冥", "照美冥[泳装]", "五代目水影", "908290", "909440", "980230", Hashirama, Madara, Obito, Naruto, ItachiHyakusen, MinatoKyubi, HashiramaEdo, "照美冥[五代目水影][其他版本]"} {
+	for _, name := range []string{"", "照美冥", "照美冥[泳装]", "五代目水影", "908290", "909440", "980230", Hashirama, Madara, Obito, Naruto, ItachiHyakusen, MinatoKyubi, HashiramaEdo, "照美冥[五代目水影][其他版本]", "半藏", "半藏[其他版本]"} {
 		if DualCooldown(name) {
 			t.Fatalf("overbroad special rule: %q", name)
 		}

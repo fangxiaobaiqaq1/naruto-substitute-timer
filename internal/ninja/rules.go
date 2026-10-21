@@ -22,9 +22,12 @@ const (
 	ItachiHyakusen    = "宇智波鼬[百战]"
 	MinatoKyubi       = "波风水门[九喇嘛连结]"
 	HashiramaEdo      = "千手柱间[秽土转生]"
+	// HanzoEdo can substitute on its own like FifthMizukage: 15 s and 10 s.
+	HanzoEdo = "半藏[秽土转生]"
 	// EnergyGaugeRowOffset is measured from reviewed native HUDs. The energy
 	// gauge pushes these ordinary four-diamond rows down 13px at 960x540. It is
-	// active only after the complete title template is verified.
+	// active after a verified complete title or exact portrait (kept briefly as
+	// a tracker hint); unidentified rows use only rgb's energy-band fallback.
 	EnergyGaugeRowOffset = 13
 	DefaultCooldown      = 15 * time.Second
 	AlternateCooldown    = 10 * time.Second
@@ -33,7 +36,8 @@ const (
 // DualCooldown matches the full version, never a bare name or an ambiguous
 // numeric ID from the old extracted table. Bracket typography is insignificant.
 func DualCooldown(name string) bool {
-	return normalize(name) == normalize(FifthMizukage)
+	n := normalize(name)
+	return n == normalize(FifthMizukage) || n == normalize(HanzoEdo)
 }
 
 func normalize(s string) string {
@@ -69,6 +73,8 @@ func ShortLabel(name string) string {
 		return "水门·九喇嘛连结"
 	case normalize(HashiramaEdo):
 		return "柱间·秽土转生"
+	case normalize(HanzoEdo):
+		return "半藏·秽土转生"
 	}
 	text := []rune(name)
 	if len(text) > 10 {

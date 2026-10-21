@@ -3,7 +3,7 @@ package detect
 
 import "fmt"
 
-// 游戏画面逻辑分辨率（火影忍者手游决斗场 UI 以 1920×1080 为基准布局）。
+// 场景/旧标定逻辑分辨率。NGUI HUD 的实际缩放使用 hud.go 中的固定高度映射。
 const (
 	LogicWidth  = 1920
 	LogicHeight = 1080
@@ -13,7 +13,8 @@ const (
 type ContentMode int
 
 const (
-	// ModeAuto 自动判断：客户区宽高比接近 16:9 视为铺满（拉伸），否则按等比黑边。
+	// ModeAuto 接近参考宽高比时铺满；否则由 ResolveContentArea 根据
+	// 像素黑边区分等比黑边和原生 NGUI 全屏 HUD。
 	ModeAuto ContentMode = iota
 	// ModeStretch 强制铺满客户区（无黑边，画面拉伸变形）。
 	ModeStretch
@@ -39,27 +40,18 @@ type ContentArea struct {
 	X, Y, W, H int
 }
 
-// ComputeContentArea 根据客户区尺寸与模式计算游戏画面实际区域。
+// ComputeContentArea 根据客户区尺寸与模式计算游戏画面实际区域。ModeAuto 只有尺寸时保留全屏；
+// 需要识别黑边时使用 ResolveContentArea。
 func ComputeContentArea(clientW, clientH int, mode ContentMode) ContentArea {
 	ca := ContentArea{X: 0, Y: 0, W: clientW, H: clientH}
 	if clientW <= 0 || clientH <= 0 {
 		return ca
 	}
 
-	letterbox := false
-	switch mode {
-	case ModeStretch:
-		letterbox = false
-	case ModeLetterbox:
-		letterbox = true
-	default: // ModeAuto
-		// 客户区宽高比与 16:9 偏差小于 1.5% 视为铺满，否则视为有黑边。
-		ratio := float64(clientW) / float64(clientH)
-		if ratio < 16.0/9.0*0.985 || ratio > 16.0/9.0*1.015 {
-			letterbox = true
-		}
-	}
-	if !letterbox {
+	// Size-only callers cannot tell native ultrawide HUD from centered bars.
+	// Auto therefore keeps the full surface; ResolveContentArea is the only
+	// path that may choose letterbox after inspecting pixels.
+	if mode != ModeLetterbox {
 		return ca
 	}
 
@@ -175,15 +167,22 @@ func DuelBeads() []Bead {
 type BeadPosition struct {
 	Bead
 	X, Y int
+	// Cal is this side's player calibration in this frame; nil = automatic.
+	Cal *SideCalibration
 }
 
 // Layout 计算所有豆子在实际客户区内的屏幕坐标。
+//
+// Bead.LX/LY 是旧的 1920x1080 屏幕标定，但 HUD 本身是 NGUI
+// fixed-height。用同一套左右 edge-anchor 映射升级旧的无配置路径；在
+// 16:9/letterbox 下它与 ContentArea.Map 完全等价，在超宽屏下不会把
+// 左右 HUD 横向拉伸到屏幕中央。
 func Layout(clientW, clientH int, mode ContentMode, beads []Bead) []BeadPosition {
 	ca := ComputeContentArea(clientW, clientH, mode)
 	pos := make([]BeadPosition, 0, len(beads))
 	for _, b := range beads {
-		x, y := ca.Map(b.LX, b.LY)
-		pos = append(pos, BeadPosition{Bead: b, X: x, Y: y})
+		mapped := ca.MapHUDPixel(b.LX, b.LY, b.Side, LogicWidth, LogicHeight)
+		pos = append(pos, BeadPosition{Bead: b, X: mapped.X, Y: mapped.Y})
 	}
 	return pos
 }

@@ -91,10 +91,7 @@ func scalarMatch(q Query) Score {
 	if roi.Dx() < tw || roi.Dy() < th {
 		return best
 	}
-	step := 1
-	if min(tw, th) >= 48 {
-		step = max(2, min(tw, th)/8)
-	}
+	step := coarseStep(tw, th)
 	scan := func(x0, y0, x1, y1, st int) {
 		for y := max(roi.Min.Y, y0); y <= min(roi.Max.Y-th, y1); y += st {
 			for x := max(roi.Min.X, x0); x <= min(roi.Max.X-tw, x1); x += st {
@@ -107,7 +104,12 @@ func scalarMatch(q Query) Score {
 	}
 	scan(roi.Min.X, roi.Min.Y, roi.Max.X-tw, roi.Max.Y-th, step)
 	if step > 1 {
-		scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, 1)
+		if mid := refineStep(step); mid > 1 {
+			scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, mid)
+			scan(best.Peak.X-mid, best.Peak.Y-mid, best.Peak.X+mid, best.Peak.Y+mid, 1)
+		} else {
+			scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, 1)
+		}
 	}
 	return best
 }

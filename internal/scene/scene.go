@@ -13,11 +13,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
+	"narutotimer/internal/imgsafe"
 	"narutotimer/internal/match"
+	"narutotimer/internal/safego"
 )
 
 const DefaultManifest = "assets/templates/manifest.json"
@@ -32,7 +36,10 @@ type Manifest struct {
 }
 
 type TemplateSpec struct {
-	TemplateScale    float64               `json:"templateScale,omitempty"`
+	TemplateScale float64 `json:"templateScale,omitempty"`
+	// Anchor selects the geometry for HUD-like templates. Empty/legacy keeps
+	// the historical full-scene transform for external manifests.
+	Anchor           string                `json:"anchor,omitempty"`
 	ContinuationOnly bool                  `json:"continuationOnly,omitempty"`
 	RoundOpening     bool                  `json:"roundOpening,omitempty"`
 	LayoutProfile    string                `json:"layoutProfile,omitempty"`
@@ -59,6 +66,39 @@ type preparedTemplate struct {
 	roi        image.Rectangle
 	gray, mask *image.Gray
 	ncc        *match.PreparedNCC
+	index      int  // Position in Catalog.templates; keys the peak hint.
+	windowed   bool // ROI narrowed to the remembered peak; a miss keeps the hint.
+	// variants caches the +-2 px sizes the continuation refinement matches
+	// (screen-anchored continuation templates only); shared by value copies.
+	variants *variantCache
+}
+
+// variantCache holds prepared rescaled copies of one prepared template. A
+// variant depends only on the template and its size, so a cached one is
+// exactly what rescaling again would produce.
+type variantCache struct {
+	mu sync.Mutex
+	m  map[image.Point]*match.PreparedNCC
+}
+
+func (v *variantCache) get(t preparedTemplate, w, h int) *match.PreparedNCC {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	key := image.Pt(w, h)
+	if p, ok := v.m[key]; ok {
+		return p
+	}
+	g := match.ScaleGray(t.gray, w, h)
+	var mask *image.Gray
+	if t.mask != nil {
+		mask = match.ScaleGray(t.mask, w, h)
+	}
+	p := match.PrepareNCC(g, mask)
+	if v.m == nil {
+		v.m = make(map[image.Point]*match.PreparedNCC, 24)
+	}
+	v.m[key] = p
+	return p
 }
 
 // Catalog 是已加载的模板库。
@@ -75,7 +115,77 @@ type Catalog struct {
 	prepareMu      sync.Mutex
 	preparedArea   detect.ContentArea
 	prepared       []preparedTemplate
+	// hints remember where each template was last accepted for the current
+	// geometry. HUD markers do not move, so a small window around that peak
+	// is checked first; only a miss falls back to the full ROI scan.
+	hintMu sync.Mutex
+	hints  []templateHint
+	// Cold templates (no remembered peak) are rescanned on every frame unless
+	// a fight marker is confirmed on this frame and a full scan ran within the
+	// last coldScanEvery frames and coldScanInterval. Their last scores are
+	// reused in between; a template that was present would hold a hint.
+	coldAt     time.Time
+	coldFrames int
+	lastCold   []Hit
+	// frame is the BeginFrame/EndFrame memo (engine.FrameScopedGate): it is
+	// consulted only for the very image passed to BeginFrame.
+	frameMu sync.Mutex
+	frame   *frameMemo
 }
+
+// frameMemo shares one analysed frame's work between DecideAt and the
+// StartFight/SupportsFight calls on the same image: gray views per ROI and
+// the full-ROI hit of every template DecideAt scanned completely. A cached
+// hit is exactly what scoreOne recomputes (same template, ROI and pixels).
+type frameMemo struct {
+	img   *image.RGBA
+	mu    sync.Mutex
+	views map[image.Rectangle]grayView
+	full  map[int]Hit // template index -> full-ROI hit of this frame
+}
+
+type grayView struct {
+	img  *image.RGBA
+	gray *image.Gray
+}
+
+// BeginFrame implements engine.FrameScopedGate.
+func (c *Catalog) BeginFrame(img *image.RGBA) {
+	c.frameMu.Lock()
+	c.frame = &frameMemo{img: img, views: map[image.Rectangle]grayView{}, full: map[int]Hit{}}
+	c.frameMu.Unlock()
+}
+
+// EndFrame implements engine.FrameScopedGate; the views are released.
+func (c *Catalog) EndFrame() {
+	c.frameMu.Lock()
+	c.frame = nil
+	c.frameMu.Unlock()
+}
+
+// memo returns the frame memo for img, or nil outside BeginFrame/EndFrame or
+// for any other image.
+func (c *Catalog) memo(img *image.RGBA) *frameMemo {
+	c.frameMu.Lock()
+	defer c.frameMu.Unlock()
+	if c.frame != nil && c.frame.img == img {
+		return c.frame
+	}
+	return nil
+}
+
+const (
+	coldScanEvery    = 3
+	coldScanInterval = 100 * time.Millisecond
+)
+
+type templateHint struct {
+	peak  image.Point
+	valid bool
+}
+
+// hintRadius bounds the window checked around a remembered peak, in pixels.
+const hintRadius = 2
 
 // Load 默认读取随 EXE 更新的内置资源，显式自定义路径才读取外置 manifest。
 // 自定义文件不存在或 templates 为空时返回 (nil, nil)，由上层回退旧门闩。
@@ -127,7 +237,7 @@ func Load(cfg config.Config) (*Catalog, error) {
 		refH = detect.LogicHeight
 	}
 	dir := filepath.Dir(path)
-	readGray := func(name string) (*image.Gray, error) {
+	decodeGray := func(name string) (*image.Gray, error) {
 		if !embedded {
 			return loadGray(filepath.Join(dir, name))
 		}
@@ -140,6 +250,21 @@ func Load(cfg config.Config) (*Catalog, error) {
 			return nil, err
 		}
 		return match.ToGray(img), nil
+	}
+	// Several manifest entries share one image or mask file (scale variants);
+	// each file is decoded once and the immutable gray image is shared.
+	type decoded struct {
+		gray *image.Gray
+		err  error
+	}
+	files := map[string]decoded{}
+	readGray := func(name string) (*image.Gray, error) {
+		if d, ok := files[name]; ok {
+			return d.gray, d.err
+		}
+		gray, err := decodeGray(name)
+		files[name] = decoded{gray, err}
+		return gray, err
 	}
 	out := &Catalog{
 		minimumRegions: man.MinimumRegions,
@@ -161,6 +286,9 @@ func Load(cfg config.Config) (*Catalog, error) {
 		out.holdSet[id] = true
 	}
 	for _, spec := range man.Templates {
+		if spec.Anchor != "" && spec.Anchor != "legacy" && spec.Anchor != "screen" && spec.Anchor != "center" && spec.Anchor != "left" && spec.Anchor != "right" {
+			return nil, fmt.Errorf("scene: template %s: unsupported anchor %q", spec.ID, spec.Anchor)
+		}
 		if spec.TemplateScale != 0 && (spec.TemplateScale < 0.5 || spec.TemplateScale > 2) {
 			return nil, fmt.Errorf("scene: template %s: templateScale must be between 0.5 and 2", spec.ID)
 		}
@@ -217,13 +345,10 @@ func parseMode(s string) detect.ContentMode {
 	return mode
 }
 
+// loadGray reads a user-supplied template (custom manifest) from disk. Its
+// header is checked before decoding (imgsafe), the pixels are unchanged.
 func loadGray(path string) (*image.Gray, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
+	img, _, err := imgsafe.DecodeFile(path, imgsafe.Asset)
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +357,12 @@ func loadGray(path string) (*image.Gray, error) {
 
 // Decide 实现 engine.Gate。
 func (c *Catalog) Decide(img *image.RGBA) engine.GateDecision {
+	return c.DecideAt(img, time.Now())
+}
+
+// DecideAt implements engine.TimedGate. Acquisition time bounds how long
+// templates without a remembered peak may go unscanned during a confirmed fight.
+func (c *Catalog) DecideAt(img *image.RGBA, at time.Time) engine.GateDecision {
 	if c == nil || img == nil {
 		return engine.GateDecision{Kind: engine.GateUncertain}
 	}
@@ -242,7 +373,11 @@ func (c *Catalog) Decide(img *image.RGBA) engine.GateDecision {
 	if !supported {
 		return engine.GateDecision{Kind: engine.GateUncertain, SceneID: "unsupported-resolution"}
 	}
-	score := c.scorer(img)
+	if at.IsZero() {
+		at = time.Now()
+	}
+	prepared := c.prepare(ca)
+	hits := c.scoreAll(img, prepared, at)
 	var bestFight, bestOther float64
 	var bestRaw float64
 	profileScores := map[string]float64{}
@@ -251,11 +386,11 @@ func (c *Catalog) Decide(img *image.RGBA) engine.GateDecision {
 	var fightLayout string
 	var openingScore float64
 	var openingLayout string
-	for _, t := range c.prepare(ca) {
+	for i, t := range prepared {
 		if t.spec.ContinuationOnly {
 			continue
 		}
-		hit := score(t)
+		hit := hits[i]
 		bestRaw = max(bestRaw, hit.Value)
 		if hit.Value < t.spec.Threshold {
 			continue
@@ -347,9 +482,10 @@ func (c *Catalog) hasOther() bool {
 
 // Hit 是单条模板的分数，供 CLI 打印。
 type Hit struct {
-	ID    string
-	Scene string
-	Value float64
+	ID     string
+	Scene  string
+	Value  float64
+	Bounds image.Rectangle // actual matched control, not its potentially overlapping search area
 }
 
 // ScoreAll 返回每条模板的分数，不表决。
@@ -361,10 +497,26 @@ func (c *Catalog) ScoreAll(img *image.RGBA) []Hit {
 	if !supported {
 		return nil
 	}
-	score := c.scorer(img)
+	memo := c.memo(img)
+	view := c.views(img, memo)
 	out := make([]Hit, 0, len(c.templates))
 	for _, t := range c.prepare(ca) {
-		out = append(out, score(t))
+		roi := t.roi.Intersect(img.Bounds())
+		if roi.Empty() || t.gray == nil {
+			out = append(out, Hit{ID: t.spec.ID, Scene: t.spec.Scene})
+			continue
+		}
+		if memo != nil {
+			memo.mu.Lock()
+			hit, ok := memo.full[t.index]
+			memo.mu.Unlock()
+			if ok {
+				out = append(out, hit)
+				continue
+			}
+		}
+		v := view(roi)
+		out = append(out, c.scoreOne(v.img, v.gray, t))
 	}
 	return out
 }
@@ -377,9 +529,9 @@ func (c *Catalog) contentArea(img *image.RGBA) (detect.ContentArea, bool) {
 	return detect.ResolveContentArea(img, c.mode, w, h, c.layoutCfg.AutoAspectTolerance)
 }
 
-// SupportsFight checks a separate, static battle control. This evidence cannot
-// establish a scene on its own; Gated also requires a previously identified
-// profile and fresh readable beads in both HUD corners.
+// SupportsFight checks a separate, static battle control for an established
+// match. A cold start instead needs StartFight's independent pair of controls
+// plus Gated's complete, legal current HUD.
 func (c *Catalog) SupportsFight(img *image.RGBA, profile string) bool {
 	ca, supported := c.contentArea(img)
 	if !supported {
@@ -390,11 +542,57 @@ func (c *Catalog) SupportsFight(img *image.RGBA, profile string) bool {
 		if !t.spec.ContinuationOnly || (t.spec.LayoutProfile != "" && t.spec.LayoutProfile != profile) {
 			continue
 		}
-		if score(t).Value >= t.spec.Threshold {
+		if _, ok := c.scoreAtHint(img, score, t); ok || score(t).Value >= t.spec.Threshold {
 			return true
 		}
 	}
 	return false
+}
+
+// StartFight is an alternative to a covered round/toolbar label, not a relaxed
+// bean-color gate. Both controls must pass their original template thresholds
+// in independent regions. Any accepted other-page or competing-profile marker
+// vetoes entry. Gated must verify both complete bean rows before calling this.
+func (c *Catalog) StartFight(img *image.RGBA, profile string) engine.GateDecision {
+	blocked := engine.GateDecision{Kind: engine.GateUncertain}
+	if profile != "camp" && profile != "duel" {
+		return blocked
+	}
+	ca, ok := c.contentArea(img)
+	if !ok {
+		return blocked
+	}
+	prepared, hits := c.prepare(ca), c.ScoreAll(img)
+	var regions []image.Rectangle
+	id, confidence := "", 1.0
+	for i, t := range prepared {
+		if hits[i].Value < t.spec.Threshold {
+			continue
+		}
+		if !c.fightSet[t.spec.Scene] || (t.spec.LayoutProfile != "" && t.spec.LayoutProfile != profile) {
+			return blocked
+		}
+		if !t.spec.ContinuationOnly {
+			continue
+		}
+		bounds := hits[i].Bounds
+		independent := !bounds.Empty()
+		for _, previous := range regions {
+			overlap := previous.Intersect(bounds)
+			if overlap.Dx()*overlap.Dy()*4 > min(previous.Dx()*previous.Dy(), bounds.Dx()*bounds.Dy()) {
+				independent = false
+			}
+		}
+		if independent {
+			regions = append(regions, bounds)
+			id = t.spec.Scene
+			confidence = min(confidence, hits[i].Value)
+		}
+	}
+	if len(regions) < 2 || confidence < c.cfg.MinFightScore {
+		return blocked
+	}
+	return engine.GateDecision{Kind: engine.GateFight, SceneID: id, Confidence: confidence, LayoutProfile: profile}
 }
 
 func (c *Catalog) prepare(ca detect.ContentArea) []preparedTemplate {
@@ -406,20 +604,80 @@ func (c *Catalog) prepare(ca detect.ContentArea) []preparedTemplate {
 	out := make([]preparedTemplate, len(c.templates))
 	for i, t := range c.templates {
 		out[i] = prepareOne(ca, t)
+		out[i].index = i
 	}
 	c.preparedArea, c.prepared = ca, out
+	c.hintMu.Lock()
+	c.hints = make([]templateHint, len(out)) // Peaks belong to one geometry only.
+	c.lastCold = make([]Hit, len(out))
+	c.coldAt, c.coldFrames = time.Time{}, 0
+	c.hintMu.Unlock()
 	return out
 }
 
+// coldScanDue reports whether templates without a remembered peak must be
+// searched on this frame. Time moving backwards (replay seek) always rescans.
+func (c *Catalog) coldScanDue(at time.Time, hotFight bool) bool {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	if !hotFight || c.coldAt.IsZero() || at.Before(c.coldAt) || at.Sub(c.coldAt) >= coldScanInterval || c.coldFrames >= coldScanEvery {
+		return true
+	}
+	c.coldFrames++
+	return false
+}
+
+func (c *Catalog) recordColdScan(at time.Time, hits []Hit) {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	c.coldAt, c.coldFrames = at, 0
+	if len(hits) == len(c.lastCold) {
+		copy(c.lastCold, hits)
+	}
+}
+
+func (c *Catalog) lastColdHit(index int) Hit {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	if index < 0 || index >= len(c.lastCold) {
+		return Hit{}
+	}
+	return c.lastCold[index]
+}
+
+func (c *Catalog) hint(index int) (templateHint, bool) {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	if index < 0 || index >= len(c.hints) {
+		return templateHint{}, false
+	}
+	return c.hints[index], c.hints[index].valid
+}
+
+func (c *Catalog) setHint(index int, peak image.Point, valid bool) {
+	c.hintMu.Lock()
+	defer c.hintMu.Unlock()
+	if index < 0 || index >= len(c.hints) {
+		return
+	}
+	c.hints[index] = templateHint{peak: peak, valid: valid}
+}
+
 func prepareOne(ca detect.ContentArea, t template) preparedTemplate {
-	roi := mapRect(ca, t.spec.ROI)
+	roi := mapRect(ca, t.spec.ROI, t.spec.Anchor, t.refW, t.refH)
 	out := preparedTemplate{spec: t.spec, roi: roi}
 	scale := t.spec.TemplateScale
 	if scale == 0 {
 		scale = 1
 	}
-	tw := int(math.Round(float64(t.gray.Bounds().Dx()) * float64(ca.W) / float64(t.refW) * scale))
-	th := int(math.Round(float64(t.gray.Bounds().Dy()) * float64(ca.H) / float64(t.refH) * scale))
+	twScale, thScale := float64(ca.W)/float64(t.refW), float64(ca.H)/float64(t.refH)
+	if t.spec.Anchor != "" && t.spec.Anchor != "legacy" {
+		// Fit the HUD reference without stretching widgets on 16:10 tablets.
+		twScale = ca.HUDScale(float64(t.refW), float64(t.refH))
+		thScale = twScale
+	}
+	tw := int(math.Round(float64(t.gray.Bounds().Dx()) * twScale * scale))
+	th := int(math.Round(float64(t.gray.Bounds().Dy()) * thScale * scale))
 	if tw < 4 {
 		tw = 4
 	}
@@ -440,54 +698,267 @@ func prepareOne(ca detect.ContentArea, t template) preparedTemplate {
 		out.mask = match.ScaleGray(t.mask, tw, th)
 	}
 	out.ncc = match.PrepareNCC(out.gray, out.mask)
+	if t.spec.ContinuationOnly && t.spec.Anchor == "screen" {
+		out.variants = &variantCache{}
+	}
 	return out
+}
+
+// scoreAll scores every primary template for one frame. Templates with a
+// remembered peak are checked first at that peak; when one of them confirms a
+// fight marker, the remaining cold templates are rescanned only on a bounded
+// cadence and otherwise keep their last full-scan score.
+//
+// Each stage may score its templates concurrently: a template writes only its
+// own slot and its own hint, and every reduction runs afterwards in template
+// order, so hits, hints and cold-scan bookkeeping match a sequential pass.
+func (c *Catalog) scoreAll(img *image.RGBA, prepared []preparedTemplate, at time.Time) []Hit {
+	score := c.scorer(img)
+	hits := make([]Hit, len(prepared))
+	done := make([]bool, len(prepared))
+	work := make([]int, 0, len(prepared))
+	for i, t := range prepared {
+		if !t.spec.ContinuationOnly {
+			if _, ok := c.hint(t.index); ok {
+				work = append(work, i)
+			}
+		}
+	}
+	c.forEach(len(work), func(k int) {
+		i := work[k]
+		hits[i], done[i] = c.scoreAtHint(img, score, prepared[i])
+	})
+	hotFight := false
+	for i, t := range prepared {
+		if done[i] && c.fightSet[t.spec.Scene] {
+			hotFight = true
+		}
+	}
+	if !c.coldScanDue(at, hotFight) {
+		for i, t := range prepared {
+			if !done[i] && !t.spec.ContinuationOnly {
+				hits[i] = c.lastColdHit(i)
+			}
+		}
+		return hits
+	}
+	work = work[:0]
+	for i, t := range prepared {
+		if !done[i] && !t.spec.ContinuationOnly {
+			work = append(work, i)
+		}
+	}
+	c.forEach(len(work), func(k int) {
+		i := work[k]
+		hits[i] = score(prepared[i])
+	})
+	if memo := c.memo(img); memo != nil {
+		// Full-ROI scans of this frame; StartFight's ScoreAll reuses them.
+		memo.mu.Lock()
+		for _, i := range work {
+			memo.full[prepared[i].index] = hits[i]
+		}
+		memo.mu.Unlock()
+	}
+	cold := make([]Hit, len(prepared))
+	for i := range prepared {
+		if !done[i] {
+			cold[i] = hits[i]
+		}
+	}
+	c.recordColdScan(at, cold)
+	return hits
+}
+
+// parallelScoring reports whether templates may be scored concurrently. Only
+// the stateless built-in NCC qualifies; injected matchers (tests, recorders)
+// may depend on call order and always run sequentially.
+func (c *Catalog) parallelScoring() bool {
+	_, ok := c.matcher.(match.NCC)
+	return ok
+}
+
+// forEach calls fn for 0..n-1 on a bounded worker pool, or inline when the
+// matcher must stay sequential or there is too little work to share.
+func (c *Catalog) forEach(n int, fn func(int)) {
+	workers := match.Workers(n)
+	if workers < 2 || !c.parallelScoring() {
+		for i := 0; i < n; i++ {
+			fn(i)
+		}
+		return
+	}
+	var next atomic.Int64
+	run := func() {
+		for {
+			i := int(next.Add(1) - 1)
+			if i >= n {
+				return
+			}
+			fn(i)
+		}
+	}
+	var wg safego.Group // A worker's panic reaches the caller after all finished.
+	for range workers - 1 {
+		wg.Go(run)
+	}
+	wg.Run(run) // The caller is one of the workers.
+	wg.Wait()
 }
 
 // scorer converts only searched rectangles, not the animation/background of
 // an entire frame. Variants with the same ROI share one gray image. Every view
 // belongs to this call; concurrent catalogs cannot race on reused pixel buffers.
+// The view map is shared by parallel template scoring; a view converted twice
+// for the same ROI holds identical pixels, so either copy yields the same score.
 func (c *Catalog) scorer(img *image.RGBA) func(preparedTemplate) Hit {
-	type grayView struct {
-		img  *image.RGBA
-		gray *image.Gray
-	}
-	views := make(map[image.Rectangle]grayView)
+	view := c.views(img, c.memo(img))
 	return func(t preparedTemplate) Hit {
 		roi := t.roi.Intersect(img.Bounds())
 		if roi.Empty() || t.gray == nil {
 			return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
 		}
-		view, ok := views[roi]
-		if !ok {
-			view.img = img.SubImage(roi).(*image.RGBA)
-			view.gray = match.ToGray(view.img)
-			views[roi] = view
-		}
-		return c.scoreOne(view.img, view.gray, t)
+		v := view(roi)
+		return c.scoreHinted(v.img, v.gray, t)
 	}
 }
 
+// views returns a concurrency-safe ROI -> gray view converter for img. With a
+// frame memo the views are shared by every gate call on this frame.
+func (c *Catalog) views(img *image.RGBA, memo *frameMemo) func(image.Rectangle) grayView {
+	mu, views := new(sync.Mutex), make(map[image.Rectangle]grayView)
+	if memo != nil {
+		mu, views = &memo.mu, memo.views
+	}
+	return func(roi image.Rectangle) grayView {
+		mu.Lock()
+		view, ok := views[roi]
+		mu.Unlock()
+		if !ok {
+			view.img = img.SubImage(roi).(*image.RGBA)
+			view.gray = match.ToGray(view.img)
+			mu.Lock()
+			if prior, ok := views[roi]; ok {
+				view = prior
+			} else {
+				views[roi] = view
+			}
+			mu.Unlock()
+		}
+		return view
+	}
+}
+
+// scoreAtHint checks only the remembered peak window. A template that still
+// scores at or above its threshold there is present and its peak is refreshed;
+// the boolean is false when there is no hint or the window misses.
+func (c *Catalog) scoreAtHint(img *image.RGBA, score func(preparedTemplate) Hit, t preparedTemplate) (Hit, bool) {
+	hint, ok := c.hint(t.index)
+	if !ok || t.gray == nil {
+		return Hit{}, false
+	}
+	roi := t.roi.Intersect(img.Bounds())
+	if roi.Empty() {
+		return Hit{}, false
+	}
+	size := t.gray.Bounds().Size()
+	window := image.Rectangle{Min: hint.peak.Sub(image.Pt(hintRadius, hintRadius)), Max: hint.peak.Add(image.Pt(hintRadius, hintRadius)).Add(size)}.Intersect(roi)
+	if window.Dx() < size.X || window.Dy() < size.Y {
+		return Hit{}, false
+	}
+	windowed := t
+	windowed.roi, windowed.windowed = window, true
+	hit := score(windowed)
+	if hit.Value < t.spec.Threshold {
+		return Hit{}, false
+	}
+	return hit, true
+}
+
+// scoreHinted searches the whole ROI and remembers the peak when the template
+// is present, or clears a stale hint. Every value is a real NCC score on this
+// frame; the diagnostics path (scoreOne) never touches hints.
+func (c *Catalog) scoreHinted(img *image.RGBA, gray *image.Gray, t preparedTemplate) Hit {
+	if t.gray == nil {
+		return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
+	}
+	s, err := c.matchIn(img, gray, t.roi, t)
+	if err != nil {
+		if !t.windowed {
+			c.setHint(t.index, image.Point{}, false)
+		}
+		return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
+	}
+	if s.Value >= t.spec.Threshold {
+		c.setHint(t.index, s.Peak, true)
+	} else if !t.windowed {
+		c.setHint(t.index, image.Point{}, false) // Only a full-ROI miss forgets the peak.
+	}
+	return Hit{ID: t.spec.ID, Scene: t.spec.Scene, Value: s.Value, Bounds: image.Rectangle{Min: s.Peak, Max: s.Peak.Add(t.gray.Bounds().Size())}}
+}
+
+// scoreOne is the exhaustive form used by diagnostics; it never reads hints.
 func (c *Catalog) scoreOne(img *image.RGBA, gray *image.Gray, t preparedTemplate) Hit {
 	if t.gray == nil {
 		return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
 	}
-	s, err := c.matcher.Match(match.Query{
-		Image:    img,
-		Gray:     gray,
-		ROI:      t.roi,
-		Template: t.gray,
-		Mask:     t.mask,
-		Prepared: t.ncc,
-	})
+	s, err := c.matchIn(img, gray, t.roi, t)
 	if err != nil {
 		return Hit{ID: t.spec.ID, Scene: t.spec.Scene}
 	}
-	return Hit{ID: t.spec.ID, Scene: t.spec.Scene, Value: s.Value}
+	return Hit{ID: t.spec.ID, Scene: t.spec.Scene, Value: s.Value, Bounds: image.Rectangle{Min: s.Peak, Max: s.Peak.Add(t.gray.Bounds().Size())}}
 }
 
-func mapRect(ca detect.ContentArea, r config.NormalizedRect) image.Rectangle {
-	x0, y0 := ca.Map(r.X*detect.LogicWidth, r.Y*detect.LogicHeight)
-	x1, y1 := ca.Map((r.X+r.Width)*detect.LogicWidth, (r.Y+r.Height)*detect.LogicHeight)
+func (c *Catalog) matchIn(img *image.RGBA, gray *image.Gray, roi image.Rectangle, t preparedTemplate) (match.Score, error) {
+	best, err := c.matcher.Match(match.Query{Image: img, Gray: gray, ROI: roi, Template: t.gray, Mask: t.mask, Prepared: t.ncc})
+	if err != nil || !t.spec.ContinuationOnly || t.spec.Anchor != "screen" || best.Value < .65 || best.Value >= t.spec.Threshold || !c.parallelScoring() {
+		return best, err
+	}
+	// Key-size settings and integer resampling need not share the name HUD's
+	// exact scale. Refine an already plausible location, not a global sweep or
+	// a lower threshold. Scale variants of the same control still count once.
+	peak := best.Peak
+	for dw := -2; dw <= 2; dw++ {
+		for dh := -2; dh <= 2; dh++ {
+			w, h := t.gray.Bounds().Dx()+dw, t.gray.Bounds().Dy()+dh
+			if (dw == 0 && dh == 0) || w < 4 || h < 4 {
+				continue
+			}
+			// Only the built-in NCC gets here; it scores the prepared variant
+			// exactly as it would prepare ScaleGray(template/mask) itself.
+			var prepared *match.PreparedNCC
+			if t.variants != nil {
+				prepared = t.variants.get(t, w, h)
+			} else {
+				var mask *image.Gray
+				if t.mask != nil {
+					mask = match.ScaleGray(t.mask, w, h)
+				}
+				prepared = match.PrepareNCC(match.ScaleGray(t.gray, w, h), mask)
+			}
+			window := (image.Rectangle{Min: peak, Max: peak.Add(image.Pt(w, h))}).Inset(-2).Intersect(roi)
+			candidate, e := c.matcher.Match(match.Query{Image: img, Gray: gray, ROI: window, Prepared: prepared})
+			if e == nil && candidate.Value > best.Value {
+				best = candidate
+			}
+		}
+	}
+	return best, nil
+}
+
+func mapRect(ca detect.ContentArea, r config.NormalizedRect, anchor string, refW, refH int) image.Rectangle {
+	var x0, y0, x1, y1 int
+	// Controls may move within the screen's lower panel on tall tablets or
+	// custom key layouts. Search that screen region, but keep their templates
+	// at the fitted HUD scale (unlike legacy's stretched template geometry).
+	if anchor == "" || anchor == "legacy" || anchor == "screen" {
+		x0, y0 = ca.Map(r.X*detect.LogicWidth, r.Y*detect.LogicHeight)
+		x1, y1 = ca.Map((r.X+r.Width)*detect.LogicWidth, (r.Y+r.Height)*detect.LogicHeight)
+	} else {
+		p0 := mapAnchoredPoint(ca, r.X, r.Y, refW, refH, anchor)
+		p1 := mapAnchoredPoint(ca, r.X+r.Width, r.Y+r.Height, refW, refH, anchor)
+		x0, y0, x1, y1 = p0.X, p0.Y, p1.X, p1.Y
+	}
 	if x1 <= x0 {
 		x1 = x0 + 1
 	}
@@ -495,6 +966,21 @@ func mapRect(ca detect.ContentArea, r config.NormalizedRect) image.Rectangle {
 		y1 = y0 + 1
 	}
 	return image.Rect(x0, y0, x1, y1)
+}
+
+func mapAnchoredPoint(ca detect.ContentArea, x, y float64, refW, refH int, anchor string) image.Point {
+	s := ca.HUDScale(float64(refW), float64(refH))
+	logicalX := x * float64(refW)
+	var px float64
+	switch anchor {
+	case "right":
+		px = float64(ca.X+ca.W) - (float64(refW)-logicalX)*s
+	case "center":
+		px = float64(ca.X) + float64(ca.W)/2 + (logicalX-float64(refW)/2)*s
+	default: // left
+		px = float64(ca.X) + logicalX*s
+	}
+	return image.Pt(int(px), ca.Y+int(y*float64(refH)*s))
 }
 
 func lumaBlank(img *image.RGBA) (bool, engine.GateKind) {

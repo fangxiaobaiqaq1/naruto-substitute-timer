@@ -13,16 +13,6 @@ import (
 	"narutotimer/internal/win"
 )
 
-// ProcessChoice is a selectable target. Its identity is Instance.Root plus
-// Instance.Index; PID is explanatory evidence and is never used as a saved
-// target because it changes when MuMu restarts.
-type ProcessChoice struct {
-	Instance
-	WindowTitle string `json:"window_title,omitempty"`
-	ProcessName string `json:"process_name,omitempty"`
-	IndexSource string `json:"index_source,omitempty"`
-}
-
 func sameRoot(left, right string) bool {
 	return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
 }

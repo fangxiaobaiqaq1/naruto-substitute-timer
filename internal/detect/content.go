@@ -6,9 +6,8 @@ import (
 )
 
 // ResolveContentArea maps calibrated coordinates into an actual screenshot.
-// Auto accepts a different aspect ratio only when the predicted surrounding bars
-// are visibly black. A native wider/taller HUD is a different layout, not proof
-// of letterboxing. The boolean is false when its geometry cannot be established.
+// Auto treats visibly black surrounding bars as letterboxing; otherwise it keeps
+// the full native surface because the game HUD itself adapts to screen height.
 func ResolveContentArea(img *image.RGBA, mode ContentMode, referenceWidth, referenceHeight int, aspectTolerance float64) (ContentArea, bool) {
 	if img == nil || img.Bounds().Empty() || referenceWidth <= 0 || referenceHeight <= 0 {
 		return ContentArea{}, false
@@ -44,19 +43,22 @@ func ResolveContentArea(img *image.RGBA, mode ContentMode, referenceWidth, refer
 		{Min: image.Pt(content.Max.X+2, content.Min.Y), Max: image.Pt(b.Max.X, content.Max.Y)},
 	}
 	checked := 0
+	allBlack := true
 	for _, bar := range bars {
 		if bar.Empty() {
 			continue
 		}
 		checked++
 		if !blackBar(img, bar) {
-			return ContentArea{}, false
+			allBlack = false
 		}
 	}
-	if checked < 2 {
-		return ContentArea{}, false
+	if checked >= 2 && allBlack {
+		return area, true
 	}
-	return area, true
+	// A non-16:9 screenshot without centered black bars is a native full-screen
+	// HUD (for example 18:9, 21:9, or a tall emulator surface), not unsupported.
+	return full, true
 }
 
 func blackBar(img *image.RGBA, r image.Rectangle) bool {

@@ -1,0 +1,325 @@
+# Frame sequences replayed by SessionCheck.kt (Android Session) and gosession.go (Go captureOnce).
+# run.sh diffs the two outputs line by line; every `report` must print the same line on both sides.
+#
+#   == name                 new scenario (fresh session; time 0)
+#   set k=v ...             side=left|right|auto (remember on), names=a|b, ninja=<override>
+#   f [xN] [+D] k=v ...     N frames (default 1); time += D ms after each (default 50)
+#   wait D                  time += D ms
+#   restart                 a new capture run (Android FrameLoop start). Go has no such call: its
+#                           outages arrive as failed captures; the Go side applies their cadence
+#                           effect (ObservationCadence.Next without a time) directly
+#   report                  canonical state at the current time
+#
+# Frame keys (defaults): beads=4/4 (ready L/R, or none, unknown) slots=4/4 meta=<slots>
+#   fight=1 hold=0 scene=fight profile=duel size=1280x576 method=android-media-projection
+#   ro=0 (round-opening marker) ln= rn= lc= rc= (ninja / candidate) ps= pn= on= (player side/name, opp name)
+#   dup=0 ts=0 (timestamp offset ms) fail=<msg> (capture/analysis failure: no image, no time, hold+err)
+#   shot=A/B (screenshot taken A ms after the request, callback after B ms; Go stamps the taking time)
+
+== basic: one confirmed right drop
+set side=left
+f x3 beads=4/4
+f x2 beads=4/3
+report
+
+== AND-02 hold frame guessing another layout keeps the match
+set side=left
+f x3 beads=4/4
+f x2 beads=4/3
+f fight=0 hold=1 scene= profile=camp beads=unknown
+f beads=4/3
+report
+
+== AND-02 non-fight frame with another layout keeps the match
+set side=left
+f x3 beads=4/4
+f x2 beads=4/3
+f fight=0 scene= profile=camp beads=none
+f beads=4/3
+report
+
+== AND-02 a fight frame with another layout still starts a new match
+set side=left
+f x3 beads=4/4
+f x2 beads=4/3
+f x2 beads=4/4 profile=camp
+report
+
+== AND-03 first frame of a new source is a hold frame
+set side=left
+f x3 beads=4/4
+f hold=1 size=2400x1080 method=android-accessibility-screenshot +350
+f x3 beads=4/3 size=2400x1080 method=android-accessibility-screenshot +350
+report
+
+== AND-03 failure frame keeps the known source
+set side=left
+f x3 beads=4/4
+f fail=lost
+f x3 beads=4/3 size=2400x1080 method=android-accessibility-screenshot +350
+report
+
+== AND-04 six-slot side across VS keeps the inherited baseline
+set side=left
+f x3 beads=4/3 slots=4/6
+f x3 fight=0 hold=1 scene=vs profile= beads=none +400
+f beads=4/4 slots=4/6
+f x3 beads=4/3 slots=4/6
+report
+
+== AND-04 confirmed ninja survives hold and VS frames (10 s clock, tag)
+set side=left
+f x3 beads=4/4 rn=照美冥[五代目水影]
+f x2 beads=4/3 rn=照美冥[五代目水影]
+report
+f fight=0 hold=1 scene= profile= beads=none
+report
+f x2 fight=0 hold=1 scene=vs profile= beads=none
+report
+
+== AND-04 hold frames keep the recent ninja name for 2 s, then the candidate shows
+set side=left
+f x3 beads=4/4 rn=照美冥[五代目水影]
+f x2 hold=1 beads=4/4 rc=半藏[秽土转生] +1500
+report
+f hold=1 beads=4/4 rc=半藏[秽土转生]
+report
+
+== AND-07 round-opening marker on a hold frame starts the round
+set side=left
+f x3 beads=4/4
+f x2 beads=4/3
+f hold=1 ro=1 beads=unknown
+f x6 beads=4/4
+report
+
+== AND-07 failure during a hold freeze drops the inherited baseline
+set side=left
+f x3 beads=4/3
+f x2 fight=0 hold=1 scene=vs profile= beads=none
+f fail=lost
+f beads=4/4
+f x2 beads=4/3
+report
+
+== AND-07 a non-end frame resets the leave count
+set side=left
+f x3 beads=4/4
+f x2 beads=4/3
+f x5 fight=0 scene=result profile= beads=none
+f fight=0 scene=color-other profile= beads=none
+f x5 fight=0 scene=result profile= beads=none
+f fight=0 scene=color-other profile= beads=none
+f beads=4/3
+report
+
+== AND-07 an older timestamp resets the leave count instead of being dropped
+set side=left
+f x3 beads=4/4
+f x2 beads=4/3
+f x9 fight=0 scene=result profile= beads=none
+f fight=0 scene=result profile= beads=none ts=-500
+f x2 fight=0 scene=result profile= beads=none
+f beads=4/3
+report
+
+== AND-07 leaving the fight keeps the hold freeze
+set side=left
+f x3 beads=4/4
+f fight=0 hold=1 scene=vs profile= beads=none
+f x10 fight=0 scene=result profile= beads=none
+report
+
+== AND-07 a read player name is not mine when no names are configured
+set side=auto
+f x2 beads=4/4 ps=right pn=路人甲 on=对手
+report
+f beads=4/4 ps=right
+report
+
+== AND-07 a configured player name still sets the side
+set side=auto names=鸣人
+f x2 beads=4/4 ps=left pn=鸣人 on=对手
+report
+
+== AND-07 the 10 s clock stays hidden while no side is known
+set side=auto ninja=照美冥[五代目水影]
+f x2 beads=4/4
+report
+
+== AND-07 the 10 s clock turns amber in its last 3 s
+set side=left
+f x3 beads=4/4 rn=照美冥[五代目水影]
+f x2 beads=4/3 rn=照美冥[五代目水影]
+wait 7900
+report
+
+== AND-13 screenshot frames carry the screenshot time, not the callback time
+set side=left
+f x3 beads=4/4 method=android-accessibility-screenshot shot=20/140 +333
+f x2 beads=4/3 method=android-accessibility-screenshot shot=20/140 +333
+report
+
+# ---- Go T1 follow-up: GE-02 observation cadence, GE-09 method of image-less frames ----
+# GE-02 (app.ObservationCadence): every frame with a capture time is a cadence sample (holds and
+# duplicates included), a failed capture breaks the chain, and a frame's gap is 3x the cadence
+# measured BEFORE it (floor 150 ms / 3x poll, ceiling 8 s).
+
+== GE-02 an occlusion longer than 3x the cadence resyncs the baseline
+set side=left
+f x6 beads=4/4
+f x6 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 an earlier cut-in does not widen the tolerance for a later occlusion
+set side=left
+f x6 beads=4/4
+f x50 hold=1 beads=unknown
+f x6 beads=4/4
+f x12 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 the same occlusion without an earlier cut-in also resyncs
+set side=left
+f x12 beads=4/4
+f x12 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 a failed capture breaks the cadence chain: the outage is not a sample
+set side=left
+f x6 beads=4/4
+f fail=lost +2000
+f x6 beads=4/4
+f x6 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 a capture restart breaks the cadence chain like a failed capture
+set side=left
+f x6 beads=4/4
+wait 2000
+restart
+f x6 beads=4/4
+f x6 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 non-fight and hold frames all count toward the cadence
+set side=left
+f x5 fight=0 scene= profile= beads=none +400
+f x4 beads=4/4
+f x5 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 duplicate frames are cadence samples and keep a slow cadence's drop confirmable
+set side=left
+f x3 beads=4/4 +200
+f beads=4/3 +200
+f x2 beads=4/3 dup=1 +200
+f beads=4/3 +200
+report
+
+== GE-02 an older frame is no cadence sample
+set side=left
+f x6 beads=4/4
+f beads=4/4 ts=-400
+f x2 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+# GE-09: only a frame that carries an image can change the capture method.
+
+== GE-09 a failure frame naming another method is not a source change
+set side=left
+f x3 beads=4/4
+f beads=4/3
+f fail=lost method=android-buffer
+f x2 beads=4/3
+report
+
+== GE-09 a real method switch is detected at the first image of the new method
+set side=left
+f x3 beads=4/4
+f fail=lost method=android-accessibility-screenshot
+f beads=4/3
+f x2 beads=4/3 method=android-accessibility-screenshot
+report
+
+# ---- regression guards (paths shared by the fixes; equal before and after is fine) ----
+
+== guard: candidate until a name is confirmed; another candidate replaces the name
+set side=left
+f x2 beads=4/4 rc=半藏[秽土转生]
+report
+f x2 beads=4/4 rn=半藏[秽土转生]
+report
+f x2 beads=4/4 rc=照美冥[五代目水影]
+report
+
+== guard: ninja override keeps the 10 s clock through VS with a known side
+set side=left ninja=半藏[秽土转生]
+f x3 beads=4/4
+f x2 beads=4/3
+f x2 fight=0 hold=1 scene=vs profile= beads=none
+report
+
+== guard: duplicate frames keep continuity without votes
+set side=left
+f x3 beads=4/4
+f beads=4/3
+f x3 beads=4/3 dup=1
+report
+f beads=4/3
+report
+
+== guard: round opening on readable frames, then a real drop
+set side=left
+f x3 beads=4/4
+f x2 beads=4/3
+f x3 ro=1 beads=4/4
+f x2 ro=1 beads=4/3
+f x6 beads=4/4
+f x2 beads=4/3
+report
+
+== guard: source change on a fight frame resyncs; a later drop counts
+set side=left
+f x3 beads=4/4
+f x2 beads=4/3 size=1600x720
+f x2 beads=4/2 size=1600x720
+report
+
+== guard: a failure frame does not touch a six-slot topology
+set side=left
+f x3 beads=4/6 slots=4/6
+f fail=lost
+f beads=4/6 slots=4/6
+f x2 beads=4/5 slots=4/6
+report
+
+== guard: an older fight frame neither votes nor breaks a pending drop
+set side=left
+f x3 beads=4/4
+f beads=4/3
+f beads=4/4 ts=-120
+f beads=4/3
+report
+
+== guard: hold fight frames still show the beads
+set side=left
+f x3 beads=4/4
+f hold=1 beads=4/3
+report
+
+== guard: a result frame clears the auto side and ends the match after 10 frames
+set side=auto
+f x2 beads=4/4 ps=left
+f x2 beads=4/3 ps=left
+f fight=0 scene=result profile= beads=none
+report
+f x9 fight=0 scene=result profile= beads=none
+report
