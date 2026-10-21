@@ -84,8 +84,7 @@ type session struct {
 	roundBaseline       [2]bool // Each side leaves opening calibration independently.
 	roundOpeningActive  bool    // Opening marker can briefly disappear behind animation effects.
 	roundOpeningSeenAt  time.Time
-	lastBeadAt          time.Time
-	cadenceEMA          time.Duration
+	cadence             timerapp.ObservationCadence
 	syncLeft            bool
 	syncRight           bool
 	scene               string
@@ -749,6 +748,11 @@ func (s *session) captureOnce() {
 		return
 	}
 	s.traceFrame = trace
+	// Every delivered frame is a cadence sample, holds and duplicates included;
+	// the bound for this frame comes from the cadence before it.
+	gap := s.cadence.Next(f.CapturedAt, time.Duration(s.cfg.UI.PollIntervalMS)*time.Millisecond)
+	s.left.SetObservationGap(gap)
+	s.right.SetObservationGap(gap)
 	width, height := 0, 0
 	if f.Img != nil {
 		width, height = f.Img.Bounds().Dx(), f.Img.Bounds().Dy()
@@ -926,35 +930,9 @@ func (s *session) observeRoundOpening(f frame.Frame) {
 	s.armRoundBaseline()
 }
 
+// observeBeads feeds one usable fight frame to the clocks. captureOnce has
+// already set their observation gap from the capture cadence.
 func (s *session) observeBeads(f frame.Frame) {
-	// The observation gap guards against bridging unrelated states across a
-	// capture blackout. It must therefore scale with the REAL frame cadence:
-	// engine work (recognition scans) can push inter-frame intervals far past
-	// the poll interval, and a fixed floor would then treat every frame as a
-	// discontinuity, resetting the baseline so a real bead drop can never
-	// gather its confirmation frames. Track an EMA of actual intervals.
-	interval := time.Duration(0)
-	if !s.lastBeadAt.IsZero() && f.CapturedAt.After(s.lastBeadAt) {
-		interval = f.CapturedAt.Sub(s.lastBeadAt)
-	}
-	if s.cadenceEMA <= 0 {
-		s.cadenceEMA = interval
-	} else if interval > 0 {
-		s.cadenceEMA = s.cadenceEMA*3/4 + interval/4
-	}
-	s.lastBeadAt = f.CapturedAt
-	gap := time.Duration(s.cfg.UI.PollIntervalMS*3) * time.Millisecond
-	if adaptive := s.cadenceEMA * 3; adaptive > gap {
-		gap = adaptive
-	}
-	if gap < 150*time.Millisecond {
-		gap = 150 * time.Millisecond
-	}
-	if gap > 8*time.Second {
-		gap = 8 * time.Second
-	}
-	s.left.SetObservationGap(gap)
-	s.right.SetObservationGap(gap)
 	lc, rc := countReady(f.Beads)
 	cd := s.cooldown()
 	need := s.cfg.Tracking.MinimumConfirmFrames
