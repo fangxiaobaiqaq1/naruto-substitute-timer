@@ -140,7 +140,10 @@ func newSelectableSnapshotterLegacy(eng engine.Engine, cfg config.Config) (Provi
 func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.CaptureConfig) uint64, func() CaptureState) {
 	var selectionMu sync.Mutex
 	selected := cfg.Capture
-	var revision, activeRevision uint64
+	var revision uint64
+	// activeRevision and appliedConfig describe one moment: the worker (their
+	// only writer) changes both under stateMu and state() reads both under it.
+	var activeRevision uint64
 	var appliedConfig = cfg.Capture
 	var stateMu sync.RWMutex
 	var lastCaptureError string
@@ -200,11 +203,11 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 			cfg.Capture = next
 			stateMu.Lock()
 			appliedConfig = next
+			activeRevision = rev
 			stateSource = ""
 			lastCaptureError = ""
 			stateMu.Unlock()
 			retryAfter = time.Time{}
-			activeRevision = rev
 		}
 		var f Frame
 		for _, method := range preferredMethods(cfg.Capture) {
@@ -303,10 +306,10 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 	state := func() CaptureState {
 		selectionMu.Lock()
 		requestedRevision := revision
-		appliedRevision := activeRevision
 		requested := selected
 		selectionMu.Unlock()
 		stateMu.RLock()
+		appliedRevision := activeRevision
 		applied := appliedConfig
 		lastError := lastCaptureError
 		source := stateSource
