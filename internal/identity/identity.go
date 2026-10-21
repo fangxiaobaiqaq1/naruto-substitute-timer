@@ -14,6 +14,7 @@ import (
 
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
+	"narutotimer/internal/imgsafe"
 	"narutotimer/internal/match"
 )
 
@@ -146,13 +147,10 @@ func labelFromFile(name string) string {
 	return NormalizeName(base)
 }
 
+// loadImage reads a user-placed template or a saved crop. The header is
+// checked before decoding so one oversized file cannot exhaust memory at start.
 func loadImage(path string) (image.Image, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
+	img, _, err := imgsafe.DecodeFile(path, imgsafe.Asset)
 	return img, err
 }
 
