@@ -244,9 +244,10 @@ Go → C++ 翻译规则：
 | `nativeFinishAssets()` | `()Z` | `config::Default()` + playerNames + 区域校准 → `frame::Pipeline`（engine 构建）；失败看 `nativeLastError` |
 | `nativeLastError()` | `()String` | |
 | `nativeSetPlayerNames(names)` | `([String)V` | → `identity::SetMineNames`（Guesser 按 revision 重载名册） |
-| `nativeSetCalibration(profile, rects)` | `(String,float[])Z` | 区域校准（docs/区域校准.md）：`profile` camp/duel，`rects` 16 个整帧比例，按 `Settings.KEY_CALIB_RECTS`（左豆、右豆、左头像、右头像）各 x,y,w,h，含 NaN 的框 = 自动。存在 `g_calibration`（跨 `nativeInit` 保留）；引擎已建好时 `Pipeline::Rebuild`（新引擎 + 清空去重/交付状态，序号继续），同一画面下一帧即按新框识别且不算 Duplicate；重建失败保留旧引擎并返回 false。Kotlin：`NativeCore.setCalibration(settings)` |
-| `nativeAnalyzeHardwareBuffer(hb, capturedAtNanos, method, out)` | `(HardwareBuffer,long,int,ByteBuffer)I` | `AHardwareBuffer_lock(CPU_READ_OFTEN)` 零拷贝，格式须为 RGBA_8888/RGBX_8888 |
+| `nativeSetCalibration(profile, rects)` | `(String,float[])Z` | 区域校准（docs/区域校准.md）：`profile` camp/duel，`rects` 16 个整帧比例，按 `Settings.KEY_CALIB_RECTS`（左豆、右豆、左头像、右头像）各 x,y,w,h，含 NaN 的框 = 自动；超出画面或「框的大小限制」的框引擎也按自动（写日志）。存在 `g_calibration`（跨 `nativeInit` 保留）；引擎已建好时 `Pipeline::Rebuild`（新引擎 + 清空去重/交付状态，序号继续），同一画面下一帧即按新框识别且不算 Duplicate；重建失败保留旧引擎并返回 false。Kotlin：`NativeCore.setCalibration(settings)` |
+| `nativeAnalyzeHardwareBuffer(hb, capturedAtNanos, method, out)` | `(HardwareBuffer,long,int,ByteBuffer)I` | `AHardwareBuffer_lock(CPU_READ_OFTEN)` 零拷贝，格式须为 RGBA_8888/RGBX_8888（X 字节不进帧指纹）；描述不是单层、`0 < width ≤ stride ≤ INT_MAX/4`、`0 < height ≤ INT_MAX` 的缓冲拒绝（返回 0，Kotlin 走位图路径）；每条路径都 unlock + release |
 | `nativeAnalyzeBuffer(pixels, w, h, rowStride, capturedAtNanos, method, out)` | `(ByteBuffer,int,int,int,long,int,ByteBuffer)I` | direct RGBA8 |
+| `nativeCopyLastResult(out)` | `(ByteBuffer)I` | 本线程上一次返回 `-need` 的分析结果（同一次分析，不重新识别）：写入字节数；`out` 仍放不下 = `-need`；没有 = 0 |
 | `nativeTakeOppCrop()` | `()[I` | `[w, h, argb...]` 或 null |
 | `nativeLastGeometry()` | `()[F` | 最近一次分析（含去重复用）帧的每帧几何（docs/区域校准.md），布局见下；还没有分析过帧或引擎刚重建（`nativeInit/nativeFinishAssets/nativeSetCalibration/nativeRelease`）时为 null。Kotlin：`NativeCore.lastGeometry(): FrameGeometry?` |
 | `nativeResetDelivery()` / `nativeRelease()` / `nativeResultHeaderBytes()` | | |
@@ -255,7 +256,7 @@ Go → C++ 翻译规则：
 `capturedAtNanos` ≤ 0 时 native 用 `NowNs()`；它同时作为 Go 的 `started` 与 `capturedAt`。
 
 **返回值**：`>0` = 写入字节数；`0` = 未就绪/错误（`nativeLastError`）；`<0` = 输出缓冲太小，需要 `-r` 字节
-（NativeCore 自动扩容重试一次）。
+（NativeCore 扩容后用 `nativeCopyLastResult` 取同一次分析的结果：重新分析会多用一个序号、并被判成 Duplicate+Reused）。
 
 **结果编码 v1（小端，写入调用方预分配的 direct ByteBuffer，零 JNI 对象分配）**
 
@@ -284,10 +285,14 @@ Kotlin `NativeCore.Decoder` 每线程复用缓冲，字节相同的字符串复�
 **每帧几何（`nativeLastGeometry`，float 数组）**：`[0]` width，`[1]` height（像素），`[2]` 布局（0 无，1 camp，2 duel），
 `[3]` Sequence & 0xFFFFFF，`[4]` Sequence >> 24（= 该帧 `AnalysisResult.sequence`）；之后左、右各一段：`n`，`n` 组豆心 `x, y`，
 `nameRoi x, y, w, h`，`avatarRoi x, y, w, h`（像素，不裁剪，空 = 0），`beadBox x, y, w, h`，`avatarBox x, y, w, h`（整帧比例，w = 0 = 没有）。
-分析帧时在 `g_mu` 内整帧替换，取的时候整帧复制，所以两侧一定属于同一帧。
+分析帧时在 `g_cfgMu` 内整帧替换，取的时候整帧复制，所以两侧一定属于同一帧。
 
-全局锁：jni.cpp 的 `g_mu` 串行化 `nativeFinishAssets/nativeAnalyze*/nativeSetPlayerNames/nativeSetCalibration/nativeTakeOppCrop/nativeLastGeometry`，
-所以识别核心只在一个线程上被调用（帧内并行另见 nt/parallel.h）。
+锁（jni.cpp，固定顺序 `g_analysisMu` → `g_cfgMu`）：`g_analysisMu` 串行化引擎的使用与生命周期
+（`nativeAnalyze*` 整帧、`nativeInit/nativeFinishAssets`、`nativeSetCalibration` 的重建、`nativeResetDelivery/nativeRelease`），
+所以识别核心只在一个线程上被调用（帧内并行另见 nt/parallel.h）；`g_cfgMu` 只短暂保护账号名、校准、`lastError` 与每帧几何，
+`nativeSetPlayerNames/nativeLastError/nativeLastGeometry` 只用它，不会等正在分析的一帧（UI 线程改名字不卡）。
+`nativeTakeOppCrop` 只用 identity 自己的锁。进程级状态（引擎、配置、AssetStore、identity 与头像图鉴的全局量、常量字符串）
+一律 `*new`、永不析构：`exit()` 跑静态析构时分析线程与线程池可能还在一帧里。
 
 ---
 
@@ -327,7 +332,7 @@ MediaProjection VirtualDisplay(1280×720) ─▶ ImageReader(RGBA_8888, maxImage
         │  FrameLoop.offer(CapturedFrame)          ← 单槽 latest-frame-wins：被替换的旧帧立即 close()
         ▼
    单一分析线程 "nt-analysis"
-        NativeCore.analyzeHardwareBuffer(hb, capturedAt, METHOD_PROJECTION)   // 零拷贝；native 全局锁
+        NativeCore.analyzeHardwareBuffer(hb, capturedAt, METHOD_PROJECTION)   // 零拷贝；native 分析锁
           └ native 帧内并行：nt::ParallelFor（≤3 个常驻池线程 + 本线程）
         TimerApp.session.onFrame(result)       // Session 内部锁；状态原子发布（revision++）
         AssetLoader.drainOppCrop(context)

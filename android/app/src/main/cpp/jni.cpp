@@ -6,8 +6,13 @@
 //    Pipeline::Analyze → 编码进调用方预分配的 direct ByteBuffer（格式见 ARCHITECTURE.md §JNI）。
 //  * 捕获所有 C++ 异常：JNI 边界之外绝不抛出。
 //
-// 线程：所有 nativeAnalyze* / nativeFinishAssets / nativeSetPlayerNames / nativeSetCalibration / nativeLastGeometry 共用一把全局锁，
-// 识别核心因此只会在一个线程上运行（Go 里的 sync.Mutex 在 C++ 中可省略）。
+// 线程：两把锁，固定顺序 g_analysisMu → g_cfgMu（反过来从不）。
+//  * g_analysisMu：引擎的使用与生命周期（nativeAnalyze* 整帧、nativeInit / nativeFinishAssets /
+//    nativeSetCalibration 的重建 / nativeResetDelivery / nativeRelease），识别核心因此只会在一个线程上运行
+//    （Go 里的 sync.Mutex 在 C++ 中可省略）。
+//  * g_cfgMu：配置与报告（g_playerNames / g_calibration / g_lastError / g_lastGeometry），只短暂持有。
+//    nativeSetPlayerNames / nativeLastError / nativeLastGeometry 只用它，UI 线程不会等一整帧（audit NC-08）。
+// 进程级状态一律 *new、永不析构：exit() 跑静态析构时分析线程和线程池可能还在一帧里（audit NC-06）。
 // 方法通过 RegisterNatives 注册，库本身 -fvisibility=hidden，只导出 JNI_OnLoad。
 
 #include <android/hardware_buffer.h>
@@ -16,6 +21,7 @@
 #include <jni.h>
 
 #include <array>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -173,14 +179,15 @@ jint encodeFrame(const nt::frame::Frame& f, uint8_t* out, size_t cap) {
 }
 
 // ---------------------------------------------------------------------------
-// 全局状态
+// 全局状态（never destroyed, see the header comment）
 // ---------------------------------------------------------------------------
-std::mutex g_mu;  // 保护 g_pipeline / g_playerNames / g_calibration / g_lastError / g_lastGeometry
-std::unique_ptr<nt::frame::Pipeline> g_pipeline;
-std::vector<std::string> g_playerNames;
+std::mutex& g_analysisMu = *new std::mutex;  // g_pipeline
+std::mutex& g_cfgMu = *new std::mutex;       // g_playerNames / g_calibration / g_lastError / g_lastGeometry
+std::unique_ptr<nt::frame::Pipeline>& g_pipeline = *new std::unique_ptr<nt::frame::Pipeline>;
+std::vector<std::string>& g_playerNames = *new std::vector<std::string>;
 // 区域校准（docs/区域校准.md）：nullopt = 全部自动。与 g_playerNames 一样跨 nativeInit 保留。
-std::optional<nt::config::RegionCalibration> g_calibration;
-std::string g_lastError;
+std::optional<nt::config::RegionCalibration>& g_calibration = *new std::optional<nt::config::RegionCalibration>;
+std::string& g_lastError = *new std::string;
 
 // 最近一次分析的帧的几何（docs/区域校准.md 每帧几何），整帧一起替换；换引擎时清空。
 struct FrameGeometry {
@@ -190,11 +197,27 @@ struct FrameGeometry {
     uint64_t sequence = 0;
     std::array<nt::engine::SideGeometry, 2> sides;
 };
-FrameGeometry g_lastGeometry;
+FrameGeometry& g_lastGeometry = *new FrameGeometry;
 
+// The encoded result of this thread's last analysis when it did not fit the
+// caller's buffer (the call returned -need): nativeCopyLastResult hands out
+// exactly that result instead of analysing the same pixels again, which
+// would consume a second sequence number and come back Duplicate+Reused
+// (audit NC-07). Per thread like the Kotlin decoder; cleared by every analysis.
+thread_local std::vector<uint8_t> t_pendingResult;
+
+// Callers must not hold g_cfgMu.
 void setError(const std::string& e) {
-    g_lastError = e;
+    {
+        std::lock_guard<std::mutex> lock(g_cfgMu);
+        g_lastError = e;
+    }
     NT_LOGE("%s", e.c_str());
+}
+
+void clearGeometry() {
+    std::lock_guard<std::mutex> lock(g_cfgMu);
+    g_lastGeometry = FrameGeometry{};
 }
 
 std::string jstr(JNIEnv* env, jstring s) {
@@ -271,8 +294,10 @@ jstring newJString(JNIEnv* env, const std::string& s) {
 // 方法 int → 字符串（与 NativeCore.METHOD_* 一致）。
 const std::string& methodName(jint method) { return nt::frame::MethodName(static_cast<int>(method)); }
 
-// 用已构建的 pipeline 分析一张视图并编码。调用方持有 g_mu。
+// 用已构建的 pipeline 分析一张视图并编码。调用方持有 g_analysisMu（不持有 g_cfgMu）。
+// 结果放不下时返回 -need，并把编码好的结果留在 t_pendingResult（nativeCopyLastResult）。
 jint analyzeLocked(const nt::RGBA& img, jlong capturedAtNanos, jint method, uint8_t* out, size_t cap) {
+    t_pendingResult.clear();
     if (!g_pipeline || !g_pipeline->Ok()) {
         setError("native pipeline not ready (call nativeFinishAssets first)");
         return kNotReady;
@@ -280,14 +305,22 @@ jint analyzeLocked(const nt::RGBA& img, jlong capturedAtNanos, jint method, uint
     nt::TimeNs at = capturedAtNanos > 0 ? static_cast<nt::TimeNs>(capturedAtNanos) : nt::NowNs();
     nt::frame::Frame f = g_pipeline->Analyze(&img, at, at, methodName(method));
     if (!f.HasErr) {
-        g_lastGeometry.valid = true;
-        g_lastGeometry.width = f.Width;
-        g_lastGeometry.height = f.Height;
-        g_lastGeometry.profile = f.Res.LayoutProfile;
-        g_lastGeometry.sequence = f.Sequence;
-        g_lastGeometry.sides = f.Res.Geometry;
+        FrameGeometry g;
+        g.valid = true;
+        g.width = f.Width;
+        g.height = f.Height;
+        g.profile = f.Res.LayoutProfile;
+        g.sequence = f.Sequence;
+        g.sides = f.Res.Geometry;
+        std::lock_guard<std::mutex> lock(g_cfgMu);
+        g_lastGeometry = std::move(g);
     }
-    return encodeFrame(f, out, cap);
+    const size_t need = encodedSize(f);
+    if (need <= cap) return encodeFrame(f, out, cap);
+    if (need > 0x7fffffff) return -static_cast<jint>(0x7fffffff);
+    t_pendingResult.resize(need);
+    if (encodeFrame(f, t_pendingResult.data(), need) != static_cast<jint>(need)) t_pendingResult.clear();
+    return -static_cast<jint>(need);
 }
 
 bool directBuffer(JNIEnv* env, jobject buf, uint8_t*& ptr, size_t& cap) {
@@ -305,10 +338,13 @@ bool directBuffer(JNIEnv* env, jobject buf, uint8_t*& ptr, size_t& cap) {
 
 jboolean nativeInit(JNIEnv*, jclass) {
     try {
-        std::lock_guard<std::mutex> lock(g_mu);
+        std::lock_guard<std::mutex> lock(g_analysisMu);
         g_pipeline.reset();
-        g_lastGeometry = FrameGeometry{};
-        g_lastError.clear();
+        {
+            std::lock_guard<std::mutex> cfg(g_cfgMu);
+            g_lastGeometry = FrameGeometry{};
+            g_lastError.clear();
+        }
         nt::AssetStore::Instance().Clear();
         return JNI_TRUE;
     } catch (const std::exception& e) {
@@ -330,10 +366,8 @@ jboolean nativeAddImage(JNIEnv* env, jclass, jstring jpath, jint w, jint h, jobj
         nt::AssetStore::Instance().AddImage(jstr(env, jpath), w, h, ptr, stride);
         return JNI_TRUE;
     } catch (const std::exception& e) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError(std::string("nativeAddImage: ") + e.what());
     } catch (...) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError("nativeAddImage: unknown exception");
     }
     return JNI_FALSE;
@@ -344,36 +378,69 @@ jboolean nativeAddText(JNIEnv* env, jclass, jstring jpath, jstring jtext) {
         nt::AssetStore::Instance().AddText(jstr(env, jpath), jstr(env, jtext));
         return JNI_TRUE;
     } catch (const std::exception& e) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError(std::string("nativeAddText: ") + e.what());
     } catch (...) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError("nativeAddText: unknown exception");
     }
     return JNI_FALSE;
 }
 
-// 引擎配置：当前账号名与区域校准。调用方持有 g_mu。
-nt::config::Config configLocked() {
+// 引擎配置：当前账号名与区域校准（快照）。调用方不持有 g_cfgMu。
+nt::config::Config currentConfig() {
     nt::config::Config cfg = nt::config::Default();
+    std::lock_guard<std::mutex> lock(g_cfgMu);
     cfg.UI.PlayerNames = g_playerNames;
     cfg.Layout.Calibration = g_calibration;
     return cfg;
 }
 
+// Building an engine applies cfg's account names (identity::Guesser calls
+// SetMineNames); names set while it was being built win. Caller holds
+// g_analysisMu, not g_cfgMu.
+void keepNewestNames(const nt::config::Config& built) {
+    std::lock_guard<std::mutex> lock(g_cfgMu);
+    if (g_playerNames != built.UI.PlayerNames) nt::identity::SetMineNames(g_playerNames);
+}
+
+// Logs calibration boxes the engine does not use (docs/区域校准.md 框的大小限制).
+void logUnusedCalibration(const nt::config::RegionCalibration& c) {
+    const std::optional<nt::config::NormalizedRect>* rects[4] = {&c.LeftBeads, &c.RightBeads, &c.LeftAvatar,
+                                                                 &c.RightAvatar};
+    static const char* const names[4] = {"leftBeads", "rightBeads", "leftAvatar", "rightAvatar"};
+    for (int i = 0; i < 4; ++i) {
+        const auto& r = *rects[i];
+        if (!r) continue;
+        if (!(r->X >= 0 && r->Y >= 0 && r->Width > 0 && r->Height > 0 && r->X + r->Width <= 1 && r->Y + r->Height <= 1)) {
+            NT_LOGI("calibration %s outside the frame: automatic", names[i]);
+            continue;
+        }
+        switch (nt::config::CalibrationRectIssue(i >= 2, *r)) {
+            case nt::config::CalibrationIssue::None: break;
+            case nt::config::CalibrationIssue::TooLarge: NT_LOGI("calibration %s too large: automatic", names[i]); break;
+            case nt::config::CalibrationIssue::TooSmall: NT_LOGI("calibration %s too small: automatic", names[i]); break;
+            case nt::config::CalibrationIssue::BadShape: NT_LOGI("calibration %s bad shape: automatic", names[i]); break;
+        }
+    }
+}
+
 jboolean nativeFinishAssets(JNIEnv*, jclass) {
     try {
-        std::lock_guard<std::mutex> lock(g_mu);
-        nt::identity::SetMineNames(g_playerNames);
-        auto p = std::make_unique<nt::frame::Pipeline>(configLocked());
+        std::lock_guard<std::mutex> lock(g_analysisMu);
+        const nt::config::Config cfg = currentConfig();
+        nt::identity::SetMineNames(cfg.UI.PlayerNames);
+        auto p = std::make_unique<nt::frame::Pipeline>(cfg);
+        keepNewestNames(cfg);
         if (!p->Ok()) {
             setError("engine build failed: " + p->Error());
             g_pipeline.reset();
             return JNI_FALSE;
         }
         g_pipeline = std::move(p);
-        g_lastGeometry = FrameGeometry{};
-        g_lastError.clear();
+        {
+            std::lock_guard<std::mutex> c(g_cfgMu);
+            g_lastGeometry = FrameGeometry{};
+            g_lastError.clear();
+        }
         NT_LOGI("pipeline ready");
         return JNI_TRUE;
     } catch (const std::exception& e) {
@@ -388,7 +455,7 @@ jstring nativeLastError(JNIEnv* env, jclass) {
     try {
         std::string e;
         {
-            std::lock_guard<std::mutex> lock(g_mu);
+            std::lock_guard<std::mutex> lock(g_cfgMu);
             e = g_lastError;
         }
         return newJString(env, e);
@@ -408,26 +475,27 @@ void nativeSetPlayerNames(JNIEnv* env, jclass, jobjectArray names) {
                 env->DeleteLocalRef(s);
             }
         }
-        std::lock_guard<std::mutex> lock(g_mu);
+        // Only g_cfgMu (never held across a frame): the UI thread does not wait for an
+        // analysis (audit NC-08). identity.SetMineNames has its own lock; the Guesser reloads
+        // the book when it sees the new revision on the next frame (与 Go 设置页即时生效一致)。
+        std::lock_guard<std::mutex> lock(g_cfgMu);
         g_playerNames = out;
-        // identity.SetMineNames：Guesser 发现 revision 变化后重载名册（与 Go 设置页即时生效一致）。
         nt::identity::SetMineNames(out);
     } catch (const std::exception& e) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError(std::string("nativeSetPlayerNames: ") + e.what());
     } catch (...) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError("nativeSetPlayerNames: unknown exception");
     }
 }
 
 // 区域校准：profile "camp"/"duel"，rects = 16 个比例（左豆、右豆、左头像、右头像各 x,y,w,h），
-// 任一分量为 NaN 的框 = 自动。引擎已建好时立即重建并清空去重缓存/交付状态（Pipeline::Rebuild，
-// 同一画面下一帧就按新框重新识别）；否则留给 nativeFinishAssets。重建失败保留旧引擎。
+// 任一分量为 NaN 的框 = 自动；超出画面或大小限制（docs/区域校准.md 框的大小限制）的框引擎不用，
+// 同样按自动。引擎已建好时立即重建并清空去重缓存/交付状态（Pipeline::Rebuild，同一画面下一帧
+// 就按新框重新识别；要等正在分析的一帧结束，Kotlin 在 nt-calibration 线程上调用）；否则留给
+// nativeFinishAssets。重建失败保留旧引擎。
 jboolean nativeSetCalibration(JNIEnv* env, jclass, jstring jprofile, jfloatArray jrects) {
     try {
         if (jrects == nullptr || env->GetArrayLength(jrects) != 16) {
-            std::lock_guard<std::mutex> lock(g_mu);
             setError("nativeSetCalibration: rects must hold 16 floats");
             return JNI_FALSE;
         }
@@ -444,22 +512,27 @@ jboolean nativeSetCalibration(JNIEnv* env, jclass, jstring jprofile, jfloatArray
             *rects[i] = nt::config::NormalizedRect{r[0], r[1], r[2], r[3]};
             any = true;
         }
-        std::lock_guard<std::mutex> lock(g_mu);
-        g_calibration = any ? std::optional<nt::config::RegionCalibration>(c) : std::nullopt;
+        if (any) logUnusedCalibration(c);
+        std::lock_guard<std::mutex> lock(g_analysisMu);
+        {
+            std::lock_guard<std::mutex> cfg(g_cfgMu);
+            g_calibration = any ? std::optional<nt::config::RegionCalibration>(c) : std::nullopt;
+        }
         if (!g_pipeline || !g_pipeline->Ok()) return JNI_TRUE;
+        const nt::config::Config cfg = currentConfig();
         std::string err;
-        if (!g_pipeline->Rebuild(configLocked(), &err)) {
+        const bool ok = g_pipeline->Rebuild(cfg, &err);
+        keepNewestNames(cfg);
+        if (!ok) {
             setError("calibration rebuild failed: " + err);
             return JNI_FALSE;
         }
-        g_lastGeometry = FrameGeometry{};  // 旧校准下的几何
+        clearGeometry();  // 旧校准下的几何
         NT_LOGI("pipeline rebuilt for region calibration");
         return JNI_TRUE;
     } catch (const std::exception& e) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError(std::string("nativeSetCalibration: ") + e.what());
     } catch (...) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError("nativeSetCalibration: unknown exception");
     }
     return JNI_FALSE;
@@ -471,13 +544,11 @@ jint nativeAnalyzeHardwareBuffer(JNIEnv* env, jclass, jobject hardwareBuffer, jl
         uint8_t* out = nullptr;
         size_t cap = 0;
         if (!directBuffer(env, outBuf, out, cap) || hardwareBuffer == nullptr) {
-            std::lock_guard<std::mutex> lock(g_mu);
             setError("nativeAnalyzeHardwareBuffer: bad arguments");
             return kNotReady;
         }
         AHardwareBuffer* hb = AHardwareBuffer_fromHardwareBuffer(env, hardwareBuffer);
         if (hb == nullptr) {
-            std::lock_guard<std::mutex> lock(g_mu);
             setError("AHardwareBuffer_fromHardwareBuffer failed");
             return kNotReady;
         }
@@ -486,24 +557,34 @@ jint nativeAnalyzeHardwareBuffer(JNIEnv* env, jclass, jobject hardwareBuffer, jl
         AHardwareBuffer_describe(hb, &desc);
         if (desc.format != AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM && desc.format != AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM) {
             AHardwareBuffer_release(hb);
-            std::lock_guard<std::mutex> lock(g_mu);
             setError("unsupported HardwareBuffer format " + std::to_string(desc.format));
+            return kNotReady;
+        }
+        // The CPU mapping is stride·height pixels: a descriptor that does not describe one
+        // plain image of width ≤ stride would make the core read past it (audit NC-03). Kotlin
+        // then falls back to the bitmap path, as for any other HardwareBuffer failure.
+        if (desc.width == 0 || desc.height == 0 || desc.layers != 1 || desc.stride < desc.width ||
+            desc.stride > static_cast<uint32_t>(INT_MAX / 4) || desc.height > static_cast<uint32_t>(INT_MAX)) {
+            AHardwareBuffer_release(hb);
+            setError("bad HardwareBuffer geometry " + std::to_string(desc.width) + "x" + std::to_string(desc.height) +
+                     " stride " + std::to_string(desc.stride) + " layers " + std::to_string(desc.layers));
             return kNotReady;
         }
         void* addr = nullptr;
         int rc = AHardwareBuffer_lock(hb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, nullptr, &addr);
         if (rc != 0 || addr == nullptr) {
+            if (rc == 0) AHardwareBuffer_unlock(hb, nullptr);  // locked, only without an address
             AHardwareBuffer_release(hb);
-            std::lock_guard<std::mutex> lock(g_mu);
-            setError("AHardwareBuffer_lock failed: " + std::to_string(rc));
+            setError(rc != 0 ? "AHardwareBuffer_lock failed: " + std::to_string(rc)
+                             : std::string("AHardwareBuffer_lock returned no address"));
             return kNotReady;
         }
         jint result = kNotReady;
         try {
             // desc.stride 以像素计。像素只读使用（见 nt/image.h 约定）。
-            nt::RGBA view(static_cast<uint8_t*>(addr), static_cast<int>(desc.stride) * 4,
+            nt::RGBA view(static_cast<uint8_t*>(addr), static_cast<int>(desc.stride * 4),
                           nt::MakeRect(0, 0, static_cast<int>(desc.width), static_cast<int>(desc.height)));
-            std::lock_guard<std::mutex> lock(g_mu);
+            std::lock_guard<std::mutex> lock(g_analysisMu);
             result = analyzeLocked(view, capturedAtNanos, method, out, cap);
         } catch (...) {
             AHardwareBuffer_unlock(hb, nullptr);
@@ -514,10 +595,8 @@ jint nativeAnalyzeHardwareBuffer(JNIEnv* env, jclass, jobject hardwareBuffer, jl
         AHardwareBuffer_release(hb);
         return result;
     } catch (const std::exception& e) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError(std::string("nativeAnalyzeHardwareBuffer: ") + e.what());
     } catch (...) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError("nativeAnalyzeHardwareBuffer: unknown exception");
     }
     return kNotReady;
@@ -531,37 +610,62 @@ jint nativeAnalyzeBuffer(JNIEnv* env, jclass, jobject pixels, jint w, jint h, ji
         uint8_t* out = nullptr;
         size_t cap = 0;
         if (w <= 0 || h <= 0 || !directBuffer(env, pixels, in, inCap) || !directBuffer(env, outBuf, out, cap)) {
-            std::lock_guard<std::mutex> lock(g_mu);
             setError("nativeAnalyzeBuffer: bad arguments");
             return kNotReady;
         }
         size_t stride = rowStride > 0 ? static_cast<size_t>(rowStride) : static_cast<size_t>(w) * 4;
         if (stride < static_cast<size_t>(w) * 4 || stride * static_cast<size_t>(h - 1) + static_cast<size_t>(w) * 4 > inCap) {
-            std::lock_guard<std::mutex> lock(g_mu);
             setError("nativeAnalyzeBuffer: buffer smaller than h*rowStride");
             return kNotReady;
         }
+        if (stride > static_cast<size_t>(INT_MAX)) {
+            setError("nativeAnalyzeBuffer: rowStride too large");
+            return kNotReady;
+        }
         nt::RGBA view(in, static_cast<int>(stride), nt::MakeRect(0, 0, w, h));
-        std::lock_guard<std::mutex> lock(g_mu);
+        std::lock_guard<std::mutex> lock(g_analysisMu);
         return analyzeLocked(view, capturedAtNanos, method, out, cap);
     } catch (const std::exception& e) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError(std::string("nativeAnalyzeBuffer: ") + e.what());
     } catch (...) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError("nativeAnalyzeBuffer: unknown exception");
     }
     return kNotReady;
 }
 
+// 结果放不下时（nativeAnalyze* 返回 -need）取同一次分析的结果，不重新分析：返回写入字节数；
+// out 仍放不下 = -need（结果留着）；这个线程没有待取结果 = 0。
+jint nativeCopyLastResult(JNIEnv* env, jclass, jobject outBuf) {
+    try {
+        uint8_t* out = nullptr;
+        size_t cap = 0;
+        if (!directBuffer(env, outBuf, out, cap)) {
+            setError("nativeCopyLastResult: bad arguments");
+            return kNotReady;
+        }
+        if (t_pendingResult.empty()) {
+            setError("nativeCopyLastResult: no pending result on this thread");
+            return kNotReady;
+        }
+        const size_t need = t_pendingResult.size();
+        if (need > cap) return -static_cast<jint>(need);
+        std::memcpy(out, t_pendingResult.data(), need);
+        t_pendingResult.clear();
+        return static_cast<jint>(need);
+    } catch (const std::exception& e) {
+        setError(std::string("nativeCopyLastResult: ") + e.what());
+    } catch (...) {
+        setError("nativeCopyLastResult: unknown exception");
+    }
+    return kNotReady;
+}
+
 // 取走待保存的对面账号裁剪：返回 [w, h, argb...]（ARGB_8888 int，可直接 Bitmap.createBitmap），无则 null。
+// identity 自己的锁（saveMu）保护待取裁剪，不必等正在分析的一帧。
 jintArray nativeTakeOppCrop(JNIEnv* env, jclass) {
     try {
         nt::RGBA crop;
-        {
-            std::lock_guard<std::mutex> lock(g_mu);
-            if (!nt::identity::TakePendingOppCrop(crop)) return nullptr;
-        }
+        if (!nt::identity::TakePendingOppCrop(crop)) return nullptr;
         const nt::Rect& b = crop.Bounds();
         int w = b.Dx(), h = b.Dy();
         if (w <= 0 || h <= 0) return nullptr;
@@ -581,10 +685,8 @@ jintArray nativeTakeOppCrop(JNIEnv* env, jclass) {
         if (arr != nullptr) env->SetIntArrayRegion(arr, 0, static_cast<jsize>(data.size()), data.data());
         return arr;
     } catch (const std::exception& e) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError(std::string("nativeTakeOppCrop: ") + e.what());
     } catch (...) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError("nativeTakeOppCrop: unknown exception");
     }
     return nullptr;
@@ -592,17 +694,19 @@ jintArray nativeTakeOppCrop(JNIEnv* env, jclass) {
 
 void nativeResetDelivery(JNIEnv*, jclass) {
     try {
-        std::lock_guard<std::mutex> lock(g_mu);
+        std::lock_guard<std::mutex> lock(g_analysisMu);
         if (g_pipeline) g_pipeline->ResetDelivery();
     } catch (...) {
     }
 }
 
+// Waits for a running frame, then frees the engine. Safe at any time (also while
+// other threads call in); the process-global state itself is never destroyed.
 void nativeRelease(JNIEnv*, jclass) {
     try {
-        std::lock_guard<std::mutex> lock(g_mu);
+        std::lock_guard<std::mutex> lock(g_analysisMu);
         g_pipeline.reset();
-        g_lastGeometry = FrameGeometry{};
+        clearGeometry();
     } catch (...) {
     }
 }
@@ -617,7 +721,7 @@ jfloatArray nativeLastGeometry(JNIEnv* env, jclass) {
     try {
         FrameGeometry g;
         {
-            std::lock_guard<std::mutex> lock(g_mu);
+            std::lock_guard<std::mutex> lock(g_cfgMu);
             if (!g_lastGeometry.valid) return nullptr;
             g = g_lastGeometry;
         }
@@ -641,10 +745,8 @@ jfloatArray nativeLastGeometry(JNIEnv* env, jclass) {
         if (arr != nullptr) env->SetFloatArrayRegion(arr, 0, static_cast<jsize>(v.size()), v.data());
         return arr;
     } catch (const std::exception& e) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError(std::string("nativeLastGeometry: ") + e.what());
     } catch (...) {
-        std::lock_guard<std::mutex> lock(g_mu);
         setError("nativeLastGeometry: unknown exception");
     }
     return nullptr;
@@ -670,6 +772,8 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(nativeAnalyzeHardwareBuffer)},
     {const_cast<char*>("nativeAnalyzeBuffer"), const_cast<char*>("(Ljava/nio/ByteBuffer;IIIJILjava/nio/ByteBuffer;)I"),
      reinterpret_cast<void*>(nativeAnalyzeBuffer)},
+    {const_cast<char*>("nativeCopyLastResult"), const_cast<char*>("(Ljava/nio/ByteBuffer;)I"),
+     reinterpret_cast<void*>(nativeCopyLastResult)},
     {const_cast<char*>("nativeTakeOppCrop"), const_cast<char*>("()[I"), reinterpret_cast<void*>(nativeTakeOppCrop)},
     {const_cast<char*>("nativeResetDelivery"), const_cast<char*>("()V"), reinterpret_cast<void*>(nativeResetDelivery)},
     {const_cast<char*>("nativeRelease"), const_cast<char*>("()V"), reinterpret_cast<void*>(nativeRelease)},
