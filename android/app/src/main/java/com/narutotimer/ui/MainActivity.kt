@@ -553,7 +553,8 @@ class MainActivity : Activity() {
 
     private fun refreshCalibration() {
         calibText.text = "当前：" + CalibrationActivity.summary(settings)
-        calibResetBtn.isEnabled = Settings.KEY_CALIB_RECTS.any { settings.calibRect(it) != null }
+        // Also for saved boxes that are not used (size limits): the summary names them, this clears them.
+        calibResetBtn.isEnabled = settings.hasStoredCalibration()
     }
 
     /** This screen covers the game, so live frames are taken from the in-game panel. */

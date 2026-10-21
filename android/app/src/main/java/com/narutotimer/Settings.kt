@@ -135,6 +135,22 @@ class Settings(context: Context) {
 
     private fun isAvatarKey(key: String) = key == KEY_CALIB_LEFT_AVATAR || key == KEY_CALIB_RIGHT_AVATAR
 
+    /**
+     * The 16 floats nativeSetCalibration takes: x,y,w,h per [KEY_CALIB_RECTS], NaN = automatic. Only
+     * usable boxes ([calibRect]): one stored by a version without the size limits (v0.24beta, v0.25)
+     * stays automatic; it is never an error, the core would drop it as well.
+     */
+    @Synchronized
+    fun nativeCalibrationRects(): FloatArray {
+        val rects = FloatArray(16) { Float.NaN }
+        KEY_CALIB_RECTS.forEachIndexed { i, key -> calibRect(key)?.copyInto(rects, i * 4) }
+        return rects
+    }
+
+    /** Whether any box is stored, used or not ([calibRectIssue]): what 恢复自动 clears. */
+    @Synchronized
+    fun hasStoredCalibration(): Boolean = KEY_CALIB_RECTS.any { storedCalibRect(it) != null }
+
     fun setCalibRect(key: String, rect: FloatArray?) =
         put(key) { putString(key, rect?.joinToString(",") ?: "") }
 

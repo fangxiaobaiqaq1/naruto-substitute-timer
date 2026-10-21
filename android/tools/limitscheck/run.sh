@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # CalibrationLimits.kt (docs/区域校准.md 框的大小限制) on the host JVM: the same decisions as Go and
-# the C++ core (LimitsCheck.kt). Pure Kotlin: no device, no Gradle; Kotlin 2.0.21 from the Gradle cache.
+# the C++ core (LimitsCheck.kt), and Settings.kt with boxes stored by versions without the limits.
+# No device, no Gradle; Kotlin 2.0.21 from the Gradle cache, the chaincheck Context stubs.
 # Run: android/tools/limitscheck/run.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -25,7 +26,11 @@ COMPILER+=":$(jar org.jetbrains.intellij.deps trove4j 1.0.20200330)"
 COMPILER+=":$(jar org.jetbrains.kotlinx kotlinx-coroutines-core-jvm 1.6.4)"
 OUT="$(mktemp -d /tmp/naruto-limitscheck.XXXXXX)"
 trap 'rm -rf "$OUT"' EXIT
+# Settings.kt (stored boxes) runs on the chaincheck in-memory Context/SharedPreferences stubs.
+STUBS="$REPO/android/tools/chaincheck/stubs/android/content"
+mkdir -p "$OUT/stubs"
+"$JAVA_HOME/bin/javac" --release 17 -d "$OUT/stubs" "$STUBS/Context.java" "$STUBS/SharedPreferences.java"
 "$JAVA_HOME/bin/java" -cp "$COMPILER" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
-    -jvm-target 17 -no-stdlib -no-reflect -classpath "$STDLIB:$ANNOTATIONS" \
-    -d "$OUT/check.jar" "$KT/CalibrationLimits.kt" "$HERE/LimitsCheck.kt"
-"$JAVA_HOME/bin/java" -cp "$OUT/check.jar:$STDLIB" limitscheck.LimitsCheckKt
+    -jvm-target 17 -no-stdlib -no-reflect -classpath "$STDLIB:$ANNOTATIONS:$OUT/stubs" \
+    -d "$OUT/check.jar" "$KT/CalibrationLimits.kt" "$KT/Settings.kt" "$HERE/LimitsCheck.kt"
+"$JAVA_HOME/bin/java" -Dfile.encoding=UTF-8 -cp "$OUT/check.jar:$OUT/stubs:$STDLIB" limitscheck.LimitsCheckKt

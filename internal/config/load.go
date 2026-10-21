@@ -20,21 +20,36 @@ const DefaultPath = "config.json"
 var fileMu sync.RWMutex
 
 func LoadOrCreate(path string) (Config, error) {
+	cfg, notes, err := LoadOrCreateWithNotes(path)
+	printNotes(path, notes)
+	return cfg, err
+}
+
+// LoadOrCreateWithNotes is LoadOrCreate returning LoadWithNotes' notes
+// instead of printing them, for a caller that logs them itself.
+func LoadOrCreateWithNotes(path string) (Config, []string, error) {
 	if path == "" {
 		path = DefaultPath
 	}
-	cfg, err := Load(path)
+	cfg, notes, err := LoadWithNotes(path)
 	if err == nil {
-		return cfg, nil
+		return cfg, notes, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return Config{}, err
+		return Config{}, nil, err
 	}
 	cfg = Default()
 	if err := Save(path, cfg); err != nil {
-		return Config{}, err
+		return Config{}, nil, err
 	}
-	return cfg, nil
+	return cfg, nil, nil
+}
+
+// printNotes is the warning log of Load and LoadOrCreate (stderr).
+func printNotes(path string, notes []string) {
+	for _, note := range notes {
+		fmt.Fprintf(os.Stderr, "config %q: %s\n", path, note)
+	}
 }
 
 func Save(path string, cfg Config) error {
@@ -136,16 +151,30 @@ func writeFile(path string, data []byte) error {
 	return nil
 }
 
+// Load reads and validates path. What LoadWithNotes repairs is reported on
+// stderr.
 func Load(path string) (Config, error) {
+	cfg, notes, err := LoadWithNotes(path)
+	printNotes(path, notes)
+	return cfg, err
+}
+
+// LoadWithNotes reads and validates path like Load and returns, instead of
+// printing, a note for each setting it repaired rather than refusing the
+// file. The only repair: calibration boxes outside the size limits, saved by
+// versions without them, are dropped (the region stays automatic, which is
+// what the engine does with such a box anyway); the file is not rewritten,
+// the next settings save stores the repaired configuration.
+func LoadWithNotes(path string) (Config, []string, error) {
 	cfg := Default()
 	if path == "" {
-		return cfg, Validate(cfg)
+		return cfg, nil, Validate(cfg)
 	}
 	fileMu.RLock()
 	defer fileMu.RUnlock()
 	f, err := os.Open(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("open config: %w", err)
+		return Config{}, nil, fmt.Errorf("open config: %w", err)
 	}
 	defer f.Close()
 	r := bufio.NewReader(f)
@@ -154,12 +183,13 @@ func Load(path string) (Config, error) {
 		_, _ = r.Discard(len(utf8BOM))
 	}
 	if err := decodeStrict(r, &cfg); err != nil {
-		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
+		return Config{}, nil, fmt.Errorf("decode config %q: %w", path, err)
 	}
+	notes := dropUnusableCalibrationBoxes(&cfg)
 	if err := Validate(cfg); err != nil {
-		return Config{}, fmt.Errorf("validate config %q: %w", path, err)
+		return Config{}, nil, fmt.Errorf("validate config %q: %w", path, err)
 	}
-	return cfg, nil
+	return cfg, notes, nil
 }
 
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}

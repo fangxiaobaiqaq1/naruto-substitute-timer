@@ -63,6 +63,38 @@ func CalibrationRectIssue(avatar bool, r NormalizedRect) string {
 	return ""
 }
 
+// dropUnusableCalibrationBoxes removes the calibration boxes that lie inside
+// the frame but outside the size limits, and says which and why. Versions
+// before the limits (v0.24beta, v0.25) saved such boxes; refusing the whole
+// config.json at start would stop the timer, while the engine never uses them
+// anyway (the region stays automatic). What was never valid (a profile other
+// than camp/duel, a box outside the frame) is left for Validate to report. A
+// calibration left without boxes becomes nil (all automatic), like 全部恢复自动.
+func dropUnusableCalibrationBoxes(c *Config) []string {
+	cal := c.Layout.Calibration
+	if cal == nil || (cal.Profile != "camp" && cal.Profile != "duel") {
+		return nil
+	}
+	var notes []string
+	for _, box := range []struct {
+		name string
+		r    **NormalizedRect
+	}{{"leftBeads", &cal.LeftBeads}, {"rightBeads", &cal.RightBeads}, {"leftAvatar", &cal.LeftAvatar}, {"rightAvatar", &cal.RightAvatar}} {
+		r := *box.r
+		if r == nil || validateRect("layout.calibration."+box.name, *r) != nil {
+			continue
+		}
+		if err := validateCalibrationLimits(box.name, *r); err != nil {
+			notes = append(notes, err.Error()+"；已忽略这个框，这一区域按自动识别")
+			*box.r = nil
+		}
+	}
+	if notes != nil && cal.LeftBeads == nil && cal.RightBeads == nil && cal.LeftAvatar == nil && cal.RightAvatar == nil {
+		c.Layout.Calibration = nil
+	}
+	return notes
+}
+
 // validateCalibrationLimits is Validate's check of one calibration box (name
 // is its JSON key: leftBeads, rightBeads, leftAvatar, rightAvatar).
 func validateCalibrationLimits(name string, r NormalizedRect) error {
