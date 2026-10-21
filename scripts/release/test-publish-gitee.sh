@@ -25,6 +25,12 @@ args = sys.argv[1:]
 url = args[-1]
 if "access_token=" in url:
     raise SystemExit("token must not be sent in the URL")
+if any("test-token" in arg for arg in args):
+    raise SystemExit("token must not appear in curl argv")
+header_files = [args[i + 1][1:] for i, arg in enumerate(args[:-1])
+                if arg == "--header" and args[i + 1].startswith("@")]
+if not any("Authorization: token test-token" in Path(f).read_text() for f in header_files):
+    raise SystemExit("token must be passed in a curl header file")
 method = "GET"
 output = None
 form = None

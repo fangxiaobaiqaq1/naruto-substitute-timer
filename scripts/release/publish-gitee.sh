@@ -28,12 +28,19 @@ repository=${GITEE_REPOSITORY:-xiaobaiqaq/naruto-substitute-timer}
 api="https://gitee.com/api/v5/repos/$repository"
 release_name=${GITEE_RELEASE_NAME:-"替身计时器 $tag"}
 
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+# The token reaches curl through a private header file, never through argv
+# (any local process can read another process's command line).
+auth_header="$tmpdir/authorization.header"
+(umask 077 && printf 'Authorization: token %s\n' "$GITEE_TOKEN" > "$auth_header")
+
 request() {
   curl --fail-with-body --silent --show-error --retry 3 --retry-delay 2 \
     --connect-timeout 10 --max-time 120 \
     --noproxy 'gitee.com,foruda.gitee.com' \
     --header 'Accept: application/json' \
-    --header "Authorization: token $GITEE_TOKEN" "$@"
+    --header "@$auth_header" "$@"
 }
 
 download_request() {
@@ -82,8 +89,6 @@ fi
 [[ "$release_id" =~ ^[0-9]+$ ]] || { echo "Gitee response did not contain a release id" >&2; exit 1; }
 
 attachments=$(request "$api/releases/$release_id/attach_files?per_page=100")
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
 
 attachment_id() {
   jq -r --arg name "$1" '

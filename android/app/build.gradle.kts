@@ -23,6 +23,16 @@ val hasReleaseSigning = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
+// Release signing has exactly two modes and no debug-key fallback (a debug-signed "release"
+// can neither update nor be updated by the official APKs):
+//  - local: all four ANDROID_* variables above are set and Gradle signs the APK;
+//  - CI: -Ptimer.unsignedRelease=true builds app-release-unsigned.apk, which the release
+//    workflow signs with apksigner in a separate job, so the keystore never meets Gradle
+//    plugins or dependencies.
+// Anything else fails before the release variant is built (checkReleaseSigning below).
+val unsignedReleaseRequested = providers.gradleProperty("timer.unsignedRelease").orNull
+    ?.trim()
+    ?.equals("true", ignoreCase = true) == true
 
 android {
     namespace = "com.narutotimer"
@@ -66,7 +76,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+            if (hasReleaseSigning && !unsignedReleaseRequested) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
         debug {
@@ -150,6 +162,22 @@ abstract class SyncRecognitionAssets : DefaultTask() {
         }
     }
 }
+
+val checkReleaseSigning = tasks.register("checkReleaseSigning") {
+    // Plain values only, so the task stays configuration-cache friendly.
+    val signed = hasReleaseSigning
+    val unsignedAllowed = unsignedReleaseRequested
+    doLast {
+        if (!signed && !unsignedAllowed) {
+            throw GradleException(
+                "Release signing is not configured. Set ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, " +
+                    "ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD, or pass -Ptimer.unsignedRelease=true to build " +
+                    "an unsigned APK and sign it with apksigner. Release builds are never signed with the debug key.",
+            )
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(checkReleaseSigning) }
 
 val syncRecognitionAssets = tasks.register<SyncRecognitionAssets>("syncRecognitionAssets") {
     repoAssets.set(rootProject.layout.projectDirectory.dir("../assets"))
