@@ -64,6 +64,7 @@ type session struct {
 	textStatusLabel       *widget.Label
 	cfg                   config.Config
 	cfgPath               string
+	cfgWriter             config.Writer // Orders settings saves made outside s.mu.
 	provider              frame.Provider
 
 	// Region calibration (calibrate.go). The feed copies frames only while
@@ -1646,8 +1647,9 @@ func (s *session) setUpdateSource(source updates.Source) error {
 	oldService, oldCancel := s.updateService, s.updateCancel
 	s.cfg.UI.UpdateSource, s.updateService, s.updateCancel = string(source), nil, nil
 	s.updateFeed, s.updateNotice = updates.Feed{}, ""
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if oldCancel != nil {
 		oldCancel()
 	}

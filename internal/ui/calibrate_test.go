@@ -371,7 +371,7 @@ func TestCalibrationRestoreAutoClearsAndCallsHook(t *testing.T) {
 	s := newCalibrationTestSession(t)
 	box := config.NormalizedRect{X: 0.081, Y: 0.104, Width: 0.052, Height: 0.022}
 	s.cfg.Layout.Calibration = &config.RegionCalibration{Profile: "camp", LeftBeads: &box}
-	if err := s.saveSettingsLocked(); err != nil {
+	if err := s.settingsSnapshotLocked().Save(); err != nil {
 		t.Fatal(err)
 	}
 	var calls []*config.RegionCalibration

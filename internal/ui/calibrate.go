@@ -523,9 +523,10 @@ func (s *session) setCalibration(next *config.RegionCalibration) error {
 		return fmt.Errorf("%w：%v", errInvalidCalibration, err)
 	}
 	s.cfg.Layout.Calibration = next
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	apply := s.calibrationApply
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if apply == nil {
 		return err
 	}

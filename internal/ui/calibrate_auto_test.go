@@ -260,7 +260,7 @@ func TestCalibrationSaveWithoutChangesWritesNothing(t *testing.T) {
 		var before []byte
 		if saved != nil {
 			s.cfg.Layout.Calibration = cloneCalibration(saved)
-			if err := s.saveSettingsLocked(); err != nil {
+			if err := s.settingsSnapshotLocked().Save(); err != nil {
 				t.Fatal(err)
 			}
 			before, _ = os.ReadFile(s.cfgPath)

@@ -545,8 +545,9 @@ func (s *session) toggleBothSides() {
 func (s *session) setShowBothSides(on bool) error {
 	s.mu.Lock()
 	s.cfg.UI.ShowBothSides = on
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	s.applyBothSideVisibility()
 	s.syncMiniControls()
 	s.syncDetachedMiniControls()
@@ -564,8 +565,9 @@ func (s *session) setMiniMode(on bool) error {
 	} else {
 		s.cfg.UI.OverlayMode = "full"
 	}
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	s.applyMiniVisibility()
 	s.applyBothSideVisibility()
 	if s.miniWin != nil {
@@ -656,11 +658,15 @@ func (s *session) setMiniOpacity(opacity float64, save bool) error {
 	s.mu.Lock()
 	s.cfg.UI.MiniOpacity = opacity
 	mini := s.miniMode
-	var err error
+	var snapshot config.Snapshot
 	if save {
-		err = s.saveSettingsLocked()
+		snapshot = s.settingsSnapshotLocked()
 	}
 	s.mu.Unlock()
+	var err error
+	if save {
+		err = snapshot.Save()
+	}
 	if mini {
 		if nativeErr := s.nativeOverlayOpacity(opacity); nativeErr != nil {
 			s.mu.Lock()
@@ -675,8 +681,9 @@ func (s *session) setMiniOpacity(opacity float64, save bool) error {
 func (s *session) setMiniFloating(on bool) error {
 	s.mu.Lock()
 	s.cfg.UI.MiniFloating = on
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	s.applyMiniWindowState()
 	return err
 }
@@ -757,8 +764,9 @@ func (s *session) rememberMiniSize() {
 	if s.cfg.UI.MiniSize != nil {
 		s.cfg.UI.MiniSize = &size
 	}
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if err != nil {
 		s.debugf("save mini size: %v", err)
 	}
