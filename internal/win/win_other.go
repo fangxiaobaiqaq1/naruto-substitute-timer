@@ -40,4 +40,7 @@ func IsBusyFrame(error) bool                 { return false }
 func ClientScreenRect(uintptr) (Rect, error) { return Rect{}, errUnsupported }
 func EnablePerMonitorDPIAwareness()          {}
 
+// RestrictDLLSearchPath is a no-op outside Windows.
+func RestrictDLLSearchPath() error { return nil }
+
 func FindLeidianRender(uintptr, uintptr) (uintptr, error) { return 0, errUnsupported }

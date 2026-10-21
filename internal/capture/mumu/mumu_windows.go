@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"narutotimer/internal/win"
 )
 
 type Client struct {
@@ -82,7 +84,8 @@ func Open(o Options) (*Client, error) {
 	if err != nil {
 		return nil, stageError(ProbeStageFindSDK, err)
 	}
-	dll, err := syscall.LoadDLL(path)
+	// Resolve the SDK's own imports from its folder and System32 only.
+	dll, err := win.LoadDLLWithDependencies(path)
 	if err != nil {
 		return nil, stageError(ProbeStageLoadSDK, fmt.Errorf("load MuMu screenshot SDK: %w", err))
 	}
