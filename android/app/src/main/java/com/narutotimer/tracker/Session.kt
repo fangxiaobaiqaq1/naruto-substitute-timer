@@ -124,7 +124,6 @@ class Session(
                 leftClock.resyncObservation()
                 rightClock.resyncObservation()
             }
-            updateLayoutProfileLocked(f)
             updateIdentityLocked(f)
             updateTopologyLocked(f)
 
@@ -142,6 +141,21 @@ class Session(
             }
 
             observeRoundOpeningLocked(f)
+            if (f.fighting && f.layoutProfile.isNotEmpty()) {
+                if (layoutProfile.isNotEmpty() && layoutProfile != f.layoutProfile) {
+                    // A different HUD belongs to a different match, never a bead drop.
+                    leftClock.reset()
+                    rightClock.reset()
+                    isFighting = false
+                    holdFreeze = false
+                    clearRoundOpeningLocked()
+                    fightHits = 0
+                    leaveHits = 0
+                    syncLeft = false
+                    syncRight = false
+                }
+                layoutProfile = f.layoutProfile
+            }
             applySceneLocked(f)
 
             if (!isFighting || !f.fighting) {
@@ -357,23 +371,6 @@ class Session(
             sourceMethod = method
         }
         return changed
-    }
-
-    private fun updateLayoutProfileLocked(f: AnalysisResult) {
-        // A layout profile is a different HUD/match, not a bead drop.
-        if (f.layoutProfile.isNotEmpty() && layoutProfile.isNotEmpty() && f.layoutProfile != layoutProfile) {
-            leftClock.reset()
-            rightClock.reset()
-            isFighting = false
-            fightHits = 0
-            leaveHits = 0
-            holdFreeze = false
-            inheritOnReturn = false
-            clearRoundOpeningLocked()
-            syncLeft = false
-            syncRight = false
-        }
-        if (f.layoutProfile.isNotEmpty()) layoutProfile = f.layoutProfile
     }
 
     private fun updateIdentityLocked(f: AnalysisResult) {
