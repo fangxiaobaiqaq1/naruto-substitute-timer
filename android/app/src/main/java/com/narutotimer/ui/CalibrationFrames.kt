@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Log
 import com.narutotimer.FrameBox
 import com.narutotimer.FrameGeometry
+import com.narutotimer.Housekeeping
 import com.narutotimer.PixelPoint
 import com.narutotimer.PixelRect
 import com.narutotimer.SideGeometry
@@ -30,6 +31,8 @@ object CalibrationFrames {
     /** Longest side kept/shown: bounded memory and always uploadable as a texture. */
     private const val MAX_SIDE = 4096
     private const val AUTO_SUFFIX = ".json"
+    /** Largest picked file copied into the cache (AND-15); a game screenshot is a few MB. */
+    private const val MAX_IMPORT_BYTES = 64L * 1024 * 1024
 
     /**
      * A live frame's automatic analysis: the geometry its analysis used (docs/区域校准.md 每帧几何),
@@ -86,13 +89,14 @@ object CalibrationFrames {
         }
     }
 
-    /** Copies a picked image into the cache; null if it cannot be read. */
+    /** Copies a picked image into the cache; null if it cannot be read or is over [MAX_IMPORT_BYTES]. */
     fun import(context: Context, uri: Uri): File? {
         val file = File(dir(context), "file-${System.currentTimeMillis()}.img")
         return try {
             val input = context.contentResolver.openInputStream(uri) ?: return null
-            input.use { src -> FileOutputStream(file).use { src.copyTo(it) } }
-            file
+            val fits = input.use { src -> Housekeeping.copyLimited(src, file, MAX_IMPORT_BYTES) }
+            if (!fits) Log.w(TAG, "import $uri: over ${MAX_IMPORT_BYTES / (1024 * 1024)} MB")
+            file.takeIf { fits }
         } catch (e: Exception) {
             Log.w(TAG, "import $uri failed", e)
             file.delete()
