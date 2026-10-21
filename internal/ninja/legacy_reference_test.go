@@ -3,7 +3,9 @@ package ninja
 // Verbatim copies of the pre-parallel implementations (serial NCC under the
 // catalog lock, full-frame portrait gray, At()-based gray/mask, serial
 // catalog load). The equivalence tests compare the current code against them.
-// legacyRead also scores the nearby title sizes (fineFactors), serially.
+// legacyRead also scores the nearby title sizes (fineFactors), serially;
+// legacyMatch also takes the full scan's second look and legacyMatchEntries
+// re-verifies a lone entry at its portrait factors, serially.
 
 import (
 	"bytes"
@@ -21,6 +23,15 @@ import (
 )
 
 func legacyMatch(c *avatarCatalog, img *image.RGBA, roi image.Rectangle, scale float64) AvatarMatch {
+	return legacyMatchLook(c, img, roi, scale, true)
+}
+
+// legacyScan is legacyMatch without the full scan's second look.
+func legacyScan(c *avatarCatalog, img *image.RGBA, roi image.Rectangle, scale float64) AvatarMatch {
+	return legacyMatchLook(c, img, roi, scale, false)
+}
+
+func legacyMatchLook(c *avatarCatalog, img *image.RGBA, roi image.Rectangle, scale float64, secondLook bool) AvatarMatch {
 	if c == nil || img == nil || scale <= 0 {
 		return AvatarMatch{}
 	}
@@ -73,11 +84,81 @@ func legacyMatch(c *avatarCatalog, img *image.RGBA, roi image.Rectangle, scale f
 	for i := range best {
 		entries = append(entries, best[i].entry)
 	}
-	return legacyMatchEntries(c, view, gray, scale, entries)
+	out, s := legacyScanEntries(c, view, gray, scale, entries)
+	if out.ID != "" || !secondLook {
+		return out
+	}
+	// The second look: every entry ranked by a thumbnail of the portrait
+	// itself, the leading six scored at their generation's display factors in
+	// the portrait band; the same gate over everything scored.
+	var queries []*image.Gray
+	for _, cx := range []float64{avatarBoxLeftX, avatarBoxRightX} {
+		if r := avatarPortraitRect(cx, scale).Intersect(gray.Bounds()); !r.Empty() {
+			queries = append(queries, match.ScaleGray(gray.SubImage(r).(*image.Gray), 36, 36))
+		}
+	}
+	if len(queries) == 0 {
+		return out
+	}
+	ranked := []avatarFinalist(nil)
+	for _, entry := range c.entries {
+		score := 0.0
+		for _, q := range queries {
+			if v := coarseAvatarScore(q, entry.coarseGray, entry.coarseMask); v > score {
+				score = v
+			}
+		}
+		ranked = append(ranked, avatarFinalist{entry, score})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].entry.id < ranked[j].entry.id
+	})
+	for _, f := range ranked[:min(6, len(ranked))] {
+		s.name[f.entry.id], s.base[f.entry.id] = f.entry.name, f.entry.baseName
+		for _, factor := range avatarClassFactors(f.entry) {
+			if value := legacyPortraitScore(c, view, gray, scale, f.entry, factor); value > s.best[f.entry.id] {
+				s.best[f.entry.id] = value
+			}
+		}
+	}
+	if rescued := legacyDecide(s, AvatarMatch{}); rescued.ID != "" {
+		rescued.ids = out.ids
+		return rescued
+	}
+	return out
+}
+
+type legacyScores struct {
+	best       map[string]float64
+	name, base map[string]string
+}
+
+// legacyPortraitScore: the entry at factor, searched in the portrait band
+// (caller holds c.mu).
+func legacyPortraitScore(c *avatarCatalog, view *image.RGBA, gray *image.Gray, scale float64, entry *avatarEntry, factor float64) float64 {
+	w, h := avatarFactorSize(entry, scale, factor)
+	roi := avatarPortraitBand(view.Bounds(), scale, w, h)
+	if w > roi.Dx() || h > roi.Dy() {
+		return 0
+	}
+	score, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: roi, Prepared: c.prepared(entry, w, h)})
+	if err != nil {
+		return 0
+	}
+	return score.Value
 }
 
 // legacyMatchEntries: caller holds c.mu.
 func legacyMatchEntries(c *avatarCatalog, view *image.RGBA, gray *image.Gray, scale float64, entries []*avatarEntry) AvatarMatch {
+	out, _ := legacyScanEntries(c, view, gray, scale, entries)
+	return out
+}
+
+// legacyScanEntries: caller holds c.mu.
+func legacyScanEntries(c *avatarCatalog, view *image.RGBA, gray *image.Gray, scale float64, entries []*avatarEntry) (AvatarMatch, legacyScores) {
 	var out AvatarMatch
 	if gray == nil {
 		gray = match.ToGray(view)
@@ -165,8 +246,21 @@ func legacyMatchEntries(c *avatarCatalog, view *image.RGBA, gray *image.Gray, sc
 					bestByID[entry.id] = value
 				}
 			}
+			if len(entries) == 1 {
+				for _, factor := range avatarClassFactors(entry) {
+					if value := legacyPortraitScore(c, view, gray, scale, entry, factor); value > bestByID[entry.id] {
+						bestByID[entry.id] = value
+					}
+				}
+			}
 		}
 	}
+	s := legacyScores{bestByID, nameByID, baseByID}
+	return legacyDecide(s, out), s
+}
+
+func legacyDecide(s legacyScores, out AvatarMatch) AvatarMatch {
+	bestByID, nameByID, baseByID := s.best, s.name, s.base
 	var runnerName string
 	for id, score := range bestByID {
 		if score > out.Score {

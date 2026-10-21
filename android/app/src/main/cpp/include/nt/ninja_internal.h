@@ -70,6 +70,29 @@ struct stageEntry {
 // 线程：与 Go 相同，mu 只保护可变的模板状态（gray/mask 懒解码、scaled、cacheScale、
 // cachedEntries、cacheWipes）；NCC 打分在锁外进行（可用 nt::ParallelFor，按原始
 // entry/factor 顺序以严格 '>' 归约，结果与串行一致）。
+// avatarScores is the best NCC score per identity over everything one match
+// scored (Go avatarScores), with the identity names. order lists the scored
+// entries (the scan's list, then the second look's): decide() walks it, first
+// occurrence of an id only, instead of Go's random map order (see avatar.cpp's
+// header for the only case where it matters).
+struct avatarScores {
+    std::unordered_map<std::string, double> best;
+    std::unordered_map<std::string, std::string> name, base;
+    std::vector<avatarEntry*> order;
+    // note registers a decoded entry's names.
+    void note(avatarEntry* entry);
+    // decide fills out's winner, runner-up and candidate and applies the strict identity gate.
+    AvatarMatch decide(AvatarMatch out) const;
+};
+
+// avatarView is one match's window: its pixels, their gray and the shared
+// prefix sums of that gray (nullptr: each NCC builds its own).
+struct avatarView {
+    const RGBA& view;
+    const Gray* gray;
+    const match::grayPrefix* prefix;
+};
+
 class AvatarCatalog {
 public:
     AvatarMatch Match(const RGBA* img, Rect roi, double scale);
@@ -106,23 +129,35 @@ public:
     std::mutex mu;  // Go c.mu
 
     // avatarJob is one entry at one display factor. prepared is nullptr when the
-    // template is larger than the ROI (keeps the zero score).
+    // template is larger than its search area (keeps the zero score). roi is the
+    // search area; empty = the whole view.
     struct avatarJob {
         avatarEntry* entry = nullptr;
         PreparedPtr prepared;
+        Rect roi;
         double score = 0;
     };
     // appendJobs fetches or prepares the entry's template at each factor (caller holds mu).
     void appendJobs(std::vector<avatarJob>& jobs, avatarEntry* entry, double scale, const Rect& bounds,
                     const std::vector<double>& factors);
+    // appendPortraitJobs: the entry's generation factors, searched in the portrait band (caller holds mu).
+    void appendPortraitJobs(std::vector<avatarJob>& jobs, avatarEntry* entry, double scale, const Rect& bounds);
+    // scoreEntries is matchEntries that also returns the scores behind its result.
+    AvatarMatch scoreEntries(const avatarView& v, double scale, const std::vector<avatarEntry*>& entries,
+                             avatarScores& scores);
+    // rescue is the second look of a full scan that found no identity (avatar.cpp).
+    AvatarMatch rescue(const avatarView& v, double scale, avatarScores& scores);
+    // addScores scores jobs (in parallel) and keeps each identity's best score.
+    static void addScores(const avatarView& v, std::vector<avatarJob>& jobs, avatarScores& scores);
     // decode fills the full-resolution gray/mask lazily (caller holds mu).
     bool decode(avatarEntry* entry);
 };
 
 // avatarJobScore only reads the immutable template and the caller's pixels
 // (prefix: optional shared prefix sums of *gray, see match::Query::Prefix).
+// roi is the search area; empty = the whole view.
 double avatarJobScore(const RGBA& view, const Gray* gray, const match::PreparedNCC* prepared,
-                      const match::grayPrefix* prefix = nullptr);
+                      const match::grayPrefix* prefix = nullptr, const Rect& roi = Rect{});
 
 // loadAvatarCatalog：解析 index.json，逐条校验 id / sha256（对照 AssetStore 的 "<path>.sha256"），
 // 生成 36² coarse。任何一条失败返回 nullptr（Go 返回 error）。
@@ -144,12 +179,28 @@ Gray avatarFaceMask(const AssetImage& src);
 void avatarGrayMask(const AssetImage& src, Gray& gray, Gray& mask);
 Rect avatarAnchorRect(const Rect& roi, double scale);
 double coarseAvatarScore(const Gray* query, const Gray* templ, const Gray* mask);
-// avatarFactorsFull is the strict multi-scale display-factor sweep.
+// avatarFactorsFull is the strict multi-scale display-factor sweep (Go avatar.go:
+// the HUD renders an 85px icon near 0.55x, a 70px icon near 0.72x, see avatarClassFactors70).
 inline const std::vector<double>& avatarFactorsFull = *new std::vector<double>{.55, .60, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45};
 // avatarFactorPrimary is the full-scan locator factor; avatarFactorsFine is the
 // full sweep without it, in the same order, for the re-scored leaders.
 inline const std::vector<double>& avatarFactorPrimary = *new std::vector<double>{.60};
 inline const std::vector<double>& avatarFactorsFine = *new std::vector<double>{.55, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45};
+// The two catalog icon generations render at different HUD portrait sizes:
+// avatarClassFactors70 (70px icons) and avatarClassFactors85 (85px icons); see
+// the comment in avatar.cpp (Go avatar.go).
+inline const std::vector<double>& avatarClassFactors70 = *new std::vector<double>{.64, .68, .72, .76, .80, .84};
+inline const std::vector<double>& avatarClassFactors85 = *new std::vector<double>{.49, .52, .55, .58};
+constexpr int avatarRescueEntries = 6;
+constexpr double avatarPortraitSide = 48.0;
+constexpr double avatarPortraitSlack = 6.0;
+// avatarClassFactors are the display factors of the entry's icon generation.
+const std::vector<double>& avatarClassFactors(const avatarEntry* entry);
+// avatarPortraitRect is the portrait square around a diamond centre at
+// (cx, avatarBoxCentreY) window units, in the window's own pixels (origin 0).
+Rect avatarPortraitRect(double cx, double scale);
+// avatarPortraitBand is the search area of a w x h portrait template in the window bounds.
+Rect avatarPortraitBand(const Rect& bounds, double scale, int w, int h);
 bool avatarVariantPolicy(const std::string& name);
 void avatarFactorSize(const avatarEntry* entry, double scale, double factor, int& w, int& h);
 bool samePackedPix(const std::vector<uint8_t>& packed, const RGBA* img, const Rect& roi);
