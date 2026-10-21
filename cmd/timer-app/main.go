@@ -31,6 +31,9 @@ import (
 const gcPercent = 50
 
 func main() {
+	// First: no DLL may be found next to the executable (a portable EXE in
+	// Downloads) or in the working directory/PATH; see internal/win (UR-10).
+	_ = win.RestrictDLLSearchPath()
 	if os.Getenv("GOGC") == "" {
 		debug.SetGCPercent(gcPercent)
 	}
