@@ -1,0 +1,68 @@
+/* 小南·漂泊浪客配色：夜空靛蓝 + 樱粉 + 绯红。全站强制深色（config: appearance: 'force-dark'）。 */
+
+@font-face {
+  font-family: 'Brush';
+  /* 马善政毛笔楷书（OFL，见 public/fonts/OFL.txt），只保留了用到的字。改导航标题或首页大标题的字要重新生成：
+     pyftsubset MaShanZheng-Regular.ttf --text="替身计时器" --flavor=woff2 --output-file=public/fonts/brush.woff2 */
+  src: url('/fonts/brush.woff2') format('woff2');
+  font-display: swap;
+}
+
+.dark {
+  --vp-c-bg: #0b0f1f;
+  --vp-c-bg-alt: #080b18;
+  --vp-c-bg-elv: #121833;
+  --vp-c-bg-soft: #141a35;
+  --vp-c-brand-1: #ff8fab;
+  --vp-c-brand-2: #ff6b8b;
+  --vp-c-brand-3: #e11d48;
+  --vp-c-brand-soft: rgba(255, 143, 171, 0.16);
+  --vp-nav-bg-color: rgba(8, 11, 24, 0.72);
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #fff 15%, #ffc2d1 55%, #ff4d6d);
+}
+
+/* 所有页面垫一层压暗的二次元海报；首页上面还盖着视频 */
+body {
+  background:
+    linear-gradient(rgba(11, 15, 31, 0.9), rgba(11, 15, 31, 0.9)),
+    #0b0f1f url('/media/poster.jpg') center / cover fixed;
+}
+
+.VPNavBar:not(.home.top) {
+  backdrop-filter: blur(12px);
+}
+.VPNavBarTitle .title {
+  font-family: 'Brush', var(--vp-font-family-base);
+  font-size: 22px;
+  font-weight: 400;
+}
+
+/* 首页大标题 */
+.VPHome .VPHero .name {
+  font-family: 'Brush', var(--vp-font-family-base);
+  font-weight: 400;
+  font-size: 56px;
+  line-height: 1.2;
+  letter-spacing: 2px;
+  filter: drop-shadow(0 2px 14px rgba(255, 77, 109, 0.5));
+}
+@media (min-width: 640px) {
+  .VPHome .VPHero .name {
+    font-size: 72px;
+  }
+}
+@media (min-width: 960px) {
+  .VPHome .VPHero .name {
+    font-size: 88px;
+  }
+}
+
+/* 首页功能卡片做成半透明，透出背后的视频 */
+.VPHome .VPFeature {
+  --vp-c-bg-soft: rgba(12, 16, 36, 0.55);
+  backdrop-filter: blur(10px);
+}
+.VPHome .VPFeature .title {
+  color: #fff;
+}
