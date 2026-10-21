@@ -71,6 +71,53 @@ inline uint64_t HashBytes(uint64_t seed, const void* data, size_t len) {
 
 inline uint64_t HashString(uint64_t seed, const std::string& s) { return HashBytes(seed, s.data(), s.size()); }
 
+// HashOpaquePixels is HashBytes of one row of `pixels` 4-byte pixels with every
+// 4th byte (alpha) read as 0xFF, without copying: recognition never reads that
+// byte and RGBX_8888 buffers leave it undefined, so it must not make equal
+// visible pixels look different (frame fingerprint, Gated pixelHash; audit
+// NC-09). Every read of HashBytes on a length that is a multiple of 4 starts on
+// a pixel, so masking bytes 3 (and 7) of each read is exact; opaque rows hash
+// exactly as before.
+inline uint64_t HashOpaquePixels(uint64_t seed, const void* data, size_t pixels) {
+    using namespace hash_detail;
+    constexpr uint64_t a8 = 0xFF000000FF000000ull, a4 = 0xFF000000ull;
+    const uint8_t* p = static_cast<const uint8_t*>(data);
+    const size_t len = pixels * 4;
+    auto m8 = [](const uint8_t* q) { return r8(q) | a8; };
+    auto m4 = [](const uint8_t* q) { return r4(q) | a4; };
+    seed ^= s0;
+    uint64_t a, b;
+    if (len <= 16) {
+        if (len >= 4) {
+            a = (m4(p) << 32) | m4(p + ((len >> 3) << 2));
+            b = (m4(p + len - 4) << 32) | m4(p + len - 4 - ((len >> 3) << 2));
+        } else {
+            a = b = 0;
+        }
+    } else {
+        size_t i = len;
+        if (i > 48) {
+            uint64_t see1 = seed, see2 = seed;
+            do {
+                seed = mum(m8(p) ^ s1, m8(p + 8) ^ seed);
+                see1 = mum(m8(p + 16) ^ s2, m8(p + 24) ^ see1);
+                see2 = mum(m8(p + 32) ^ s3, m8(p + 40) ^ see2);
+                p += 48;
+                i -= 48;
+            } while (i > 48);
+            seed ^= see1 ^ see2;
+        }
+        while (i > 16) {
+            seed = mum(m8(p) ^ s1, m8(p + 8) ^ seed);
+            i -= 16;
+            p += 16;
+        }
+        a = m8(p + i - 16);
+        b = m8(p + i - 8);
+    }
+    return mum(s1 ^ len, mum(a ^ s1, b ^ seed));
+}
+
 // frame.mixHash：与 Go 完全相同的组合公式。
 constexpr uint64_t MixHash(uint64_t acc, uint64_t value) {
     acc ^= value + 0x9e3779b97f4a7c15ull + (acc << 6) + (acc >> 2);
