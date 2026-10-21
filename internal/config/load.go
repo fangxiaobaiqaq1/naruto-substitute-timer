@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,7 +87,12 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("open config: %w", err)
 	}
 	defer f.Close()
-	if err := decodeStrict(f, &cfg); err != nil {
+	r := bufio.NewReader(f)
+	// Windows editors (Notepad) may save UTF-8 with a byte order mark.
+	if mark, err := r.Peek(len(utf8BOM)); err == nil && bytes.Equal(mark, utf8BOM) {
+		_, _ = r.Discard(len(utf8BOM))
+	}
+	if err := decodeStrict(r, &cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}
 	if err := Validate(cfg); err != nil {
@@ -93,6 +100,8 @@ func Load(path string) (Config, error) {
 	}
 	return cfg, nil
 }
+
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 func decodeStrict(r io.Reader, dst any) error {
 	dec := json.NewDecoder(r)
