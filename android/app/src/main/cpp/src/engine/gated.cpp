@@ -38,7 +38,8 @@ public:
 // pixelHash distinguishes two captures during profile-switch confirmation; a
 // process-local 64-bit hash is sufficient and far cheaper than a digest.
 // Go 哈希整个 img.Pix；这里只哈希可见像素行（stride 填充不是观测），逐行组合，
-// 使得紧凑缓冲与带填充的 HardwareBuffer 得到同一结果。
+// 使得紧凑缓冲与带填充的 HardwareBuffer 得到同一结果。alpha 按不透明算（Go 的采集帧
+// 一律不透明；RGBX_8888 的 X 字节未定义，见 nt/hash.h HashOpaquePixels）。
 uint64_t pixelHash(const RGBA* img) {
     uint64_t seed = pixelHashSeed();
     if (img == nullptr || img->Pix == nullptr) {
@@ -52,7 +53,7 @@ uint64_t pixelHash(const RGBA* img) {
     uint64_t sum = 0;
     for (int y = 0; y < r.Dy(); ++y) {
         const uint8_t* row = img->Pix + static_cast<ptrdiff_t>(y) * img->Stride;
-        sum = MixHash(sum, HashBytes(seed, row, static_cast<size_t>(rowBytes)));
+        sum = MixHash(sum, HashOpaquePixels(seed, row, static_cast<size_t>(r.Dx())));
     }
     return sum;
 }

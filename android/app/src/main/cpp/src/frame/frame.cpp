@@ -109,7 +109,8 @@ uint64_t frameFingerprint(const RGBA* img, const std::string& method) {
         return sum;
     }
     // Hash row by row so a padded stride and a packed buffer with the same
-    // visible pixels produce the same fingerprint. Row hashes are independent:
+    // visible pixels produce the same fingerprint; alpha reads as opaque (the
+    // X byte of RGBX_8888 is undefined, nt/hash.h). Row hashes are independent:
     // they are computed in parallel bands, then mixed in row order exactly as
     // the sequential loop did (same value).
     const int rows = r.Dy();
@@ -122,7 +123,7 @@ uint64_t frameFingerprint(const RGBA* img, const std::string& method) {
         const int y0 = rows * band / b, y1 = rows * (band + 1) / b;
         for (int y = y0; y < y1; ++y) {
             const uint8_t* row = img->Pix + static_cast<ptrdiff_t>(y) * img->Stride;
-            hashes[y] = HashBytes(seed, row, static_cast<size_t>(rowBytes));
+            hashes[y] = HashOpaquePixels(seed, row, static_cast<size_t>(r.Dx()));
         }
     });
     for (int y = 0; y < rows; ++y) sum = MixHash(sum, hashes[y]);
