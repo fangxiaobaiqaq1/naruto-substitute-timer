@@ -213,6 +213,11 @@ type TrackingConfig struct {
 	ResetAfterMS         int     `json:"resetAfterMs"`
 }
 
+// DebugConfig: Directory holds diagnostics, bead dumps and crash.log;
+// RetentionFiles is how many bead dump files are kept there (0 = all).
+// SaveRaw, SaveAnnotated, SaveOnLowConfidence, MinimumIntervalMS and LogFile
+// have no consumer; they stay so existing config.json files keep loading under
+// strict decoding.
 type DebugConfig struct {
 	Enabled             bool   `json:"enabled"`
 	Directory           string `json:"directory"`

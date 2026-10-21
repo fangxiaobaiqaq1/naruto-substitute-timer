@@ -848,11 +848,12 @@ func (s *session) captureOnce() {
 	}
 	dump := s.dumpNext
 	s.dumpNext = false
+	debugCfg := s.cfg.Debug
 	beads := append([]frame.Bead(nil), s.beads...)
 	s.mu.Unlock()
 
 	if dump && f.Img != nil {
-		path, err := timerapp.SaveBeadDump(f.Img, beads)
+		path, err := timerapp.SaveBeadDump(debugCfg, f.Img, beads)
 		s.mu.Lock()
 		if err != nil {
 			s.status = "保存截图失败: " + err.Error()
