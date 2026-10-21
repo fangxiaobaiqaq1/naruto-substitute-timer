@@ -15,13 +15,14 @@ import (
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
+	"narutotimer/internal/safego"
 	"narutotimer/internal/win"
 )
 
 // AnalyzeImage is the same pixel-to-observation path for live capture and replay.
 // capturedAt is acquisition completion, NOT an asserted Android render time.
-func AnalyzeImage(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
-	f := Frame{Img: img, CaptureStarted: started, CapturedAt: capturedAt, CaptureMethod: source}
+func AnalyzeImage(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) (f Frame) {
+	f = Frame{Img: img, CaptureStarted: started, CapturedAt: capturedAt, CaptureMethod: source}
 	if img == nil {
 		f.CapturedAt = time.Time{}
 		f.Hold = true
@@ -40,6 +41,7 @@ func AnalyzeImage(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, s
 		f.Status = "空帧，等待画面"
 		return f
 	}
+	defer recoverAnalysis(&f)
 	var res engine.Result
 	f.AnalysisStarted = time.Now()
 	if timed, ok := eng.(engine.TimedEngine); ok {
@@ -51,6 +53,34 @@ func AnalyzeImage(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, s
 	fillFromEngine(&f, win.Window{Title: source}, img, res)
 	f.Hold = res.Uncertain
 	return f
+}
+
+// recoverAnalysis is deferred around engine analysis. A panic in the engine,
+// including one re-raised from its helper goroutines (safego.Group), fails this
+// frame only: it keeps the capture (image, times, method), drops any partial
+// result, shows the error in the status line and logs the stack.
+func recoverAnalysis(f *Frame) {
+	p := safego.Recovered(recover())
+	if p == nil {
+		return
+	}
+	safego.Report("analysis", p)
+	*f = Frame{Img: f.Img, CaptureStarted: f.CaptureStarted, CapturedAt: f.CapturedAt, CaptureMethod: f.CaptureMethod,
+		AnalysisStarted: f.AnalysisStarted, AnalyzedAt: time.Now(), Hold: true,
+		Err: fmt.Errorf("识别出错，已跳过本帧：%w", p)}
+}
+
+// captureGuarded runs one capture request on the provider's worker. A panic in
+// the capture client or the frame plumbing fails this request only; the
+// worker keeps serving later requests.
+func captureGuarded(inner Provider) (f Frame) {
+	defer func() {
+		if p := safego.Recovered(recover()); p != nil {
+			safego.Report("capture", p)
+			f = Frame{Hold: true, Err: fmt.Errorf("采集出错，已跳过本帧：%w", p)}
+		}
+	}()
+	return inner()
 }
 
 // NewConfiguredSnapshotter keeps one screenshot connection. A single worker is
@@ -343,7 +373,7 @@ func boundedProvider(inner Provider, cleanup func(), timeout time.Duration, atte
 					return
 				default:
 				}
-				f := inner()
+				f := captureGuarded(inner)
 				busy.Store(false)
 				// Each request owns one buffer, so a timed-out caller cannot block
 				// cleanup or cause its late frame to satisfy the next request.

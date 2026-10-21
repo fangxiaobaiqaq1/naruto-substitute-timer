@@ -22,6 +22,7 @@ import (
 
 	"narutotimer/assets"
 	"narutotimer/internal/match"
+	"narutotimer/internal/safego"
 )
 
 // AvatarOptions supports an optional external catalog for development. The
@@ -282,7 +283,7 @@ func parallelFor(n int, fn func(int)) {
 		return
 	}
 	var next atomic.Int64
-	var wg sync.WaitGroup
+	var wg safego.Group // A worker's panic reaches the caller after all finished.
 	for range workers {
 		wg.Go(func() {
 			for {

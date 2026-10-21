@@ -20,6 +20,7 @@ import (
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
 	"narutotimer/internal/match"
+	"narutotimer/internal/safego"
 )
 
 const DefaultManifest = "assets/templates/manifest.json"
@@ -799,11 +800,11 @@ func (c *Catalog) forEach(n int, fn func(int)) {
 			fn(i)
 		}
 	}
-	var wg sync.WaitGroup
+	var wg safego.Group // A worker's panic reaches the caller after all finished.
 	for range workers - 1 {
 		wg.Go(run)
 	}
-	run() // The caller is one of the workers.
+	wg.Run(run) // The caller is one of the workers.
 	wg.Wait()
 }
 

@@ -99,8 +99,7 @@ func (r *captureRing) slot(width, height int) *image.RGBA {
 
 func (r *captureRing) advance() { r.next = (r.next + 1) % len(r.frames) }
 
-func snapshot(eng engine.Engine, mode detect.ContentMode, ring *captureRing) Frame {
-	var f Frame
+func snapshot(eng engine.Engine, mode detect.ContentMode, ring *captureRing) (f Frame) {
 	f.CaptureStarted = time.Now()
 	f.CaptureMethod = "printwindow-fullcontent"
 
@@ -153,6 +152,7 @@ func snapshot(eng engine.Engine, mode detect.ContentMode, ring *captureRing) Fra
 		f.Status = fmt.Sprintf("已连接 %s · 空帧，沿用上次", w.Title)
 		return f
 	}
+	defer recoverAnalysis(&f)
 	f.AnalysisStarted = time.Now()
 	res := eng.Analyze(img)
 	f.AnalyzedAt = time.Now()

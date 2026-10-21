@@ -14,6 +14,7 @@ import (
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
 	"narutotimer/internal/ninja"
+	"narutotimer/internal/safego"
 )
 
 // Engine 保存同步保护的布局偏好，可并发调用。
@@ -138,9 +139,10 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	var campReadout, duelReadout [2]ninja.Readout
 	var campGeometry, duelGeometry [2]engine.SideGeometry
 	if parallelSides {
-		var wg sync.WaitGroup
+		// A panic on either side reaches this goroutine after both finished.
+		var wg safego.Group
 		wg.Go(func() { duel = sample("duel", duelPositions, &duelReadout, &duelGeometry) })
-		camp = sample("camp", campPositions, &campReadout, &campGeometry)
+		wg.Run(func() { camp = sample("camp", campPositions, &campReadout, &campGeometry) })
 		wg.Wait()
 	} else {
 		camp = sample("camp", campPositions, &campReadout, &campGeometry)

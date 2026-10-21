@@ -16,6 +16,7 @@ import (
 	"narutotimer/internal/config"
 	"narutotimer/internal/engine/factory"
 	"narutotimer/internal/frame"
+	"narutotimer/internal/safego"
 	"narutotimer/internal/ui"
 	"narutotimer/internal/updates"
 	"narutotimer/internal/win"
@@ -64,6 +65,8 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+	// Not fatal: a read-only directory must not stop the timer.
+	_, _ = installCrashLog(cfg.Debug.Directory)
 	eng, err := factory.NewLive(factory.FromApp(cfg))
 	if err != nil {
 		fail(err)
@@ -82,6 +85,37 @@ func main() {
 		ui.WithInitialAbout(len(os.Args) == 2 && os.Args[1] == "--about")); err != nil {
 		fail(err)
 	}
+}
+
+// crashLogLimit bounds debug/crash.log across a crash loop: a bigger log is
+// kept once as crash.log.old and a new one is started.
+const crashLogLimit = 1 << 20
+
+// installCrashLog gives the windowed build (-H windowsgui: stderr goes
+// nowhere) a trace. A fatal panic or runtime error on any goroutine writes its
+// report to <debug>/crash.log, and panics recovered on the capture/analysis
+// path (shown as an error in the overlay) are logged there with their stacks.
+func installCrashLog(dir string) (*os.File, error) {
+	if dir == "" {
+		dir = "debug"
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, "crash.log")
+	if info, err := os.Stat(path); err == nil && info.Size() > crashLogLimit {
+		_ = os.Rename(path, path+".old")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := debug.SetCrashOutput(f, debug.CrashOptions{}); err != nil {
+		f.Close()
+		return nil, err
+	}
+	safego.SetLog(f)
+	return f, nil
 }
 
 func fail(err error) {
