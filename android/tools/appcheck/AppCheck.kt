@@ -93,6 +93,38 @@ private fun identityStore() {
     check("undecodable refused", IdentityStore.rejectReason(0, 0, 10) != null)
 }
 
+// Which typed names have an account-name image (the phone has no text recognition), and the
+// 1080p HUD scale an imported crop of this phone's own screenshot is brought to.
+private fun identityLabels() {
+    // Go identity.labelFromFile.
+    eq("label of an import", IdentityStore.labelFromFile("白方小_20261021-120000-0.png"), "白方小")
+    eq("label without stamp", IdentityStore.labelFromFile("白方小.jpg"), "白方小")
+    eq("label: a leading '_' cuts nothing (Go i > 0)", IdentityStore.labelFromFile("_x_1.png"), "_x_1")
+    eq("label of a path", IdentityStore.labelFromFile("seen/opp-20261021-120000.png"), "opp-20261021-120000")
+    eq("label drops spaces and ':'", IdentityStore.labelFromFile(" 爱有 天意:_1.PNG"), "爱有天意")
+    eq("label keeps symbols", IdentityStore.labelFromFile("爱有天意ღ_1.png"), "爱有天意ღ")
+    val files = tempDir("labels")
+    try {
+        val root = IdentityStore.root(files).apply { mkdirs() }
+        File(root, "白方小_20261021-120000-0.png").writeText("x")
+        File(root, "notes.txt").writeText("x")
+        File(IdentityStore.seenDir(files).apply { mkdirs() }, "opp-20261021-120000.png").writeText("x")
+        File(File(root, IdentityStore.FIGHT).apply { mkdirs() }, "另一号_1.jpeg").writeText("x")
+        eq("imported labels: root and fight, not seen", IdentityStore.importedLabels(files), setOf("白方小", "另一号"))
+        eq("no identity dir", IdentityStore.importedLabels(tempDir("empty")), emptySet<String>())
+        eq("names without image", IdentityStore.namesWithoutImage(listOf("白方小", " 爱有天意 ", "白方小", ""), setOf("白方小")), listOf("爱有天意"))
+    } finally {
+        files.deleteRecursively()
+    }
+    eq("1080p-high phone: unchanged", IdentityStore.importScale(2400, 1080), 1.0)
+    eq("1080p 16:9 portrait bounds: unchanged", IdentityStore.importScale(1080, 1920), 1.0)
+    eq("1440p phone: x0.75", IdentityStore.importScale(3200, 1440), 0.75)
+    eq("720p phone: x1.5", IdentityStore.importScale(1600, 720), 1.5)
+    check("16:10 tablet 2560x1600: width-limited", Math.abs(IdentityStore.importScale(2560, 1600) - 0.75) < 1e-9)
+    eq("within 2 %: unchanged", IdentityStore.importScale(2340, 1080), 1.0)
+    eq("degenerate", IdentityStore.importScale(0, 0), 1.0)
+}
+
 private fun housekeeping() {
     val dir = tempDir("cache")
     try {
@@ -176,6 +208,7 @@ private fun newestWins() {
 fun main() {
     captureSize()
     identityStore()
+    identityLabels()
     housekeeping()
     apkCheck()
     newestWins()
