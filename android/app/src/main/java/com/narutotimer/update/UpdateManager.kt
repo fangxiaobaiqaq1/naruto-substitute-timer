@@ -4,6 +4,9 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
+import android.content.pm.Signature
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -11,7 +14,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 import com.narutotimer.BuildConfig
-import com.narutotimer.R
+import com.narutotimer.Housekeeping
 import com.narutotimer.Settings as AppSettings
 import org.json.JSONArray
 import org.json.JSONObject
@@ -99,11 +102,23 @@ object UpdateManager {
                 .onFailure { error ->
                     main.post {
                         downloading = false
-                        Toast.makeText(app, "更新下载失败：${error.message}", Toast.LENGTH_LONG).show()
+                        if (error is UpdateRejected && activity.alive()) {
+                            AlertDialog.Builder(activity)
+                                .setTitle("已拒绝安装更新")
+                                .setMessage(error.message)
+                                .setPositiveButton("知道了", null)
+                                .show()
+                        } else {
+                            val text = if (error is UpdateRejected) error.message else "更新下载失败：${error.message}"
+                            Toast.makeText(app, text, Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
         }
     }
+
+    /** A downloaded APK that must not be installed (UR-04); the message is for the user as is. */
+    private class UpdateRejected(message: String) : Exception(message)
 
     private fun checkNow(source: Source): Release {
         val root = JSONObject(getText(source.api, source, 2 * 1024 * 1024))
@@ -155,14 +170,72 @@ object UpdateManager {
             ?: checksumFromAssets(release, apk)
             ?: error("发布附件缺少 SHA-256，已拒绝安装")
         val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+        // Earlier APKs and interrupted downloads are never needed again (one update at a time).
+        pendingInstall = null
+        Housekeeping.deleteFiles(dir)
         val target = File(dir, "update-${release.tag}.apk")
         val part = File(dir, ".${target.name}.part")
         downloadTo(apk.url, release.source, part, apk.size)
         require(sha256(part) == expected) { "APK SHA-256 校验失败" }
         if (target.exists()) target.delete()
         require(part.renameTo(target)) { "无法保存更新文件" }
+        try {
+            verifyApk(context, target)
+        } catch (e: Exception) {
+            target.delete()
+            throw e
+        }
         return target
     }
+
+    /**
+     * UR-04: the APK must be this app (package name), signed by the same certificate as the running
+     * app, and newer (versionCode) — checked before the system installer ever sees it ([ApkCheck]).
+     * Throws [UpdateRejected] with the reason otherwise.
+     */
+    private fun verifyApk(context: Context, apk: File) {
+        val pm = context.packageManager
+        val archive = packageInfo(pm, archive = apk.path)?.let { info ->
+            val signing = info.signingInfo
+            ApkCheck.Archive(
+                packageName = info.packageName.orEmpty(),
+                versionCode = info.longVersionCode,
+                signers = signing?.apkContentsSigners?.let(::certDigests).orEmpty(),
+                signerHistory = if (signing != null && !signing.hasMultipleSigners()) {
+                    signing.signingCertificateHistory?.map(::certDigest).orEmpty()
+                } else {
+                    emptyList()
+                },
+            )
+        }
+        val self = packageInfo(pm, installed = context.packageName) ?: throw UpdateRejected("无法读取本应用的安装信息，已拒绝安装。")
+        val installed = ApkCheck.Installed(
+            context.packageName,
+            self.longVersionCode,
+            self.signingInfo?.apkContentsSigners?.let(::certDigests).orEmpty(),
+        )
+        ApkCheck.problem(archive, installed)?.let { throw UpdateRejected(it) }
+    }
+
+    /** PackageInfo with signing certificates of the APK file [archive], or of the [installed] package; null if unreadable. */
+    private fun packageInfo(pm: PackageManager, archive: String? = null, installed: String? = null): PackageInfo? {
+        val flags = PackageManager.GET_SIGNING_CERTIFICATES
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= 33) {
+                val f = PackageManager.PackageInfoFlags.of(flags.toLong())
+                if (archive != null) pm.getPackageArchiveInfo(archive, f) else pm.getPackageInfo(installed!!, f)
+            } else {
+                @Suppress("DEPRECATION")
+                if (archive != null) pm.getPackageArchiveInfo(archive, flags) else pm.getPackageInfo(installed!!, flags)
+            }
+        }.getOrNull()
+    }
+
+    private fun certDigests(signers: Array<Signature>): Set<String> = signers.mapTo(HashSet(), ::certDigest)
+
+    /** Lowercase hex SHA-256 of the DER certificate. */
+    private fun certDigest(signer: Signature): String =
+        MessageDigest.getInstance("SHA-256").digest(signer.toByteArray()).joinToString("") { "%02x".format(it) }
 
     private fun checksumFromAssets(release: Release, apk: Asset): String? {
         val sums = release.assets.firstOrNull { it.name.equals("SHA256SUMS.txt", true) || it.name.equals("sha256sums.txt", true) } ?: return null
