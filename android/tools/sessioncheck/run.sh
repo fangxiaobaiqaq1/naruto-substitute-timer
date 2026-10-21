@@ -36,6 +36,8 @@ COMPILER+=":$(jar org.jetbrains.intellij.deps trove4j 1.0.20200330)"
 COMPILER+=":$(jar org.jetbrains.kotlinx kotlinx-coroutines-core-jvm 1.6.4)"
 PRODUCTION=("$KT/NativeCore.kt" "$KT/Settings.kt" "$KT/tracker/Session.kt" "$KT/tracker/SideClock.kt" "$KT/tracker/NinjaRules.kt")
 [[ -f "$KT/capture/CaptureMeta.kt" ]] && PRODUCTION+=("$KT/capture/CaptureMeta.kt")
+# Settings.calibRect applies the calibration size limits (NC-01).
+[[ -f "$KT/CalibrationLimits.kt" ]] && PRODUCTION+=("$KT/CalibrationLimits.kt")
 rm -rf "$OUT/stubs" "$OUT/classes" "$OUT/tests"
 mkdir -p "$OUT/stubs" "$OUT/classes" "$OUT/tests"
 "$JAVA_HOME/bin/javac" --release 17 -d "$OUT/stubs" "$STUBS/android/content/Context.java" \
@@ -47,8 +49,11 @@ kotlinc() {
 # Production compiles against the real Android API; only the driver sees the host Context.
 kotlinc -classpath "$STDLIB:$ANNOTATIONS:$ANDROID_JAR" -d "$OUT/classes" "${PRODUCTION[@]}"
 kotlinc -classpath "$OUT/classes:$OUT/stubs:$STDLIB:$ANNOTATIONS" -d "$OUT/tests" "$HERE/SessionCheck.kt"
-NATIVE_METHODS="$(sed -n 's/^inline const std::string Method[A-Za-z]* = "\(.*\)";$/\1/p' \
+# Both declaration forms: `inline const std::string MethodX = "...";` and (since NC-06, never
+# destroyed) `inline const std::string& MethodX = *new std::string("...");`.
+NATIVE_METHODS="$(sed -n -E 's/^inline const std::string&? Method[A-Za-z]* = (\*new std::string\()?"([^"]*)"\)?;$/\2/p' \
     "$REPO/android/app/src/main/cpp/include/nt/frame.h" | paste -sd, -)"
+[[ -n "$NATIVE_METHODS" ]] || { echo "no Method* constants found in nt/frame.h" >&2; exit 1; }
 "$JAVA_HOME/bin/java" -Dfile.encoding=UTF-8 -cp "$OUT/tests:$OUT/classes:$OUT/stubs:$STDLIB" \
     sessioncheck.SessionCheckKt "$SCENARIOS" "$NATIVE_METHODS" > "$OUT/android.txt"
 printf '{"Replace":{"%s":"%s"}}\n' "$REPO/internal/ui/zz_sessioncheck_test.go" "$HERE/gosession.go" > "$OUT/overlay.json"
