@@ -57,6 +57,11 @@ object FrameLoop {
 
     private val started = AtomicBoolean(false)
     private val generation = AtomicLong(0)
+    /**
+     * Makes [start] / [stop] atomic with respect to each other: they may run on different threads
+     * (main; the capture thread on a system "stop sharing"). Lock order: lifecycle → [wake].
+     */
+    private val lifecycle = Any()
     private val wake = Object()
     @Volatile private var pending: CapturedFrame? = null
     /**
@@ -64,7 +69,6 @@ object FrameLoop {
      * start another frame; see [takeFrame].
      */
     private var notBefore = 0L
-    @Volatile private var thread: Thread? = null
     private val analyzed = AtomicLong(0)
     private val dropped = AtomicLong(0)
     private val totalNs = AtomicLong(0)
@@ -72,9 +76,16 @@ object FrameLoop {
     @Volatile private var lastWidth = 0
     @Volatile private var lastHeight = 0
     @Volatile private var lastResult: AnalysisResult? = null
-    /** Staging copy for [analyzeViaBitmap] (analysis thread; dropped by [stop] / a hardware-buffer frame). */
-    @Volatile private var fallbackRgba: ByteBuffer? = null
-    private var fallbackRow = IntArray(0)
+
+    /**
+     * Per analysis thread: staging copies for [analyzeViaBitmap] (dropped by a hardware-buffer
+     * frame, and with the thread). An old thread that is still finishing its frame after a
+     * restart never shares them with the new one.
+     */
+    private class Scratch {
+        var rgba: ByteBuffer? = null
+        var row = IntArray(0)
+    }
 
     /** A calibration snapshot ([requestSnapshot]): one frame and what its analysis used. */
     class Snapshot(
@@ -115,50 +126,63 @@ object FrameLoop {
     internal val imageLock = Any()
 
     fun start(context: android.content.Context) {
-        if (!started.compareAndSet(false, true)) return
-        val run = generation.incrementAndGet()
         val app = context.applicationContext as TimerApp
-        val t = Thread({
-            var paceUntil = 0L
-            while (started.get() && generation.get() == run) {
-                val frame = takeFrame(run, paceUntil) ?: continue
-                val begin = System.nanoTime()
-                var result: AnalysisResult? = null
-                try {
-                    if (!started.get() || generation.get() != run) continue
-                    if (app.nativeStatus != TimerApp.NativeStatus.READY) continue
-                    result = analyze(frame)
-                    val elapsed = System.nanoTime() - begin
-                    if (result != null) {
-                        lastResult = result
-                        lastWidth = result.width
-                        lastHeight = result.height
-                        // Heartbeats are only valid after a freshly captured frame was analyzed.
-                        app.session.onFrame(result)
-                        app.session.onHeartbeat(System.nanoTime())
-                        AssetLoader.drainOppCrop(app)
-                    }
-                    totalNs.addAndGet(elapsed)
-                    analyzed.incrementAndGet()
-                    lastMethod = frame.method
-                } catch (t: Throwable) {
-                    app.session.onFrame(AnalysisResult.failure(t.message ?: "analysis failed", frame.capturedAtNanos, CaptureMeta.methodName(frame.method)))
-                } finally {
-                    // Without a pending request this is one volatile read per frame.
-                    val shot = snapshot
-                    if (shot != null && shot.accepts(frame)) {
-                        runCatching { takeSnapshot(frame, shot, result) }
-                    }
-                    frame.close()
-                    // Go nextCaptureWait: the next frame starts no earlier than this one's start +
-                    // pollIntervalMs (16 ms in a fight, 400 ms otherwise), read after onFrame so the
-                    // first fight frame already switches to the fight interval.
-                    paceUntil = begin + app.session.pollIntervalMs() * 1_000_000L
+        app.ensureNativeLoaded() // Frames are dropped until it is READY.
+        synchronized(lifecycle) {
+            if (started.get()) return
+            val run = generation.incrementAndGet()
+            started.set(true)
+            Thread({ analysisLoop(app, run) }, "nt-analysis-$run").start()
+        }
+    }
+
+    /** True while the loop started as [run] is still the current one. */
+    private fun current(run: Long): Boolean = started.get() && generation.get() == run
+
+    private fun analysisLoop(app: TimerApp, run: Long) {
+        val scratch = Scratch()
+        var paceUntil = 0L
+        while (current(run)) {
+            val frame = takeFrame(run, paceUntil) ?: continue
+            val begin = System.nanoTime()
+            var result: AnalysisResult? = null
+            try {
+                if (!current(run)) continue
+                if (app.nativeStatus != TimerApp.NativeStatus.READY) continue
+                result = analyze(frame, scratch)
+                val elapsed = System.nanoTime() - begin
+                // Stopped or restarted while this frame was analysed (stop() does not wait for
+                // it): the session belongs to the new loop now, so the old result is dropped.
+                if (!current(run)) continue
+                if (result != null) {
+                    lastResult = result
+                    lastWidth = result.width
+                    lastHeight = result.height
+                    // Heartbeats are only valid after a freshly captured frame was analyzed.
+                    app.session.onFrame(result)
+                    app.session.onHeartbeat(System.nanoTime())
+                    AssetLoader.drainOppCrop(app)
                 }
+                totalNs.addAndGet(elapsed)
+                analyzed.incrementAndGet()
+                lastMethod = frame.method
+            } catch (t: Throwable) {
+                if (current(run)) {
+                    app.session.onFrame(AnalysisResult.failure(t.message ?: "analysis failed", frame.capturedAtNanos, CaptureMeta.methodName(frame.method)))
+                }
+            } finally {
+                // Without a pending request this is one volatile read per frame.
+                val shot = snapshot
+                if (shot != null && shot.accepts(frame) && current(run)) {
+                    runCatching { takeSnapshot(frame, shot, result, run) }
+                }
+                frame.close()
+                // Go nextCaptureWait: the next frame starts no earlier than this one's start +
+                // pollIntervalMs (16 ms in a fight, 400 ms otherwise), read after onFrame so the
+                // first fight frame already switches to the fight interval.
+                paceUntil = begin + app.session.pollIntervalMs() * 1_000_000L
             }
-        }, "nt-analysis-$run")
-        thread = t
-        t.start()
+        }
     }
 
     /**
@@ -189,21 +213,23 @@ object FrameLoop {
         null
     }
 
+    /**
+     * Stops the loop without waiting for it (callers are usually on the main thread, and one frame
+     * can take over a second): the analysis thread finishes the frame it holds, drops its result
+     * and exits. A [start] right after begins a new loop at once.
+     */
     fun stop() {
-        if (!started.compareAndSet(true, false)) return
-        generation.incrementAndGet()
-        synchronized(wake) {
-            pending?.close()
-            pending = null
-            notBefore = 0L
-            snapshot = null // The requester's own timeout reports the failure.
-            wake.notifyAll()
+        synchronized(lifecycle) {
+            if (!started.compareAndSet(true, false)) return
+            generation.incrementAndGet()
+            synchronized(wake) {
+                pending?.close()
+                pending = null
+                notBefore = 0L
+                snapshot = null // The requester's own timeout reports the failure.
+                wake.notifyAll()
+            }
         }
-        fallbackRgba = null
-        val old = thread
-        thread = null
-        old?.interrupt()
-        if (old != null && old !== Thread.currentThread()) runCatching { old.join(STOP_JOIN_MS) }
     }
 
     val running: Boolean get() = started.get()
@@ -273,8 +299,8 @@ object FrameLoop {
     }
 
     /** Analysis thread, before [CapturedFrame.close]. */
-    private fun takeSnapshot(frame: CapturedFrame, request: SnapshotRequest, result: AnalysisResult?) {
-        if (!started.get()) return
+    private fun takeSnapshot(frame: CapturedFrame, request: SnapshotRequest, result: AnalysisResult?, run: Long) {
+        if (!current(run)) return
         val begin = System.nanoTime()
         val bitmap = runCatching { copyFrame(frame) }
             .onFailure { Log.w(TAG, "snapshot copy failed", it) }
@@ -354,12 +380,12 @@ object FrameLoop {
         return bitmap
     }
 
-    private fun analyze(frame: CapturedFrame): AnalysisResult? {
+    private fun analyze(frame: CapturedFrame, scratch: Scratch): AnalysisResult? {
         val result = runCatching {
             NativeCore.analyzeHardwareBuffer(frame.buffer, frame.capturedAtNanos, frame.method)
         }.getOrNull()
         if (result != null) {
-            if (fallbackRgba != null) fallbackRgba = null // The source changed; free the staging copy.
+            scratch.rgba = null // The source changed; free the staging copy.
             return result
         }
 
@@ -368,10 +394,10 @@ object FrameLoop {
         val error = NativeCore.lastError().lowercase()
         if (!error.contains("hardwarebuffer") && !error.contains("lock failed") &&
             !error.contains("unsupported") && !error.contains("bad arguments")) return null
-        return runCatching { analyzeViaBitmap(frame) }.getOrNull()
+        return runCatching { analyzeViaBitmap(frame, scratch) }.getOrNull()
     }
 
-    private fun analyzeViaBitmap(frame: CapturedFrame): AnalysisResult? {
+    private fun analyzeViaBitmap(frame: CapturedFrame, scratch: Scratch): AnalysisResult? {
         val source = Bitmap.wrapHardwareBuffer(frame.buffer, ColorSpace.get(ColorSpace.Named.SRGB)) ?: return null
         val bitmap = try {
             source.copy(Bitmap.Config.ARGB_8888, false) ?: return null
@@ -382,7 +408,7 @@ object FrameLoop {
             val width = bitmap.width
             val height = bitmap.height
             if (width <= 0 || height <= 0) return null
-            val rgba = fillRgba(bitmap, width, height)
+            val rgba = fillRgba(bitmap, width, height, scratch)
             return NativeCore.analyzeBuffer(rgba, width, height, width * 4, frame.capturedAtNanos, frame.method)
         } finally {
             bitmap.recycle()
@@ -390,21 +416,21 @@ object FrameLoop {
     }
 
     /**
-     * Packed R,G,B,A rows of [bitmap] in [fallbackRgba] (reused while the size fits), byte for
+     * Packed R,G,B,A rows of [bitmap] in [Scratch.rgba] (reused while the size fits), byte for
      * byte what Bitmap.getPixels (non-premultiplied sRGB ARGB) reordered to R,G,B,A gives:
      * one copyPixelsToBuffer of the raw pixels, which equal that wherever alpha is 255 (always,
      * for a screen frame); a row with any other alpha, or a bitmap that is not tightly packed
      * ARGB_8888 sRGB, is rewritten from getPixels exactly as before.
      */
-    private fun fillRgba(bitmap: Bitmap, width: Int, height: Int): ByteBuffer {
+    private fun fillRgba(bitmap: Bitmap, width: Int, height: Int, scratch: Scratch): ByteBuffer {
         val need = width * height * 4
-        var rgba = fallbackRgba
+        var rgba = scratch.rgba
         if (rgba == null || rgba.capacity() != need) {
             rgba = ByteBuffer.allocateDirect(need).order(ByteOrder.BIG_ENDIAN)
-            fallbackRgba = rgba
+            scratch.rgba = rgba
         }
-        if (fallbackRow.size < width) fallbackRow = IntArray(width)
-        val row = fallbackRow
+        if (scratch.row.size < width) scratch.row = IntArray(width)
+        val row = scratch.row
         rgba.clear()
         val ints = rgba.asIntBuffer() // Big-endian: R<<24 | G<<16 | B<<8 | A.
         val raw = bitmap.config == Bitmap.Config.ARGB_8888 && bitmap.rowBytes == width * 4 &&
@@ -433,6 +459,5 @@ object FrameLoop {
     private const val TAG = "FrameLoop"
     /** Longest single wait for a frame; the loop re-checks its state after it. */
     private const val IDLE_WAIT_NS = 100_000_000L
-    private const val STOP_JOIN_MS = 1_000L
     private const val SNAPSHOT_RESULT_MAX_AGE_NS = 2_000_000_000L
 }
