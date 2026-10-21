@@ -20,6 +20,10 @@
 #include "nt/result.h"
 #include "nt/time.h"
 
+namespace nt::hudtext {
+class Engine;
+}
+
 namespace nt::frame {
 
 // 采集方式（进入指纹：不同坐标系/来源 = 新观测）。值与 Kotlin NativeCore.METHOD_* 一致。
@@ -79,7 +83,10 @@ private:
 class Pipeline {
 public:
     // 用 factory::New(factory::FromApp(cfg)) 构造引擎。失败时 Ok()==false。
-    explicit Pipeline(const config::Config& cfg);
+    // text：再包一层对局顶部账号文字认边（hudtext::Engine，Go factory.NewLive 的安卓版）；
+    // 只有 JNI 的实时管线这样做，主机一致性工具（hostcheck）不包，识别结果与 Go factory.New 相同。
+    explicit Pipeline(const config::Config& cfg, bool text = false);
+    ~Pipeline();
 
     bool Ok() const { return engine_ != nullptr; }
     const std::string& Error() const { return error_; }
@@ -94,10 +101,19 @@ public:
     // 不算 Duplicate；序号继续递增。失败时保留旧引擎并返回 false（err 可为空）。
     bool Rebuild(const config::Config& cfg, std::string* err);
 
+    // 文字认边包装（没有则 nullptr）与开关（跨 Rebuild 保留）。
+    hudtext::Engine* Text() const { return text_.get(); }
+    void SetTextEnabled(bool enabled);
+
 private:
+    std::shared_ptr<engine::Engine> build(const config::Config& cfg, std::string* err);
+
     config::Config cfg_;
     detect::ContentMode mode_ = detect::ModeAuto;
     std::shared_ptr<engine::Engine> engine_;
+    bool textWanted_ = false;
+    bool textEnabled_ = true;
+    std::shared_ptr<hudtext::Engine> text_;
     std::string error_;
     DedupedAnalysis dedupe_;
     uint64_t sequence_ = 0;

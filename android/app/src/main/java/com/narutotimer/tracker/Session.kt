@@ -115,6 +115,15 @@ class Session(
     val fighting: Boolean get() = synchronized(lock) { isFighting }
     val side: String get() = synchronized(lock) { effectiveSideLocked() }
 
+    /**
+     * Whether the native account-text reader (nt/hudtext.h) should run: only in the automatic
+     * side mode and only while 我方 is unknown. Once a side is known it stays until a non-fight,
+     * non-VS page (Go maybeAutoSide), so reading on would only cost CPU.
+     */
+    fun wantsTextRecognition(): Boolean = synchronized(lock) {
+        settings.playerSide == "auto" && effectiveSideLocked().isEmpty()
+    }
+
     /** Go session.captureOnce (internal/ui/run.go), step for step. */
     fun onFrame(f: AnalysisResult) {
         synchronized(lock) {

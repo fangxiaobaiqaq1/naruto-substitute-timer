@@ -1,5 +1,6 @@
 package com.narutotimer
 
+import android.content.res.AssetManager
 import android.hardware.HardwareBuffer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -75,11 +76,29 @@ object NativeCore {
      * avatarBox x,y,w,h`（整帧比例，w = 0 = 没有）。用 [lastGeometry]。
      */
     @JvmStatic external fun nativeLastGeometry(): FloatArray?
+    /**
+     * 本机文字识别模型（APK assets 里的 PP-OCRv4 识别模型，nt/ocr.h）：native 只记下 [assets] 与
+     * [path]，后台识别线程第一次需要时才读，空闲约 20 秒后释放。进程内设一次，在 [nativeFinishAssets]
+     * 之前调用（有模型才包对局顶部账号文字认边，nt/hudtext.h）。
+     */
+    @JvmStatic external fun nativeSetTextModel(assets: AssetManager, path: String): Boolean
+    /** 文字认边开关（只存一个原子量，下一帧生效，不等正在分析的一帧）。 */
+    @JvmStatic external fun nativeSetTextRecognition(on: Boolean)
+    /** "<状态>\n<原因>\n<模型已加载 0/1>"，没有识别模型 = null。用 [textStatus]。 */
+    @JvmStatic external fun nativeTextStatus(): String?
+    /** 立即释放识别模型（下次需要时再读）。 */
+    @JvmStatic external fun nativeReleaseTextModel()
 
     // ---- 高层 API ----
 
+    /** APK assets 里的识别模型（Gradle syncRecognitionAssets 从 internal/ocr/neuraldata 同步）。 */
+    const val TEXT_MODEL_ASSET = "ocr/recognizer.onnx"
+
     /** 最近一次 native 错误（无则空串）。 */
     fun lastError(): String = nativeLastError() ?: ""
+
+    /** 对局顶部账号文字认边的状态（最近一帧分析后），没有识别模型 = null。 */
+    fun textStatus(): TextStatus? = nativeTextStatus()?.let(TextStatus::parse)
 
     fun setPlayerNames(names: List<String>) = nativeSetPlayerNames(names.toTypedArray())
 
@@ -263,6 +282,20 @@ object NativeCore {
             lastBytes[slot] = bytes
             lastStrings[slot] = str
             return str
+        }
+    }
+}
+
+/**
+ * 文字认边状态（Go hudtext 的 TextStatus）：[state] = off（关闭或没填「我的名字」）/ waiting（等对局画面）/
+ * reading（正在读）/ pending（读过，还没两次一致）/ ready（已认出我方）/ template（账号名图片已认出，
+ * 不需要读）/ unavailable（识别失败，[error] 是原因，5 秒后重试）。[modelLoaded]：模型此刻在内存里。
+ */
+data class TextStatus(val state: String, val error: String, val modelLoaded: Boolean) {
+    companion object {
+        fun parse(s: String): TextStatus {
+            val parts = s.split('\n')
+            return TextStatus(parts.getOrElse(0) { "" }, parts.getOrElse(1) { "" }, parts.getOrElse(2) { "" } == "1")
         }
     }
 }

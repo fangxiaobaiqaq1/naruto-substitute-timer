@@ -259,7 +259,8 @@ class MainActivity : Activity() {
             isSingleLine = true
         }
         Ui.add(basics, namesEdit, 0f)
-        Ui.add(basics, Ui.note(this, "手机端不识别文字：只填名字不会自动认边，还要在「高级设置 → 账号名图片」导入与这里同名的账号名截图；没有图片时请在上面选左边/右边。"), 2f)
+        Ui.add(basics, Ui.note(this, "填好就能自动认边：对局中本机读取血条上方「忍者名(账号)」里的账号（不联网、不上传），与这里的名字逐字相同就认出我方，" +
+            "账号末尾被支援忍者头像挡住时看得见的前半段也算。游戏里的装饰符号（如 ღ）可照抄也可省略。不需要导入图片；读不出时可在上面选左边/右边。"), 2f)
         Ui.add(basics, Ui.text(this, "对面忍者（可选）", 13f, Ui.TEXT_2), 10f)
         ninjaEdit = EditText(this).apply {
             hint = "留空自动识别"
@@ -393,13 +394,13 @@ class MainActivity : Activity() {
         Ui.add(advancedPanel, command(appOpsCommand()), 6f)
         Ui.add(advancedPanel, command(accessibilityCommand()), 6f)
 
-        section(advancedPanel, "账号名图片（自动认边需要）", 18f)
+        section(advancedPanel, "账号名图片（可选）", 18f)
         Ui.add(advancedPanel, Ui.note(
             this,
-            "手机端没有文字识别，自动认边只认图片：① 在对战加载（VS）画面用这台手机截屏；② 裁下画面底部自己账号名那一行字" +
-                "（贴着文字裁，不带头像和段位，不要缩放）；③ 下面填与「我的名字」完全相同的账号名（特殊符号也要一样），点「导入图片」。" +
-                "导入时会按本机屏幕换算成识别用的尺寸。对局中血条上方的账号名手机认不出（忍者名长时还会被支援忍者头像挡住）。" +
-                "认出我方后会自动收集对面的账号名图片（只保留最近 ${IdentityStore.SEEN_CAP} 张，可随时清除）。",
+            "一般不需要：填好「我的名字」后，对局中会用本机文字识别读血条上方的账号自动认边。" +
+                "图片只是补充，可以在对战加载（VS）画面就认出我方：① 在 VS 画面用这台手机截屏；② 裁下画面底部自己账号名那一行字" +
+                "（贴着文字裁，不带头像和段位，不要缩放）；③ 下面填与「我的名字」完全相同的账号名，点「导入图片」。" +
+                "导入时会按本机屏幕换算成识别用的尺寸。认出我方后会自动收集对面的账号名图片（只保留最近 ${IdentityStore.SEEN_CAP} 张，可随时清除）。",
         ), 2f)
         identityLabelEdit = EditText(this).apply {
             hint = "图片对应的账号名"
@@ -801,18 +802,24 @@ class MainActivity : Activity() {
         identityLabels = IdentityStore.importedLabels(filesDir)
         val missing = IdentityStore.namesWithoutImage(settings.playerNames, identityLabels)
         identityText.text = "已导入 $mine 张 · 自动收集 $seen 张" + (if (fight > 0) " · 对局内 $fight 张" else "") +
-            (if (missing.isNotEmpty()) "\n还没有图片：" + missing.joinToString("，") else "")
+            (if (missing.isNotEmpty() && mine > 0) "\n这些名字没有图片（仍可靠文字识别认边）：" + missing.joinToString("，") else "")
     }
 
-    /** Why the side is still unknown (status line), for the automatic mode only. */
+    /**
+     * Why the side is still unknown (status line), for the automatic mode only. A typed name is
+     * enough: the account in the battle HUD title is read on the phone (NativeCore.textStatus).
+     */
     private fun sideHint(): String {
         if (settings.playerSide == "left" || settings.playerSide == "right") return ""
-        val names = settings.playerNames
+        if (settings.playerNames.isEmpty()) return "（未填「我的名字」：填上后对局中自动认边，或在对局设置里选左边/右边）"
+        val text = if (app.nativeStatus == TimerApp.NativeStatus.READY) NativeCore.textStatus() else null
         return when {
-            names.isEmpty() -> "（未填「我的名字」：请在对局设置里选左边/右边）"
-            names.none { GoText.normalizeName(it) in identityLabels } ->
-                "（「我的名字」没有账号名图片，手机不识别文字，无法自动认边：导入图片或选左边/右边）"
-            else -> "（等对战加载画面认出账号名）"
+            app.nativeStatus != TimerApp.NativeStatus.READY -> ""
+            text == null -> "（本机文字识别不可用：请在对局设置里选左边/右边）"
+            text.state == "unavailable" -> "（文字识别暂不可用：${text.error.substringAfter(": ", text.error)}；可选左边/右边）"
+            !session.fighting -> "（进入对局后读取血条上方的账号名）"
+            text.state == "reading" || text.state == "pending" -> "（正在读取对局顶部的账号名）"
+            else -> "（对局顶部没读到「我的名字」：确认名字与游戏里一致，或选左边/右边）"
         }
     }
 

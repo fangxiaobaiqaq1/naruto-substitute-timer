@@ -40,7 +40,7 @@ struct SideGeometry {
 
 // Result 是一帧画面的完整分析结果。
 struct Result {
-    std::string TextStatus;  // OCR 已移除：恒为空，仅为保持结构一致。
+    std::string TextStatus;  // 对局顶部账号文字认边的状态（nt/hudtext.h；只有 JNI 实时管线有，其余为空）。
     std::string TextError;
     bool Fighting = false;   // 明确在决斗场
     bool Uncertain = false;  // 当前证据不足，不能用缓存的豆数确认事件。
@@ -52,7 +52,7 @@ struct Result {
     bool RoundOpening = false;  // Current frame carries the verified round-opening timer/HUD marker.
     std::string LeftNinja;
     std::string RightNinja;
-    std::string LeftNinjaCandidate;  // Display-only table match, never special-rule evidence.（OCR 移除后恒空）
+    std::string LeftNinjaCandidate;  // Display-only table match, never special-rule evidence.（安卓不读忍者名文字：恒空）
     std::string RightNinjaCandidate;
     int LeftSlots = 0;
     int RightSlots = 0;

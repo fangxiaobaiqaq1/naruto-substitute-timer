@@ -239,7 +239,7 @@ class OverlaySettingsView(
         ninja.isSingleLine = true
         Ui.add(p, ninja, 2f)
         Ui.add(p, Ui.note(context, "名字和忍者点「保存」生效；其余选项立即生效。左/右指我方，计时的是对面。" +
-            "手机端不识别文字：自动认边要在主界面「高级设置 → 账号名图片」导入同名的账号名截图，否则请选左边/右边。"), 8f)
+            "自动认边只要填「我的名字」：对局中会读血条上方的账号名（本机识别，不上传）。"), 8f)
         return p
     }
 
