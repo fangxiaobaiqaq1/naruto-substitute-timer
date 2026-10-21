@@ -47,7 +47,7 @@ std::string normalize(const std::string& s) {
 
 std::string ShortLabel(const std::string& name) {
     // Go switch：按 case 顺序比较 normalize 后的名字。
-    static const std::vector<std::pair<std::string, std::string>> labels = {
+    static const auto& labels = *new std::vector<std::pair<std::string, std::string>>{
         {normalize(FifthMizukage), "五代目水影"},
         {normalize(Hashirama), "柱间·木叶创立"},
         {normalize(Madara), "斑·神驹佑将"},

@@ -23,9 +23,9 @@
 namespace nt::frame {
 
 // 采集方式（进入指纹：不同坐标系/来源 = 新观测）。值与 Kotlin NativeCore.METHOD_* 一致。
-inline const std::string MethodProjection = "android-media-projection";
-inline const std::string MethodScreenshot = "android-accessibility-screenshot";
-inline const std::string MethodBuffer = "android-buffer";
+inline const std::string& MethodProjection = *new std::string("android-media-projection");
+inline const std::string& MethodScreenshot = *new std::string("android-accessibility-screenshot");
+inline const std::string& MethodBuffer = *new std::string("android-buffer");
 // JNI 的 int method → 字符串（未知值归为 MethodBuffer）。
 const std::string& MethodName(int method);
 

@@ -97,11 +97,12 @@ thread_local match::grayPrefix t_viewPrefix;
 // 内置图鉴
 
 namespace {
-std::mutex g_embeddedMu;
-std::shared_ptr<AvatarCatalog> g_embedded;
+// Never destroyed: exit() runs static destructors while a frame may still use them.
+std::mutex& g_embeddedMu = *new std::mutex;
+std::shared_ptr<AvatarCatalog>& g_embedded = *new std::shared_ptr<AvatarCatalog>;
 bool g_embeddedTried = false;
 uint64_t g_embeddedRevision = 0;
-std::string g_embeddedErr;
+std::string& g_embeddedErr = *new std::string;
 }  // namespace
 
 std::shared_ptr<AvatarCatalog> LoadEmbeddedAvatarCatalog(std::string* err) {
@@ -576,10 +577,10 @@ bool AvatarCatalog::decode(avatarEntry* entry) {
 // special slot/palette/geometry policy. Such identities must never be decided
 // by the relaxed same-role margin path.
 bool avatarVariantPolicy(const std::string& name) {
-    static const std::string obito = normalizeAvatarName(Obito);
-    static const std::string xiayin = normalizeAvatarName(SasukeXiayin);
-    static const std::string itachi = normalizeAvatarName(ItachiHyakusen);
-    static const std::string minato = normalizeAvatarName(MinatoKyubi);
+    static const std::string& obito = *new std::string(normalizeAvatarName(Obito));
+    static const std::string& xiayin = *new std::string(normalizeAvatarName(SasukeXiayin));
+    static const std::string& itachi = *new std::string(normalizeAvatarName(ItachiHyakusen));
+    static const std::string& minato = *new std::string(normalizeAvatarName(MinatoKyubi));
     const std::string key = normalizeAvatarName(canonicalAvatarName(name));
     return key == obito || key == xiayin || key == itachi || key == minato;
 }
@@ -798,7 +799,7 @@ void AvatarBoxFromRegion(const Rect& window, double scale, bool left, double& x,
 // canonicalAvatarName maps only documented historical spellings onto a current
 // canonical catalog title. It deliberately does not collapse distinct forms.
 std::string canonicalAvatarName(const std::string& s) {
-    static const std::string legacy = normalizeAvatarName(MadaraLegacyAlias);
+    static const std::string& legacy = *new std::string(normalizeAvatarName(MadaraLegacyAlias));
     if (normalizeAvatarName(s) == legacy) return Madara;
     return s;
 }
@@ -808,7 +809,7 @@ bool sameAvatarVariant(const std::string& a, const std::string& b) {
 }
 
 std::string normalizeAvatarName(const std::string& s) {
-    static const std::u32string drop = U"[]【】「」()（）·・";
+    static const std::u32string& drop = *new std::u32string(U"[]【】「」()（）·・");
     std::string out;
     out.reserve(s.size());
     for (size_t i = 0, w = 0; i < s.size(); i += w) {

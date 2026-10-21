@@ -22,9 +22,9 @@
 
 namespace nt::identity {
 
-inline const std::string AssetDir = "identity/";
-inline const std::string SeenDir = "identity/seen/";
-inline const std::string FightDir = "identity/fight/";
+inline const std::string& AssetDir = *new std::string("identity/");
+inline const std::string& SeenDir = *new std::string("identity/seen/");
+inline const std::string& FightDir = *new std::string("identity/fight/");
 constexpr double minScore = 0.72;
 constexpr double minGap = 0.08;
 constexpr double fightMinScore = 0.80;

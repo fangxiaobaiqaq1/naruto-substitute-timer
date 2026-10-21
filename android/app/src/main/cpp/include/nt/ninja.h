@@ -23,21 +23,23 @@
 
 namespace nt::ninja {
 
-inline const std::string NarutoStudent = "漩涡鸣人[忍者学员]";
-inline const std::string FifthMizukage = "照美冥[五代目水影]";
-inline const std::string Hashirama = "千手柱间[木叶创立]";
-inline const std::string Madara = "宇智波斑[神驹佑将]";
+// Names are never destroyed (*new): exit() runs static destructors while a
+// frame may still compare against them.
+inline const std::string& NarutoStudent = *new std::string("漩涡鸣人[忍者学员]");
+inline const std::string& FifthMizukage = *new std::string("照美冥[五代目水影]");
+inline const std::string& Hashirama = *new std::string("千手柱间[木叶创立]");
+inline const std::string& Madara = *new std::string("宇智波斑[神驹佑将]");
 // MadaraLegacyAlias is retained for old local fixtures only. It is an exact
 // spelling alias, not a relaxed match for other Madara variants.
-inline const std::string MadaraLegacyAlias = "宇智波斑[神驹佑祥]";
-inline const std::string Obito = "宇智波带土[十尾人柱力]";
-inline const std::string SasukeXiayin = "宇智波佐助[侠隐江湖]";
-inline const std::string Naruto = "漩涡鸣人[暴怒·第六尾]";
-inline const std::string ItachiHyakusen = "宇智波鼬[百战]";
-inline const std::string MinatoKyubi = "波风水门[九喇嘛连结]";
-inline const std::string HashiramaEdo = "千手柱间[秽土转生]";
+inline const std::string& MadaraLegacyAlias = *new std::string("宇智波斑[神驹佑祥]");
+inline const std::string& Obito = *new std::string("宇智波带土[十尾人柱力]");
+inline const std::string& SasukeXiayin = *new std::string("宇智波佐助[侠隐江湖]");
+inline const std::string& Naruto = *new std::string("漩涡鸣人[暴怒·第六尾]");
+inline const std::string& ItachiHyakusen = *new std::string("宇智波鼬[百战]");
+inline const std::string& MinatoKyubi = *new std::string("波风水门[九喇嘛连结]");
+inline const std::string& HashiramaEdo = *new std::string("千手柱间[秽土转生]");
 // Substitutes on its own like FifthMizukage: 15 s and 10 s.
-inline const std::string HanzoEdo = "半藏[秽土转生]";
+inline const std::string& HanzoEdo = *new std::string("半藏[秽土转生]");
 // EnergyGaugeRowOffset is measured from reviewed native HUDs. The energy
 // gauge pushes these ordinary four-diamond rows down 13px at 960x540. It is
 // active after a verified complete title or exact portrait (kept briefly as
