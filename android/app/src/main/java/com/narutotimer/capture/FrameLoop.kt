@@ -132,6 +132,9 @@ object FrameLoop {
             if (started.get()) return
             val run = generation.incrementAndGet()
             started.set(true)
+            // The time since the last run's last frame is an outage, not a capture interval (GE-02).
+            // Lock order lifecycle -> Session.lock: Session never calls into FrameLoop.
+            app.session.onCaptureStart()
             Thread({ analysisLoop(app, run) }, "nt-analysis-$run").start()
         }
     }

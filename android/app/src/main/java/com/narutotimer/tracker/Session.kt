@@ -99,8 +99,8 @@ class Session(
     private var layoutProfile = ""
     private var leftSlots = 0
     private var rightSlots = 0
-    private var lastBeadAt = 0L
-    private var cadenceEma = 0L
+    /** Go s.cadence: the clocks' observation gap from every delivered frame (GE-02). */
+    private val cadence = ObservationCadence()
 
     private var revisionState = 0L
     @Volatile var revision: Long = 0L
@@ -124,8 +124,14 @@ class Session(
             // applyScene refuses it exit evidence.
             lastFrame = f
             scene = f.scene
+            // Every delivered frame is a cadence sample, holds and duplicates included; a
+            // failure frame (no capture time) breaks the chain. The bound for this frame comes
+            // from the cadence before it (Go ObservationCadence, GE-02).
+            val gap = cadence.next(f.capturedAtNanos, settings.pollIntervalMs.toLong() * 1_000_000L)
+            leftClock.setObservationGap(gap)
+            rightClock.setObservationGap(gap)
             // Before the hold/error branch: the first frame of a new source may be a
-            // hold frame. Failure frames (no size) keep the known source.
+            // hold frame. Failure frames (no image) keep the known source.
             if (updateObservationSpaceLocked(f.width, f.height, f.captureMethod)) {
                 // Only the visual baseline is invalid; confirmed cooldowns continue.
                 leftClock.resyncObservation()
@@ -188,6 +194,15 @@ class Session(
             observeBeadsLocked(f)
             bump()
         }
+    }
+
+    /**
+     * A new capture run started (FrameLoop.start): the time since the previous run's last frame is
+     * an outage, not a capture interval. Go sees an outage as failed captures, which break the
+     * cadence chain the same way (ObservationCadence.Next without a capture time).
+     */
+    fun onCaptureStart() {
+        synchronized(lock) { cadence.next(0L, 0L) }
     }
 
     /**
@@ -368,15 +383,16 @@ class Session(
 
     /**
      * Go app.ObservationSpace.Update: a change only when a known field changes.
-     * Missing sizes or method (failure frames) neither count nor erase the source.
+     * Missing sizes or method (failure frames) neither count nor erase the source. The method
+     * counts only for a frame with an image (GE-09): a frame without pixels describes no
+     * coordinate system, so a failure naming another method is no source change; a real switch
+     * is seen at the first image of the new method.
      */
     private fun updateObservationSpaceLocked(width: Int, height: Int, method: String): Boolean {
-        var changed = false
-        if (width > 0 && height > 0) {
-            changed = sourceWidth > 0 && sourceHeight > 0 && (sourceWidth != width || sourceHeight != height)
-            sourceWidth = width
-            sourceHeight = height
-        }
+        if (width <= 0 || height <= 0) return false
+        var changed = sourceWidth > 0 && sourceHeight > 0 && (sourceWidth != width || sourceHeight != height)
+        sourceWidth = width
+        sourceHeight = height
         if (method.isNotEmpty()) {
             changed = changed || (sourceMethod.isNotEmpty() && sourceMethod != method)
             sourceMethod = method
@@ -539,21 +555,13 @@ class Session(
         }
     }
 
+    /** Go observeBeads: one usable fight frame; onFrame has already set the observation gap. */
     private fun observeBeadsLocked(f: AnalysisResult) {
         val at = f.capturedAtNanos
         if (at <= 0L) {
             invalidateLocked(at)
             return
         }
-        val interval = if (lastBeadAt > 0 && at > lastBeadAt) at - lastBeadAt else 0L
-        if (interval > 0) cadenceEma = if (cadenceEma <= 0) interval else cadenceEma * 3 / 4 + interval / 4
-        lastBeadAt = at
-        var gap = settings.pollIntervalMs.toLong() * 3L * 1_000_000L
-        if (cadenceEma > 0) gap = max(gap, cadenceEma * 3)
-        gap = gap.coerceIn(150_000_000L, 8_000_000_000L)
-        leftClock.setObservationGap(gap)
-        rightClock.setObservationGap(gap)
-
         val beads = f.frameBeads
         val lc = readyCount(beads, true)
         val rc = readyCount(beads, false)
