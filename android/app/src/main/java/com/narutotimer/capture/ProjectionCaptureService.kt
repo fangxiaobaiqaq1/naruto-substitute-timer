@@ -17,16 +17,24 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
-import android.view.Display
+import android.util.Log
 import android.view.WindowManager
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import com.narutotimer.R
 import com.narutotimer.service.TimerAccessibilityService
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.max
 
 class ProjectionCaptureService : Service() {
+    /**
+     * Guards every field below. Start/stop run on the main thread (onStartCommand/onDestroy), the
+     * MediaProjection callbacks and image callbacks on the capture HandlerThread (onStop → stop,
+     * resize). Teardown therefore never interleaves with a resize or with an image being taken
+     * from a reader (acquire → hardwareBuffer): the reader is only closed under this lock.
+     * Lock order: [lock] → FrameLoop.imageLock / FrameLoop's own lock. Nothing here waits for
+     * the capture thread, so holding it on main is short.
+     */
+    private val lock = Any()
     private var projection: MediaProjection? = null
     private var display: VirtualDisplay? = null
     private var reader: ImageReader? = null
@@ -79,7 +87,6 @@ class ProjectionCaptureService : Service() {
 
     private fun startCapture(code: Int, data: Intent) {
         stopCapture()
-        stopping.set(false)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(NOTIFICATION_CHANNEL, getString(R.string.notification_channel_name), NotificationManager.IMPORTANCE_LOW)
@@ -110,79 +117,107 @@ class ProjectionCaptureService : Service() {
         }
 
         val mgr = getSystemService(MediaProjectionManager::class.java)
-        val p = mgr.getMediaProjection(code, data)
-        projection = p
-        val metrics = getSystemService(WindowManager::class.java).maximumWindowMetrics
-        width = CAPTURE_WIDTH
-        height = (width.toLong() * metrics.bounds.height() / max(1, metrics.bounds.width())).toInt().coerceAtLeast(1)
-        densityDpi = resources.displayMetrics.densityDpi
-        val run = ++captureGeneration
-        readerGeneration = 0L
-        worker = HandlerThread("nt-capture-$run").also { it.start() }
-        handler = Handler(worker!!.looper)
-        callback = object : MediaProjection.Callback() {
-            override fun onCapturedContentResize(newWidth: Int, newHeight: Int) {
-                // Android 14+ single-app capture reports content changes here. Keep
-                // this projection token and resize its existing VirtualDisplay.
-                if (run != captureGeneration || stopping.get()) return
-                resizeCapture(newWidth, newHeight)
-            }
+        val p = mgr.getMediaProjection(code, data) ?: error("projection token rejected")
+        // Always landscape, long side 1280, even when started in portrait (CaptureSize, AND-01).
+        val bounds = getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
+        val (w, h) = CaptureSize.landscape(bounds.width(), bounds.height())
+        synchronized(lock) {
+            stopping.set(false)
+            projection = p
+            width = w
+            height = h
+            densityDpi = resources.displayMetrics.densityDpi
+            val run = ++captureGeneration
+            readerGeneration = 0L
+            val thread = HandlerThread("nt-capture-$run").also { it.start() }
+            worker = thread
+            val captureHandler = Handler(thread.looper)
+            handler = captureHandler
+            val cb = object : MediaProjection.Callback() {
+                override fun onCapturedContentResize(newWidth: Int, newHeight: Int) {
+                    // Android 14+ reports the captured content's size here (right after the start
+                    // and on every change). Keep this projection token and resize its existing
+                    // VirtualDisplay.
+                    resizeCapture(run, newWidth, newHeight)
+                }
 
-            override fun onStop() {
-                // "Stop sharing" from the system UI ends this token for good.
-                if (run != captureGeneration || stopping.get()) return
-                stopCapture()
-                finishService()
+                override fun onStop() {
+                    // "Stop sharing" from the system UI ends this token for good.
+                    synchronized(lock) {
+                        if (run != captureGeneration || stopping.get()) return
+                        stopCapture()
+                    }
+                    finishService()
+                }
             }
+            callback = cb
+            p.registerCallback(cb, captureHandler)
+            val first = createReader(w, h, run, captureHandler)
+            display = p.createVirtualDisplay(
+                "NarutoTimer",
+                w,
+                h,
+                densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                first.surface,
+                null,
+                captureHandler,
+            )
+            running = true
         }
-        p.registerCallback(callback!!, handler)
-        createReader(width, height, run)
-        display = p.createVirtualDisplay(
-            "NarutoTimer",
-            width,
-            height,
-            densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            reader!!.surface,
-            null,
-            handler,
-        )
-        running = true
+        Log.i(TAG, "capture ${w}x$h for screen ${bounds.width()}x${bounds.height()}")
         FrameLoop.start(this)
         TimerAccessibilityService.instance?.stopScreenshotFallback()
     }
 
-    private fun resizeCapture(newWidth: Int, newHeight: Int) {
-        val p = projection ?: return
+    /** Capture thread (onCapturedContentResize). A failure keeps the current size instead of killing the process. */
+    private fun resizeCapture(run: Long, newWidth: Int, newHeight: Int): Unit = synchronized(lock) {
+        if (run != captureGeneration || stopping.get()) return
         val vd = display ?: return
         val h = handler ?: return
         val w = newWidth.coerceAtLeast(1)
         val hh = newHeight.coerceAtLeast(1)
         if (w == width && hh == height) return
-        width = w
-        height = hh
-        val oldReader = reader
-        val run = captureGeneration
-        val readerRun = ++readerGeneration
-        val nextReader = ImageReader.newInstance(w, hh, PixelFormat.RGBA_8888, MAX_IMAGES)
-        nextReader.setOnImageAvailableListener({ source -> onImageAvailable(source, run, readerRun) }, h)
-        // Resize/rebind the existing display; never request another projection token.
-        vd.resize(w, hh, densityDpi)
-        vd.setSurface(nextReader.surface)
-        reader = nextReader
-        // Closing a reader closes its acquired images; never while a snapshot reads their planes.
-        synchronized(FrameLoop.imageLock) { runCatching { oldReader?.close() } }
+        var nextReader: ImageReader? = null
+        var resized = false
+        try {
+            val next = ImageReader.newInstance(w, hh, PixelFormat.RGBA_8888, MAX_IMAGES)
+            nextReader = next
+            val readerRun = readerGeneration + 1
+            next.setOnImageAvailableListener({ source -> onImageAvailable(source, run, readerRun) }, h)
+            // Resize/rebind the existing display; never request another projection token.
+            vd.resize(w, hh, densityDpi)
+            resized = true
+            vd.setSurface(next.surface)
+            // Images still queued in the old reader are drained (generation check) from now on.
+            readerGeneration = readerRun
+            val oldReader = reader
+            reader = next
+            nextReader = null
+            width = w
+            height = hh
+            Log.i(TAG, "capture resized to ${w}x$hh")
+            // Closing a reader closes its acquired images; never while a snapshot reads their planes.
+            synchronized(FrameLoop.imageLock) { runCatching { oldReader?.close() } }
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "capture resize to ${w}x$hh failed; keeping ${width}x$height", e)
+            if (resized) runCatching { vd.resize(width, height, densityDpi) }
+        } finally {
+            nextReader?.let { runCatching { it.close() } }
+        }
     }
 
-    private fun createReader(w: Int, h: Int, run: Long) {
+    /** Caller holds [lock]. */
+    private fun createReader(w: Int, h: Int, run: Long, captureHandler: Handler): ImageReader {
         val next = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, MAX_IMAGES)
-        val captureHandler = handler ?: error("capture handler unavailable")
         val readerRun = ++readerGeneration
         next.setOnImageAvailableListener({ source -> onImageAvailable(source, run, readerRun) }, captureHandler)
         reader = next
+        return next
     }
 
-    private fun onImageAvailable(source: ImageReader, run: Long, readerRun: Long) {
+    private fun onImageAvailable(source: ImageReader, run: Long, readerRun: Long): Unit = synchronized(lock) {
+        // Under the lock no stop/resize can close [source] between acquire and hardwareBuffer.
         if (run != captureGeneration || readerRun != readerGeneration || stopping.get()) {
             drain(source)
             return
@@ -200,16 +235,17 @@ class ProjectionCaptureService : Service() {
                 drain(source)
                 return
             } ?: return
-            offerImage(image)
+            if (!offerImage(image)) return
         }
     }
 
-    private fun offerImage(image: android.media.Image) {
+    /** Hands [image] to FrameLoop; false if it could not be read (it is closed either way). */
+    private fun offerImage(image: android.media.Image): Boolean {
         var hb: android.hardware.HardwareBuffer? = null
         var handedOff = false
         try {
             hb = image.hardwareBuffer
-            if (hb == null) return
+            if (hb == null) return true
             val timestamp = image.timestamp.takeIf { it > 0 } ?: System.nanoTime()
             // CapturedFrame owns both objects until the analysis thread has finished.
             val owned = hb
@@ -218,6 +254,11 @@ class ProjectionCaptureService : Service() {
                 runCatching { image.close() }
             })
             handedOff = true
+            return true
+        } catch (e: RuntimeException) {
+            // An image invalidated under us (closed reader, dead buffer): drop it, keep the service.
+            Log.w(TAG, "capture frame dropped", e)
+            return false
         } finally {
             if (!handedOff) {
                 runCatching { hb?.close() }
@@ -232,32 +273,39 @@ class ProjectionCaptureService : Service() {
         runCatching { source.acquireLatestImage()?.close() }
     }
 
+    /** Main thread (start/destroy/failure) or capture thread (onStop); idempotent. */
     private fun stopCapture() {
-        val hadCapture = projection != null || display != null || reader != null
-        if (!stopping.compareAndSet(false, true) && !hadCapture) return
-        running = false
-        ++captureGeneration
-        ++readerGeneration
-        runCatching { display?.setSurface(null) }
-        runCatching { display?.release() }
-        display = null
-        synchronized(FrameLoop.imageLock) { runCatching { reader?.close() } }
-        reader = null
-        val p = projection
-        val cb = callback
-        callback = null
-        projection = null
-        if (cb != null) runCatching { p?.unregisterCallback(cb) }
-        runCatching { p?.stop() }
-        worker?.quitSafely()
-        worker = null
-        handler = null
+        val hadCapture: Boolean
+        synchronized(lock) {
+            hadCapture = projection != null || display != null || reader != null
+            if (!stopping.compareAndSet(false, true) && !hadCapture) return
+            running = false
+            ++captureGeneration
+            ++readerGeneration
+            val vd = display
+            display = null
+            runCatching { vd?.setSurface(null) }
+            runCatching { vd?.release() }
+            val r = reader
+            reader = null
+            synchronized(FrameLoop.imageLock) { runCatching { r?.close() } }
+            val p = projection
+            val cb = callback
+            callback = null
+            projection = null
+            if (cb != null) runCatching { p?.unregisterCallback(cb) }
+            runCatching { p?.stop() }
+            worker?.quitSafely()
+            worker = null
+            handler = null
+        }
         FrameLoop.stop()
         if (hadCapture) TimerAccessibilityService.instance?.startScreenshotFallback()
     }
 
     companion object {
-        const val CAPTURE_WIDTH = 1280
+        private const val TAG = "ProjectionCapture"
+        const val CAPTURE_WIDTH = CaptureSize.LONG_SIDE
         const val DEFAULT_CAPTURE_HEIGHT = 720
         private const val MAX_IMAGES = 3
         const val EXTRA_RESULT_CODE = "resultCode"
