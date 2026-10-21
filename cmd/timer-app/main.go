@@ -64,12 +64,13 @@ func main() {
 			fail(err)
 		}
 	}
-	cfg, err := config.LoadOrCreate(config.DefaultPath)
+	cfg, notes, err := config.LoadOrCreateWithNotes(config.DefaultPath)
 	if err != nil {
 		fail(err)
 	}
 	// Not fatal: a read-only directory must not stop the timer.
-	_, _ = installCrashLog(cfg.Debug.Directory)
+	crashLog, _ := installCrashLog(cfg.Debug.Directory)
+	logConfigNotes(crashLog, notes, time.Now())
 	eng, err := factory.NewLive(factory.FromApp(cfg))
 	if err != nil {
 		fail(err)
@@ -119,6 +120,20 @@ func installCrashLog(dir string) (*os.File, error) {
 	}
 	safego.SetLog(f)
 	return f, nil
+}
+
+// logConfigNotes records what loading config.json repaired instead of refusing
+// the file (calibration boxes outside the size limits, saved by v0.24beta or
+// v0.25, now automatic): on stderr and in the debug log, the windowed build's
+// only log (stderr goes nowhere there).
+func logConfigNotes(log *os.File, notes []string, now time.Time) {
+	for _, note := range notes {
+		line := fmt.Sprintf("%s config.json: %s\n", now.Format(time.RFC3339), note)
+		fmt.Fprint(os.Stderr, line)
+		if log != nil {
+			_, _ = log.WriteString(line)
+		}
+	}
 }
 
 func fail(err error) {

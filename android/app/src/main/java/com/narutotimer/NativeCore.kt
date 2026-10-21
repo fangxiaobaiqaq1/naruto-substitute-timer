@@ -87,11 +87,8 @@ object NativeCore {
      * 把 [Settings] 里的区域校准（docs/区域校准.md）交给 native。引擎已建好时立即重建，
      * 下一帧（即使画面没变）就用新框；否则在 nativeFinishAssets 时生效。失败返回 false（见 [lastError]）。
      */
-    fun setCalibration(settings: Settings): Boolean {
-        val rects = FloatArray(16) { Float.NaN }
-        Settings.KEY_CALIB_RECTS.forEachIndexed { i, key -> settings.calibRect(key)?.copyInto(rects, i * 4) }
-        return nativeSetCalibration(settings.calibProfile, rects)
-    }
+    fun setCalibration(settings: Settings): Boolean =
+        nativeSetCalibration(settings.calibProfile, settings.nativeCalibrationRects())
 
     /**
      * 最近一次分析的帧的几何（docs/区域校准.md 每帧几何）：每侧实际采样的豆心、名字/头像区域和默认

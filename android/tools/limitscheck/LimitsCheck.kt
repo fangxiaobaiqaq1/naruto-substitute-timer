@@ -1,6 +1,8 @@
 package limitscheck
 
+import android.content.Context
 import com.narutotimer.CalibrationLimits
+import com.narutotimer.Settings
 import kotlin.system.exitProcess
 
 // CalibrationLimits (docs/区域校准.md 框的大小限制) decides exactly like Go
@@ -63,8 +65,43 @@ private fun digest(n: Int, float32: Boolean, counts: IntArray): ULong {
     return d
 }
 
+/**
+ * Boxes saved by a version without the size limits (v0.24beta, v0.25) are never an error: Settings
+ * hands the core only usable boxes (NaN = automatic), says why the others are unused, and 恢复自动
+ * still sees them. Returns the failures.
+ */
+private fun storedBoxFailures(): List<String> {
+    val failures = ArrayList<String>()
+    fun check(ok: Boolean, what: String) { if (!ok) failures += what }
+    val usable = floatArrayOf(0.62f, 0.05f, 0.0625f, 1f / 36)
+    val oversized = floatArrayOf(0f, 0f, 0.5f, 0.95f) // portrait box 7.5 times the automatic one
+    val s = Settings(Context())
+    check(!s.hasStoredCalibration() && s.nativeCalibrationRects().all { it.isNaN() }, "nothing stored is all automatic")
+    s.setCalibRect(Settings.KEY_CALIB_RIGHT_BEADS, usable)
+    s.setCalibRect(Settings.KEY_CALIB_LEFT_AVATAR, oversized)
+    check(s.calibRect(Settings.KEY_CALIB_LEFT_AVATAR) == null, "oversized stored box is not used")
+    check(s.calibRectIssue(Settings.KEY_CALIB_LEFT_AVATAR)?.contains("太大") == true, "oversized stored box says why")
+    check(s.calibRect(Settings.KEY_CALIB_RIGHT_BEADS)?.contentEquals(usable) == true, "usable stored box is used")
+    check(s.calibRectIssue(Settings.KEY_CALIB_RIGHT_BEADS) == null, "usable stored box has no issue")
+    val rects = s.nativeCalibrationRects()
+    check(rects.size == 16, "16 floats for nativeSetCalibration")
+    check((0 until 4).all { rects[it].isNaN() }, "left beads: automatic")
+    check((0 until 4).all { rects[4 + it] == usable[it] }, "right beads: the stored box")
+    check((8 until 16).all { rects[it].isNaN() }, "avatars: automatic (the oversized one dropped)")
+    check(s.hasStoredCalibration(), "恢复自动 is offered")
+    val only = Settings(Context())
+    only.setCalibRect(Settings.KEY_CALIB_RIGHT_AVATAR, oversized)
+    check(only.nativeCalibrationRects().all { it.isNaN() }, "only an oversized box: all automatic")
+    check(only.hasStoredCalibration() && Settings.KEY_CALIB_RECTS.all { only.calibRect(it) == null },
+        "only an oversized box: nothing used, 恢复自动 offered")
+    return failures
+}
+
 fun main() {
     var ok = true
+    val stored = storedBoxFailures()
+    for (f in stored) println("FAIL: stored boxes: $f")
+    if (stored.isEmpty()) println("stored boxes from versions without the limits: automatic, never an error") else ok = false
     for ((float32, want) in listOf(false to 0xe9e1f0fa7bdcdb2duL, true to 0x5c07b936a6c3ad61uL)) {
         val counts = IntArray(5)
         val got = digest(200000, float32, counts)
