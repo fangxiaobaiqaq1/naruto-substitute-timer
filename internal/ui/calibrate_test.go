@@ -245,6 +245,53 @@ func TestCalibrationSaveKeepsUntouchedBoxes(t *testing.T) {
 	}
 }
 
+// A box far from the automatic size (docs/区域校准.md 框的大小限制) is not used
+// by the engine: the status line says so when it is drawn, and 保存 refuses it
+// with the box and the reason, writing and applying nothing.
+func TestCalibrationSaveRefusesBoxesOutsideSizeLimits(t *testing.T) {
+	s := newCalibrationTestSession(t)
+	calls := 0
+	s.calibrationApply = func(*config.RegionCalibration) { calls++ }
+	c := openCalibrationOn(t, s, calibrationTestFrame(1920, 1080, "duel"))
+	at, _ := surfaceMapper(t, c)
+
+	// A sloppy drag over a quarter of the frame as the left portrait (kept
+	// away from where the bead boxes are drawn below).
+	c.targets.SetSelected("左侧头像")
+	dragSurface(c.surface, at(900, 500), at(1880, 1060))
+	if !c.dirty() || !strings.Contains(c.status.Text, "头像框太大") || !strings.Contains(c.status.Text, "保存不了") {
+		t.Fatalf("drawn: dirty=%v status %q", c.dirty(), c.status.Text)
+	}
+	err := c.save()
+	if !errors.Is(err, errInvalidCalibration) || !strings.Contains(err.Error(), "左侧头像") || !strings.Contains(err.Error(), "太大") {
+		t.Fatalf("save err = %v", err)
+	}
+	if s.cfg.Layout.Calibration != nil || calls != 0 || !c.dirty() || !strings.Contains(c.status.Text, "未保存") {
+		t.Fatalf("refused save changed state: cal=%+v hook=%d status %q", s.cfg.Layout.Calibration, calls, c.status.Text)
+	}
+	if _, err := os.Stat(s.cfgPath); !os.IsNotExist(err) {
+		t.Fatalf("config written: %v", err)
+	}
+	// Neither may a tiny bead box (44×13 px: under half the automatic 120×30) be exported.
+	c.targets.SetSelected("左侧豆")
+	dragSurface(c.surface, at(300, 100), at(344, 113))
+	if !strings.Contains(c.status.Text, "豆框太小") {
+		t.Fatalf("tiny bead box: status %q", c.status.Text)
+	}
+	if _, _, err := c.exportData(); err == nil || !strings.Contains(err.Error(), "不能导出") {
+		t.Fatalf("export of unusable boxes: %v", err)
+	}
+
+	// Boxes of the right size save as usual.
+	dragSurface(c.surface, at(150, 100), at(250, 124))
+	c.targets.SetSelected("左侧头像")
+	c.clearSelected()
+	if err := c.save(); err != nil || calls != 1 || s.cfg.Layout.Calibration == nil || s.cfg.Layout.Calibration.LeftBeads == nil ||
+		s.cfg.Layout.Calibration.LeftAvatar != nil {
+		t.Fatalf("save of a usable box: %v hook=%d %+v", err, calls, s.cfg.Layout.Calibration)
+	}
+}
+
 func TestCalibrationOnOtherLayoutAsksBeforeDroppingSavedBoxes(t *testing.T) {
 	s := newCalibrationTestSession(t)
 	leftAvatar := config.NormalizedRect{X: 0.004, Y: 0.006, Width: 0.072, Height: 0.128}

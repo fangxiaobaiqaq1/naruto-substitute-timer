@@ -114,6 +114,9 @@ func Validate(c Config) error {
 			if err := validateRect("layout.calibration."+name, *r); err != nil {
 				return err
 			}
+			if err := validateCalibrationLimits(name, *r); err != nil {
+				return err
+			}
 		}
 	}
 	if c.Layout.RelocalizeAfterLowConfidenceFrames <= 0 {

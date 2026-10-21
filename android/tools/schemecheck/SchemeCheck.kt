@@ -1,5 +1,6 @@
 package schemecheck
 
+import com.narutotimer.CalibrationLimits
 import com.narutotimer.ui.CalibrationRow
 import com.narutotimer.ui.CalibrationScheme
 import com.narutotimer.ui.CalibrationScheme.Scheme
@@ -49,15 +50,20 @@ private fun reject(label: String, text: String, expect: String) {
     println("  reject $label: $error")
 }
 
-private fun randomBox(rnd: Random): FloatArray {
+/** A box the engine uses for [index] (inside the frame, within CalibrationLimits), sometimes on an edge. */
+private fun randomBox(rnd: Random, index: Int): FloatArray {
+    val avatar = CalibrationLimits.isAvatar(index)
+    val wn = if (avatar) 68.5 / 960 else 1.0 / 16
+    val hn = if (avatar) 68.5 / 540 else 1.0 / 36
     while (true) {
-        val x = if (rnd.nextInt(8) == 0) 0f else rnd.nextFloat()
-        val y = if (rnd.nextInt(8) == 0) 0f else rnd.nextFloat()
-        val w = if (rnd.nextInt(8) == 0) 1f - x else rnd.nextFloat() * (1f - x)
-        val h = if (rnd.nextInt(8) == 0) 1f - y else rnd.nextFloat() * (1f - y)
+        val k = 0.5 + 1.5 * rnd.nextDouble()
+        val w = (wn * k * (0.6 + 0.8 * rnd.nextDouble())).toFloat()
+        val h = (hn * k * (0.6 + 0.8 * rnd.nextDouble())).toFloat()
+        val x = if (rnd.nextInt(8) == 0) 0f else if (rnd.nextInt(8) == 0) 1f - w else rnd.nextFloat() * (1f - w)
+        val y = if (rnd.nextInt(8) == 0) 0f else if (rnd.nextInt(8) == 0) 1f - h else rnd.nextFloat() * (1f - h)
         // Also 5-decimal boxes, as the editor stores them.
         val b = if (rnd.nextBoolean()) floatArrayOf(x, y, w, h) else floatArrayOf(x, y, w, h).map { Math.round(it * 100_000f) / 100_000f }.toFloatArray()
-        if (CalibrationScheme.valid(b)) return b
+        if (CalibrationScheme.valid(index, b)) return b
     }
 }
 
@@ -74,9 +80,9 @@ private fun run() {
 
     // Every key in order; tiny values stay plain decimals.
     val all = Scheme("camp", 1280, 576, listOf(
-        floatArrayOf(0f, 0f, 1f, 1f),
-        floatArrayOf(0.00001f, 0.5f, 0.99999f, 0.5f),
-        floatArrayOf(0.1f, 0.2f, 0.3f, 0.4f),
+        floatArrayOf(0f, 0f, 0.0625f, 0.025f),
+        floatArrayOf(0.00001f, 0.5f, 0.06f, 0.03f),
+        floatArrayOf(0.1f, 0.2f, 0.07f, 0.12f),
         floatArrayOf(0.004f, 0.006f, 0.072f, 0.128f),
     ))
     val allText = CalibrationScheme.encode(all)
@@ -90,13 +96,13 @@ private fun run() {
     repeat(3000) {
         val scheme = Scheme(
             if (rnd.nextBoolean()) "camp" else "duel", rnd.nextInt(0, 5000), rnd.nextInt(0, 5000),
-            List(4) { if (rnd.nextInt(4) == 0) null else randomBox(rnd) },
+            List(4) { i -> if (rnd.nextInt(4) == 0) null else randomBox(rnd, i) },
         )
         val encoded = CalibrationScheme.encode(scheme)
         val back = CalibrationScheme.decode(encoded)
         verify(back.profile == scheme.profile && same(back.boxes, scheme.boxes)) { "round trip ${show(scheme.boxes)} -> ${show(back.boxes)}\n$encoded" }
         verify(back.frameWidth == scheme.frameWidth && back.frameHeight == scheme.frameHeight) { "frame size $encoded" }
-        verify(back.boxes.all { it == null || CalibrationScheme.valid(it) }) { "valid boxes" }
+        verify(back.boxes.withIndex().all { (i, b) -> b == null || CalibrationScheme.valid(i, b) }) { "valid boxes" }
     }
     println("  3000 random schemes: exact Float round trip")
 
@@ -110,12 +116,15 @@ private fun run() {
     verify(nullBox.boxes[1] == null) { "null box = automatic" }
     val empty = CalibrationScheme.decode("""{"kind": "naruto-timer-calibration", "version": 1, "profile": "camp"}""")
     verify(empty.profile == "camp" && empty.boxes.all { it == null }) { "all automatic" }
-    // Written as float64 elsewhere: a hair past the edge is pulled inside, still valid in Float.
+    // Written as float64 elsewhere: a hair past the edge is pulled inside, still valid as the
+    // native core checks it (the Float values widened to double).
     val edge = CalibrationScheme.decode(DOC.replace(
         "\"x\": 0.924, \"y\": 0.006, \"width\": 0.072, \"height\": 0.128",
-        "\"x\": 0.9, \"y\": 0, \"width\": 0.10000000000000009, \"height\": 1.0000000001",
+        "\"x\": 0.93, \"y\": 0.88, \"width\": 0.07000000000000009, \"height\": 0.1200000001",
     )).boxes[3]!!
-    verify(CalibrationScheme.valid(edge) && edge[0] + edge[2] <= 1f && edge[1] + edge[3] <= 1f) { "edge slack ${edge.joinToString()}" }
+    verify(CalibrationScheme.valid(3, edge) && edge[0].toDouble() + edge[2] <= 1.0 && edge[1].toDouble() + edge[3] <= 1.0) {
+        "edge slack ${edge.joinToString()}"
+    }
 
     // Rejected files: clear Chinese messages.
     reject("not JSON", "hello", "不是校准方案文件")
@@ -136,6 +145,11 @@ private fun run() {
     reject("quoted number", DOC.replace("\"x\": 0.081", "\"x\": \"0.081\""), "缺少数字 x")
     reject("missing height", DOC.replace(", \"height\": 0.022", ""), "缺少数字 height")
     reject("box as array", DOC.replace("{\"x\": 0.081, \"y\": 0.104, \"width\": 0.052, \"height\": 0.022}", "[0.081, 0.104, 0.052, 0.022]"), "左侧豆")
+    // Size limits (docs/区域校准.md 框的大小限制): boxes the engine would not use.
+    reject("whole-frame avatar", DOC.replace("\"x\": 0.924, \"y\": 0.006, \"width\": 0.072, \"height\": 0.128", "\"x\": 0, \"y\": 0, \"width\": 1, \"height\": 1"), "头像框太大")
+    reject("bead box 3x", DOC.replace("\"width\": 0.052, \"height\": 0.022", "\"width\": 0.19, \"height\": 0.08"), "豆框太大")
+    reject("tiny bead box", DOC.replace("\"width\": 0.052, \"height\": 0.022", "\"width\": 0.02, \"height\": 0.01"), "豆框太小")
+    reject("sliver avatar", DOC.replace("\"width\": 0.072, \"height\": 0.128", "\"width\": 0.01, \"height\": 0.12"), "头像框太扁或太窄")
 
     // Aspect hint (> 2 % warns) and the default document name.
     val aspect = { w: Int, h: Int -> CalibrationScheme.aspectDifference(doc, w, h)!! }

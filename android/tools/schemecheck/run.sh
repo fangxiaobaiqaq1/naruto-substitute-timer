@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CalibrationScheme (方案文件, docs/区域校准.md) against the REAL org.json of a device, and
 # CalibrationRow (校准值是标准忍者值: dropped bead rows ↔ standard boxes):
-# compiles the production ui/CalibrationScheme.kt, ui/CalibrationRow.kt + SchemeCheck.kt, dexes them with d8
+# compiles the production CalibrationLimits.kt, ui/CalibrationScheme.kt, ui/CalibrationRow.kt + SchemeCheck.kt, dexes them with d8
 # and runs them with app_process on the connected device/emulator (adb). The host JVM
 # only has android.jar's org.json stubs, hence the device. No APK install, no Gradle.
 # Run: android/tools/schemecheck/run.sh   (ANDROID_SERIAL picks a device)
@@ -38,7 +38,7 @@ trap 'rm -rf "$OUT"' EXIT
 # Compiled against android.jar: the codec may use nothing beyond the platform API.
 "$JAVA_HOME/bin/java" -cp "$COMPILER" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
     -jvm-target 17 -no-stdlib -no-reflect -classpath "$STDLIB:$ANNOTATIONS:$ANDROID_JAR" \
-    -d "$OUT/check.jar" "$KT/ui/CalibrationScheme.kt" "$KT/ui/CalibrationRow.kt" "$HERE/SchemeCheck.kt"
+    -d "$OUT/check.jar" "$KT/CalibrationLimits.kt" "$KT/ui/CalibrationScheme.kt" "$KT/ui/CalibrationRow.kt" "$HERE/SchemeCheck.kt"
 "$D8" --min-api 31 --lib "$ANDROID_JAR" --output "$OUT/check-dex.jar" "$OUT/check.jar" "$STDLIB" 2>&1 \
     | grep -v -E '^Warning: (Missing class|Type `)' || true
 REMOTE=/data/local/tmp/nt-schemecheck.jar

@@ -48,7 +48,7 @@ COMPILER+=":$(jar org.jetbrains.kotlin kotlin-reflect 1.6.10)"
 COMPILER+=":$(jar org.jetbrains.kotlin kotlin-daemon-embeddable 2.0.21)"
 COMPILER+=":$(jar org.jetbrains.intellij.deps trove4j 1.0.20200330)"
 COMPILER+=":$(jar org.jetbrains.kotlinx kotlinx-coroutines-core-jvm 1.6.4)"
-PRODUCTION=("$KT/NativeCore.kt" "$KT/Settings.kt" "$KT/tracker/Session.kt" "$KT/tracker/SideClock.kt" "$KT/tracker/NinjaRules.kt")
+PRODUCTION=("$KT/NativeCore.kt" "$KT/Settings.kt" "$KT/CalibrationLimits.kt" "$KT/tracker/Session.kt" "$KT/tracker/SideClock.kt" "$KT/tracker/NinjaRules.kt")
 # Refuse to report success from a build raced by a concurrently edited mirror.
 snapshot() {
     {

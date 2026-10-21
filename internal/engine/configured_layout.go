@@ -39,8 +39,11 @@ func newCalibrationState(c *config.RegionCalibration, revision uint64) *calibrat
 	}
 	s.profile = c.Profile
 	for i, r := range [4]*config.NormalizedRect{c.LeftBeads, c.RightBeads, c.LeftAvatar, c.RightAvatar} {
-		// Same bounds as config validation; anything else stays automatic.
-		if r == nil || !(r.X >= 0 && r.Y >= 0 && r.Width > 0 && r.Height > 0 && r.X+r.Width <= 1 && r.Y+r.Height <= 1) {
+		// Same bounds as config validation (inside the frame, size limits of
+		// config.CalibrationRectIssue; the C++ core agrees); anything else stays
+		// automatic.
+		if r == nil || !(r.X >= 0 && r.Y >= 0 && r.Width > 0 && r.Height > 0 && r.X+r.Width <= 1 && r.Y+r.Height <= 1) ||
+			config.CalibrationRectIssue(i >= 2, *r) != "" {
 			continue
 		}
 		v := *r

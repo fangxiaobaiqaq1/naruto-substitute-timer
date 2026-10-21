@@ -14,12 +14,15 @@ namespace {
 // cloneProfile：Go 里复制切片以免与配置共享底层数组；C++ 按值复制本来就是深拷贝。
 config::LayoutProfile cloneProfile(const config::LayoutProfile& p) { return p; }
 
-// Same bounds as config validation; anything else stays automatic.
-std::optional<config::NormalizedRect> validCalibrationRect(const std::optional<config::NormalizedRect>& r) {
+// Same bounds as config validation (inside the frame, size limits of
+// config::CalibrationRectIssue, as in Go and Kotlin); anything else stays automatic.
+std::optional<config::NormalizedRect> validCalibrationRect(const std::optional<config::NormalizedRect>& r,
+                                                           bool avatar) {
     if (!r || !(r->X >= 0 && r->Y >= 0 && r->Width > 0 && r->Height > 0 && r->X + r->Width <= 1 &&
                 r->Y + r->Height <= 1)) {
         return std::nullopt;
     }
+    if (config::CalibrationRectIssue(avatar, *r) != config::CalibrationIssue::None) return std::nullopt;
     return r;
 }
 
@@ -80,8 +83,8 @@ ConfiguredLayout::ConfiguredLayout(detect::ContentMode mode, const config::Layou
                   sameCenters(cfg.Right.NominalCenters, defaults.Right.NominalCenters);
     if (const auto& c = cfg.Calibration; c && (c->Profile == "camp" || c->Profile == "duel")) {
         calProfile_ = c->Profile;
-        calBeads_ = {validCalibrationRect(c->LeftBeads), validCalibrationRect(c->RightBeads)};
-        calAvatars_ = {validCalibrationRect(c->LeftAvatar), validCalibrationRect(c->RightAvatar)};
+        calBeads_ = {validCalibrationRect(c->LeftBeads, false), validCalibrationRect(c->RightBeads, false)};
+        calAvatars_ = {validCalibrationRect(c->LeftAvatar, true), validCalibrationRect(c->RightAvatar, true)};
     }
 }
 

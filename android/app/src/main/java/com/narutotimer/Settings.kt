@@ -108,13 +108,32 @@ class Settings(context: Context) {
         @Synchronized get() = if (prefs.getString(KEY_CALIB_PROFILE, "duel") == "camp") "camp" else "duel"
         set(value) = put(KEY_CALIB_PROFILE) { putString(KEY_CALIB_PROFILE, if (value == "camp") "camp" else "duel") }
 
-    /** One calibration box ([KEY_CALIB_RECTS]) as x,y,w,h fractions of the frame; null = automatic. */
+    /**
+     * One calibration box ([KEY_CALIB_RECTS]) as x,y,w,h fractions of the frame; null = automatic.
+     * Only boxes the native core uses: inside the frame and within [CalibrationLimits] (a stored
+     * box outside them stays automatic, see [calibRectIssue]).
+     */
     @Synchronized
     fun calibRect(key: String): FloatArray? {
-        val v = prefs.getString(key, "")!!.split(',').mapNotNull { it.trim().toFloatOrNull() }
-        if (v.size != 4 || v[2] <= 0f || v[3] <= 0f || v[0] < 0f || v[1] < 0f || v[0] + v[2] > 1f || v[1] + v[3] > 1f) return null
-        return v.toFloatArray()
+        val b = storedCalibRect(key) ?: return null
+        return b.takeIf { CalibrationLimits.issue(isAvatarKey(key), it) == null }
     }
+
+    /** Why the stored box of [key] is not used (size limits), or null: none stored, or used. */
+    @Synchronized
+    fun calibRectIssue(key: String): String? {
+        val b = storedCalibRect(key) ?: return null
+        return CalibrationLimits.issue(isAvatarKey(key), b)
+    }
+
+    /** The stored box when it lies inside the frame (whatever its size). */
+    private fun storedCalibRect(key: String): FloatArray? {
+        val v = prefs.getString(key, "")!!.split(',').mapNotNull { it.trim().toFloatOrNull() }
+        if (v.size != 4) return null
+        return v.toFloatArray().takeIf(CalibrationLimits::inFrame)
+    }
+
+    private fun isAvatarKey(key: String) = key == KEY_CALIB_LEFT_AVATAR || key == KEY_CALIB_RIGHT_AVATAR
 
     fun setCalibRect(key: String, rect: FloatArray?) =
         put(key) { putString(key, rect?.joinToString(",") ?: "") }

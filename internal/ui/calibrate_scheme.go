@@ -69,6 +69,11 @@ func encodeCalibrationScheme(s calibrationScheme) ([]byte, error) {
 		if r != nil && !calibrationRectValid(*r) {
 			return nil, fmt.Errorf("%s（%s）超出画面或宽高不大于 0", calibTargetNames[t], calibrationSchemeKeys[t])
 		}
+		if r != nil {
+			if issue := calibrationLimitIssue(calibTarget(t), *r); issue != "" {
+				return nil, fmt.Errorf("%s（%s）：%s，识别不会使用这个框，不能导出", calibTargetNames[t], calibrationSchemeKeys[t], issue)
+			}
+		}
 	}
 	text := func(v any) string {
 		b, _ := json.Marshal(v) // strings and finite numbers only
@@ -89,8 +94,9 @@ func encodeCalibrationScheme(s calibrationScheme) ([]byte, error) {
 
 // decodeCalibrationScheme reads a scheme file. Keys match exactly, unknown
 // keys are ignored and a missing or null box is automatic. A wrong kind or
-// version, a bad profile or a box outside the frame is an error wrapping
-// errCalibrationScheme, worded for the player.
+// version, a bad profile, a box outside the frame or outside the size limits
+// (config.CalibrationRectIssue) is an error wrapping errCalibrationScheme,
+// worded for the player.
 func decodeCalibrationScheme(data []byte) (calibrationScheme, error) {
 	fail := func(format string, args ...any) (calibrationScheme, error) {
 		return calibrationScheme{}, fmt.Errorf("%w：%s", errCalibrationScheme, fmt.Sprintf(format, args...))
@@ -139,6 +145,9 @@ func decodeCalibrationScheme(data []byte) (calibrationScheme, error) {
 		}
 		if !calibrationRectValid(r) {
 			return fail("%s超出画面或宽高不大于 0", name)
+		}
+		if issue := calibrationLimitIssue(calibTarget(t), r); issue != "" {
+			return fail("%s：%s。这个框不会被使用，请重新框好再导出方案", name, issue)
 		}
 		rects[t] = &r
 	}
