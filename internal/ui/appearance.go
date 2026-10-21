@@ -224,8 +224,9 @@ func (s *session) rememberPosition(w fyne.Window, mini bool) {
 	} else {
 		s.cfg.UI.WindowPosition = p
 	}
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if err != nil {
 		s.debugf("save window position: %v", err)
 	}
@@ -254,8 +255,9 @@ func (s *session) restorePosition(w fyne.Window, mini bool) {
 
 func (s *session) saveAppearance() error {
 	s.mu.Lock()
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	return err
 }
 
@@ -268,8 +270,9 @@ func (s *session) appearanceValues() (opacity, scale float64) {
 func (s *session) setAutoCheckUpdates(on bool) error {
 	s.mu.Lock()
 	s.cfg.UI.AutoCheckUpdates = on
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if on {
 		s.startAutomaticUpdateChecks()
 	} else {

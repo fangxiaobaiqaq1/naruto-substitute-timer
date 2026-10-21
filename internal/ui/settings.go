@@ -86,23 +86,27 @@ func (s *session) clearAutoIdentity() {
 	}
 }
 
-// Serialize saves with state changes. Never let an old capture goroutine write
-// a configuration snapshot over the user's more recent selection.
-func (s *session) saveSettingsLocked() error {
+// settingsSnapshotLocked captures the settings to persist; the caller holds
+// s.mu and calls Save on the result after releasing it. The capture loop takes
+// s.mu on every frame, so the disk write (fsync, antivirus) must not run under
+// it. Snapshots are ordered by s.cfgWriter: an older one never overwrites the
+// user's more recent selection.
+func (s *session) settingsSnapshotLocked() config.Snapshot {
 	cfg := s.cfg
 	cfg.UI.RememberSide = s.remember
 	if !s.remember {
 		cfg.UI.PlayerSide = "auto"
 	}
-	return config.Save(s.cfgPath, cfg)
+	return s.cfgWriter.Snapshot(s.cfgPath, cfg)
 }
 
 func (s *session) selectSideMode(mode string) error {
 	mode = sideMode(mode)
 	s.mu.Lock()
 	s.setSideModeLocked(mode)
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	s.syncSettingsSide()
 	s.refreshOverlay()
 	return err
@@ -111,9 +115,9 @@ func (s *session) selectSideMode(mode string) error {
 func (s *session) setRememberSide(remember bool) error {
 	s.mu.Lock()
 	s.remember, s.cfg.UI.RememberSide = remember, remember
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
-	return err
+	return snapshot.Save()
 }
 
 func (s *session) syncSettingsSide() {
@@ -236,9 +240,9 @@ func (s *session) buildSettings(tab int) {
 	gpuChk.OnChanged = func(on bool) {
 		s.mu.Lock()
 		s.cfg.UI.GPUAcceleration = on
-		err := s.saveSettingsLocked()
+		snapshot := s.settingsSnapshotLocked()
 		s.mu.Unlock()
-		showSettingsError(err, w)
+		showSettingsError(snapshot.Save(), w)
 	}
 	topChk := widget.NewCheck("窗口置顶", nil)
 	topChk.SetChecked(top)
@@ -273,8 +277,9 @@ func (s *session) buildSettings(tab int) {
 	topChk.OnChanged = func(on bool) {
 		s.mu.Lock()
 		s.topmost, s.cfg.UI.AlwaysOnTop = on, on
-		err := s.saveSettingsLocked()
+		snapshot := s.settingsSnapshotLocked()
 		s.mu.Unlock()
+		err := snapshot.Save()
 		s.applyFullTopmost()
 		showSettingsError(err, w)
 	}
@@ -283,8 +288,9 @@ func (s *session) buildSettings(tab int) {
 	autoScaleChk.OnChanged = func(on bool) {
 		s.mu.Lock()
 		s.cfg.UI.MiniAutoScale = on
-		err := s.saveSettingsLocked()
+		snapshot := s.settingsSnapshotLocked()
 		s.mu.Unlock()
+		err := snapshot.Save()
 		s.applyMiniContentScale()
 		showSettingsError(err, w)
 	}
@@ -437,8 +443,9 @@ func (s *session) applySettings(nameText, ninjaText, sideText string, remember, 
 	}
 	s.setSideModeLocked(sideMode(sideText))
 	identity.SetMineNames(names)
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if topChanged {
 		s.applyFullTopmost()
 	}
@@ -476,8 +483,9 @@ func (s *session) pick(side string) { s.lockSide(side) }
 func (s *session) setTextRecognition(on bool) error {
 	s.mu.Lock()
 	s.cfg.UI.AutoTextRecognition = on
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if s.textControl != nil {
 		s.textControl(on)
 	}
