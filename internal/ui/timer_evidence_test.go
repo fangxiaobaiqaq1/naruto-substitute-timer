@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -82,6 +83,23 @@ func TestObservationGapIsThreeTimesCadence(t *testing.T) {
 		q.good(4, 3, 2)
 		if s := q.run(); s.right.EventCount() != tc.events {
 			t.Fatalf("60 ms cadence, %s blackout: events=%d, want %d", tc.blackout, s.right.EventCount(), tc.events)
+		}
+	}
+}
+
+// GE-09: one failed capture between two frames that show a drop. Failed MuMu
+// captures carry the method id, successful ones the client's Source(); the
+// error must not count as a source change (two resyncs that lose the drop).
+func TestCaptureErrorBetweenObservationsIsNotASourceChange(t *testing.T) {
+	for _, errMethod := range []string{"MuMu 实例 0 · C:\\MuMu", "mumu-sdk"} {
+		q := newEvidenceSeq(20 * time.Millisecond)
+		q.good(4, 4, 10)
+		q.good(4, 3, 1) // first evidence of the drop
+		q.frames = append(q.frames, frame.Frame{Err: errors.New("transient"), Hold: true, CaptureMethod: errMethod})
+		q.at += q.step
+		q.good(4, 3, 3)
+		if s := q.run(); s.right.EventCount() != 1 {
+			t.Fatalf("error frame CaptureMethod=%q: events=%d, want 1", errMethod, s.right.EventCount())
 		}
 	}
 }
