@@ -117,6 +117,9 @@ private fun buildFrame(s: Spec, ms: Long, seq: Long): AnalysisResult {
     )
 }
 
+/** Session.onCaptureStart (FrameLoop start), or a no-op before it existed. */
+private val captureStart = Session::class.java.methods.firstOrNull { it.name == "onCaptureStart" && it.parameterCount == 0 }
+
 private inline fun <reified T> Session.field(name: String): T =
     Session::class.java.getDeclaredField(name).let { it.isAccessible = true; it.get(this) as T }
 
@@ -178,6 +181,7 @@ fun main(args: Array<String>) {
                 repeat(spec.count) { current().onFrame(buildFrame(spec, t, ++seq)); t += spec.step }
             }
             "wait" -> t += tokens[1].toLong()
+            "restart" -> captureStart?.invoke(current())
             "report" -> out.append(report(current(), name, ++reports, t)).append('\n')
             else -> error("unknown line: $line")
         }

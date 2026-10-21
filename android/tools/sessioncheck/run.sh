@@ -38,6 +38,8 @@ PRODUCTION=("$KT/NativeCore.kt" "$KT/Settings.kt" "$KT/tracker/Session.kt" "$KT/
 [[ -f "$KT/capture/CaptureMeta.kt" ]] && PRODUCTION+=("$KT/capture/CaptureMeta.kt")
 # Settings.calibRect applies the calibration size limits (NC-01).
 [[ -f "$KT/CalibrationLimits.kt" ]] && PRODUCTION+=("$KT/CalibrationLimits.kt")
+# Session's observation gap (Go app.ObservationCadence, GE-02).
+[[ -f "$KT/tracker/ObservationCadence.kt" ]] && PRODUCTION+=("$KT/tracker/ObservationCadence.kt")
 rm -rf "$OUT/stubs" "$OUT/classes" "$OUT/tests"
 mkdir -p "$OUT/stubs" "$OUT/classes" "$OUT/tests"
 "$JAVA_HOME/bin/javac" --release 17 -d "$OUT/stubs" "$STUBS/android/content/Context.java" \

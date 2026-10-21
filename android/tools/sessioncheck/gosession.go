@@ -310,6 +310,10 @@ func TestSessionCheck(t *testing.T) {
 			}
 		case "wait":
 			ms += int64(scInt(t, tokens[1]))
+		case "restart":
+			// Android FrameLoop start. Go has no capture restart; its outages arrive as failed
+			// captures, whose cadence effect is exactly this: the chain is broken.
+			current().cadence.Next(time.Time{}, 0)
 		case "report":
 			reports++
 			out.WriteString(scReport(current(), name, reports, ms, at(ms)) + "\n")

@@ -5,6 +5,9 @@
 #   set k=v ...             side=left|right|auto (remember on), names=a|b, ninja=<override>
 #   f [xN] [+D] k=v ...     N frames (default 1); time += D ms after each (default 50)
 #   wait D                  time += D ms
+#   restart                 a new capture run (Android FrameLoop start). Go has no such call: its
+#                           outages arrive as failed captures; the Go side applies their cadence
+#                           effect (ObservationCadence.Next without a time) directly
 #   report                  canonical state at the current time
 #
 # Frame keys (defaults): beads=4/4 (ready L/R, or none, unknown) slots=4/4 meta=<slots>
@@ -155,6 +158,95 @@ report
 set side=left
 f x3 beads=4/4 method=android-accessibility-screenshot shot=20/140 +333
 f x2 beads=4/3 method=android-accessibility-screenshot shot=20/140 +333
+report
+
+# ---- Go T1 follow-up: GE-02 observation cadence, GE-09 method of image-less frames ----
+# GE-02 (app.ObservationCadence): every frame with a capture time is a cadence sample (holds and
+# duplicates included), a failed capture breaks the chain, and a frame's gap is 3x the cadence
+# measured BEFORE it (floor 150 ms / 3x poll, ceiling 8 s).
+
+== GE-02 an occlusion longer than 3x the cadence resyncs the baseline
+set side=left
+f x6 beads=4/4
+f x6 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 an earlier cut-in does not widen the tolerance for a later occlusion
+set side=left
+f x6 beads=4/4
+f x50 hold=1 beads=unknown
+f x6 beads=4/4
+f x12 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 the same occlusion without an earlier cut-in also resyncs
+set side=left
+f x12 beads=4/4
+f x12 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 a failed capture breaks the cadence chain: the outage is not a sample
+set side=left
+f x6 beads=4/4
+f fail=lost +2000
+f x6 beads=4/4
+f x6 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 a capture restart breaks the cadence chain like a failed capture
+set side=left
+f x6 beads=4/4
+wait 2000
+restart
+f x6 beads=4/4
+f x6 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 non-fight and hold frames all count toward the cadence
+set side=left
+f x5 fight=0 scene= profile= beads=none +400
+f x4 beads=4/4
+f x5 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+== GE-02 duplicate frames are cadence samples and keep a slow cadence's drop confirmable
+set side=left
+f x3 beads=4/4 +200
+f beads=4/3 +200
+f x2 beads=4/3 dup=1 +200
+f beads=4/3 +200
+report
+
+== GE-02 an older frame is no cadence sample
+set side=left
+f x6 beads=4/4
+f beads=4/4 ts=-400
+f x2 hold=1 beads=unknown
+f x3 beads=4/3
+report
+
+# GE-09: only a frame that carries an image can change the capture method.
+
+== GE-09 a failure frame naming another method is not a source change
+set side=left
+f x3 beads=4/4
+f beads=4/3
+f fail=lost method=android-buffer
+f x2 beads=4/3
+report
+
+== GE-09 a real method switch is detected at the first image of the new method
+set side=left
+f x3 beads=4/4
+f fail=lost method=android-accessibility-screenshot
+f beads=4/3
+f x2 beads=4/3 method=android-accessibility-screenshot
 report
 
 # ---- regression guards (paths shared by the fixes; equal before and after is fine) ----
