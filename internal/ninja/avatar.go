@@ -21,6 +21,7 @@ import (
 	"unicode"
 
 	"narutotimer/assets"
+	"narutotimer/internal/imgsafe"
 	"narutotimer/internal/match"
 	"narutotimer/internal/safego"
 )
@@ -255,7 +256,8 @@ func loadAvatarEntry(item avatarIndexEntry, sum string, readFile func(string) ([
 	if !strings.EqualFold(hex.EncodeToString(got[:]), sum) {
 		return nil, 0, fmt.Errorf("avatar %s sha256 does not match index", item.ID)
 	}
-	img, _, err := image.Decode(bytes.NewReader(png))
+	// External catalogs come from disk: check the header before decoding.
+	img, _, err := imgsafe.DecodeBytes(png, imgsafe.Asset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("decode avatar %s: %w", item.ID, err)
 	}

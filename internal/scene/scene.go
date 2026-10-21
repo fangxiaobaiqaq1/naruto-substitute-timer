@@ -19,6 +19,7 @@ import (
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
+	"narutotimer/internal/imgsafe"
 	"narutotimer/internal/match"
 	"narutotimer/internal/safego"
 )
@@ -344,13 +345,10 @@ func parseMode(s string) detect.ContentMode {
 	return mode
 }
 
+// loadGray reads a user-supplied template (custom manifest) from disk. Its
+// header is checked before decoding (imgsafe), the pixels are unchanged.
 func loadGray(path string) (*image.Gray, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
+	img, _, err := imgsafe.DecodeFile(path, imgsafe.Asset)
 	if err != nil {
 		return nil, err
 	}

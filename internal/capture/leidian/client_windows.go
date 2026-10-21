@@ -6,16 +6,12 @@
 package leidian
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"image"
-	"image/png"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,63 +56,14 @@ func defaultTimeout(value time.Duration) time.Duration {
 	return value
 }
 
-func findFile(root string, names ...string) string {
-	for _, name := range names {
-		candidate := name
-		if root != "" && !filepath.IsAbs(candidate) {
-			candidate = filepath.Join(root, candidate)
-		}
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	return ""
-}
-
-// DiscoverInstallDirs returns likely LDPlayer installation roots. It checks
-// common program directories and one level under <drive>:\\leidian, which is
-// where LDPlayer14 commonly installs without requiring a hard-coded drive.
+// DiscoverInstallDirs returns likely LDPlayer installation roots, most
+// trustworthy source first: this user's running dnplayer.exe, LDPlayer's
+// registry entries, Program Files, %LOCALAPPDATA%, and finally
+// <fixed drive>:\leidian\… (where LDPlayer14 commonly installs) when that
+// folder belongs to an administrator or the current user. The ldconsole.exe and
+// adb.exe of the first root are executed, so the order is a security decision.
 func DiscoverInstallDirs() []string {
-	seen := make(map[string]struct{})
-	var result []string
-	add := func(root string) {
-		root = canonicalRoot(root)
-		if root == "" || findFile(root, DefaultConsoleName, "dnconsole.exe") == "" {
-			return
-		}
-		key := strings.ToLower(root)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		result = append(result, root)
-	}
-	addRoots := func(root string) {
-		if strings.TrimSpace(root) == "" {
-			return
-		}
-		add(root)
-		matches, _ := filepath.Glob(filepath.Join(root, "LDPlayer*"))
-		for _, match := range matches {
-			add(match)
-		}
-	}
-	for _, base := range []string{
-		os.Getenv("ProgramFiles"),
-		os.Getenv("ProgramFiles(x86)"),
-		os.Getenv("LOCALAPPDATA"),
-		os.Getenv("ProgramData"),
-	} {
-		addRoots(filepath.Join(base, "leidian"))
-		addRoots(filepath.Join(base, "LDPlayer"))
-		addRoots(filepath.Join(base, "LDPlayer9"))
-		addRoots(filepath.Join(base, "LDPlayer14"))
-	}
-	for drive := 'A'; drive <= 'Z'; drive++ {
-		addRoots(fmt.Sprintf("%c:\\leidian", drive))
-	}
-	sort.Strings(result)
-	return result
+	return rankInstallCandidates(expandInstallCandidates(discoverInstallCandidates()), trustedInstallCandidate)
 }
 
 func DiscoverInstallDir() string {
@@ -177,18 +124,12 @@ func commandContext(parent context.Context, timeout time.Duration, name string, 
 	return cmd, cancel
 }
 
+// runCommand returns stdout only (stderr is kept apart and bounded); stdout is
+// capped at maxCommandOutput.
 func runCommand(parent context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
 	cmd, cancel := commandContext(parent, timeout, name, args...)
 	defer cancel()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		message := strings.TrimSpace(string(out))
-		if message != "" {
-			return nil, fmt.Errorf("%s %s: %w: %s", filepath.Base(name), strings.Join(args, " "), err, message)
-		}
-		return nil, fmt.Errorf("%s %s: %w", filepath.Base(name), strings.Join(args, " "), err)
-	}
-	return out, nil
+	return runCapped(cmd, maxCommandOutput)
 }
 
 func Open(o Options) (*Client, error) {
@@ -305,15 +246,7 @@ func (c *Client) capturePNG() (*image.RGBA, error) {
 	if err != nil {
 		return nil, fmt.Errorf("雷电 ADB 截图失败: %w", err)
 	}
-	decoded, err := png.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("解析雷电 ADB PNG: %w", err)
-	}
-	bounds := decoded.Bounds()
-	if bounds.Dx() < 1 || bounds.Dy() < 1 || bounds.Dx() > 8192 || bounds.Dy() > 8192 || int64(bounds.Dx())*int64(bounds.Dy()) > 16777216 {
-		return nil, fmt.Errorf("雷电截图尺寸无效 %dx%d", bounds.Dx(), bounds.Dy())
-	}
-	return toRGBA(decoded), nil
+	return decodeScreencapPNG(data)
 }
 
 // captureRaw uses the adb host protocol. The first call captures through the
