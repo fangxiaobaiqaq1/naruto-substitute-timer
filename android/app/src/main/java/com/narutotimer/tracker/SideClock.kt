@@ -5,7 +5,8 @@ package com.narutotimer.tracker
 //
 // 时间约定：所有时刻都是 System.nanoTime() 纳秒（与 native capturedAt 同一时基），
 // 0L == Go time.Time{}（IsZero）；时长也是纳秒 Long。秒数用 Double（Go float64）。
-// 逐行忠实移植：确认帧数、恢复需两帧、inheritedReturn、maxGap 重同步、ends 过期规则。
+// 逐行忠实移植：确认帧数、恢复需两帧、inheritedReturn、maxGap 重同步、ends 过期规则、
+// 恢复即再用（到期时刻附近的单帧 +1 = 恢复）。Go/Kotlin 一致性：android/tools/clockcheck/run.sh。
 //
 // 与 Go 保持一致：仅确认的单豆下降开钟，多豆下降不能推断替身次数。
 // 重新采集到相同像素可维持观察连续性，但不增加确认票；没有新采集的心跳不提供证据。
@@ -22,9 +23,11 @@ class SideClock {
     private var lastReady = 0
     private var hasPrev = false
     private val ends = ArrayList<Long>(4)
+    private val due = ArrayList<Long>(4) // Ends passed within RECOVERY_REUSE_WINDOW, not yet matched by a recovery.
     private var pendingReady = 0
     private var pendingAt = 0L
     private var pendingHits = 0
+    private var pendingRecovery = 0L // The cooldown end a pending +1 matches; 0L if none.
     private var observedAt = 0L
     private var validAt = 0L
     private var maxGap = 0L
@@ -68,9 +71,17 @@ class SideClock {
             return
         }
         if (ready == lastReady) {
-            inheritedReturn = false
-            clearPending()
-            return
+            if (!reuseAfterRecovery(ready)) {
+                inheritedReturn = false
+                clearPending()
+                return
+            }
+            // A bean used again as soon as it recovers is lit for at most one frame.
+            // That +1 matched the bean's cooldown end, so it was the recovery, and
+            // this frame is the first evidence of the next substitute: confirm it
+            // like any other drop, from this frame.
+            useRecovery(pendingRecovery)
+            lastReady = ready + 1
         }
         // 恢复也需要连续的新观测，至少两帧才能排除单帧闪亮。
         // 不能因另一颗豆还在冷却就禁止恢复，否则恢复后再使用会漏计。
@@ -84,11 +95,20 @@ class SideClock {
             pendingReady = ready
             pendingAt = capturedAt
             pendingHits = 1
+            pendingRecovery = 0L
+            if (ready == lastReady + 1 && !inheritedReturn) {
+                pendingRecovery = expectedRecovery(capturedAt)
+            }
         } else {
             pendingHits++
         }
         if (pendingHits < need) {
             return
+        }
+        if (ready > lastReady) {
+            // A confirmed recovery accounts for its cooldown end: a later glint
+            // near the same end must not pair with it again.
+            useRecovery(pendingRecovery)
         }
         // A lower count on the far side of a character-swap animation establishes
         // what is visible NOW. Even repeated lower frames cannot prove a drop was
@@ -165,10 +185,64 @@ class SideClock {
         pendingReady = 0
         pendingAt = 0L
         pendingHits = 0
+        pendingRecovery = 0L
+    }
+
+    /**
+     * reuseAfterRecovery reports whether the pending candidate is exactly one
+     * fresh frame of ready+1 that matched a cooldown end. Any interruption since
+     * (unknown frame, swap, other count) has cleared or replaced the candidate.
+     */
+    private fun reuseAfterRecovery(ready: Int): Boolean =
+        pendingHits == 1 && pendingReady == ready + 1 && pendingRecovery != 0L
+
+    /**
+     * expectedRecovery returns a cooldown end within RECOVERY_REUSE_WINDOW of at
+     * (the first in event order), or 0L. due holds ends that have passed, ends
+     * the running ones.
+     */
+    private fun expectedRecovery(at: Long): Long {
+        for (end in due) {
+            if (at - end <= RECOVERY_REUSE_WINDOW) {
+                return end
+            }
+        }
+        for (end in ends) {
+            if (end - at <= RECOVERY_REUSE_WINDOW) {
+                return end
+            }
+        }
+        return 0L
+    }
+
+    /**
+     * useRecovery removes a matched cooldown end, so one recovery pairs with at
+     * most one observation. A running clock it ends early has visibly recovered.
+     */
+    private fun useRecovery(end: Long) {
+        if (end == 0L) {
+            return
+        }
+        for (list in arrayOf(due, ends)) {
+            val i = list.indexOf(end)
+            if (i >= 0) {
+                list.removeAt(i)
+                return
+            }
+        }
     }
 
     private fun expire(now: Long) {
-        ends.removeAll { end -> end <= now }
+        val it = ends.iterator()
+        while (it.hasNext()) {
+            val end = it.next()
+            if (end <= now) {
+                due.add(end)
+                it.remove()
+            }
+        }
+        // An end older than the window can no longer pair with a +1 seen from now on.
+        due.removeAll { end -> now - end > RECOVERY_REUSE_WINDOW }
     }
 
     fun remaining(nowNanos: Long): List<Double> {
@@ -245,6 +319,7 @@ class SideClock {
         lastReady = 0
         hasPrev = false
         ends.clear()
+        due.clear()
         observedAt = 0L
         validAt = 0L
         lastEventEnd = 0L
@@ -263,6 +338,7 @@ class SideClock {
         lastReady = 0
         hasPrev = false
         ends.clear()
+        due.clear()
         observedAt = 0L
         validAt = 0L
         lastEventEnd = 0L
@@ -292,6 +368,14 @@ class SideClock {
     companion object {
         private const val SECOND = 1_000_000_000L
         private const val MILLISECOND = 1_000_000L
+
+        /**
+         * How far from a cooldown end a one-frame +1 still counts as that bean's
+         * recovery. The clock starts at the first frame that showed the drop, so
+         * the recovery shows up within about one capture interval of the computed
+         * end; the window adds margin for jitter.
+         */
+        private const val RECOVERY_REUSE_WINDOW = 250 * MILLISECOND
 
         /**
          * Android 修正 1 的"一次掉光"判定：一次掉 ≥2 颗并且落到 0（4 或 6 颗全空）= 大招，不计时。

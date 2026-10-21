@@ -1,0 +1,146 @@
+# SideClock event sequences for the Go/Kotlin parity check (run.sh).
+# Times are milliseconds from a fixed base; cd defaults to 15000, need to 2.
+#   scenario NAME        start a new SideClock
+#   gap MS               SetObservationGap
+#   obs READY AT [CD [NEED [FIGHT]]]
+#   frames READY FROM STEP N [NEED]   N observations FROM, FROM+STEP, ...
+#   inv AT | hold READY AT | resume AT | sync READY | resync | round | reset
+# Each line prints the clock's observable state; Go and Kotlin must agree byte for byte.
+
+scenario drop-confirm
+obs 4 0
+obs 3 16
+obs 3 32
+obs 4 48
+obs 3 64
+obs 3 80
+
+scenario flicker-and-stale
+obs 4 0
+obs 3 80
+obs 4 160
+obs 3 200
+obs 3 200
+obs 3 190
+obs 3 240
+
+scenario stacked-and-recovery-while-cooling
+obs 4 0 15000 1
+obs 3 1000 15000 1
+obs 2 2000 15000 1
+obs 3 16100 15000 1
+obs 3 16200 15000 1
+obs 2 16300 15000 1
+
+scenario ult-and-multi-drop
+obs 4 0
+obs 0 20
+obs 0 40
+obs 4 60
+obs 2 80
+obs 2 100
+
+scenario gap-resync-and-holds
+gap 150
+obs 4 0
+obs 3 16
+inv 100
+obs 2 2000
+obs 2 2016
+hold 2 2030
+hold 2 2400
+obs 1 2420
+hold 1 2440
+obs 1 2460
+
+scenario inherited-swap
+obs 4 0
+obs 3 20
+obs 3 40
+resume 60
+obs 2 80
+obs 2 100
+obs 2 120
+obs 1 140
+obs 1 160
+
+# GE-01: out of beans, the recovered bean is used again at once.
+scenario reuse-one-frame-flash
+frames 1 0 20 5
+frames 0 100 20 750
+obs 1 15100
+frames 0 15120 20 20
+
+scenario reuse-one-frame-flash-need1
+frames 1 0 20 5 1
+frames 0 100 20 750 1
+obs 1 15100 15000 1
+frames 0 15120 20 20 1
+
+scenario reuse-flash-before-computed-end
+frames 1 0 20 5
+frames 0 100 20 743
+obs 1 14960
+frames 0 14980 20 5
+
+scenario reuse-two-frame-recovery
+frames 1 0 20 5
+frames 0 100 20 750
+frames 1 15100 20 2
+frames 0 15140 20 5
+obs 1 15240
+frames 0 15260 20 3
+
+scenario glint-away-from-recovery
+frames 1 0 20 5
+frames 0 100 20 395
+obs 1 8000
+frames 0 8020 20 334
+obs 1 14700
+frames 0 14720 20 39
+obs 1 15500
+frames 0 15520 20 5
+
+scenario reuse-recovery-used-once
+frames 1 0 20 5
+frames 0 100 20 750
+obs 1 15100
+frames 0 15120 20 2
+obs 1 15160
+frames 0 15180 20 5
+
+scenario reuse-interrupted
+frames 1 0 20 5
+frames 0 100 20 750
+obs 1 15100
+inv 15120
+frames 0 15140 20 5
+
+scenario reuse-after-inherited-return
+frames 1 0 20 5
+frames 0 100 20 749
+resume 15080
+obs 1 15100
+frames 0 15120 20 5
+
+scenario reuse-reset-round
+frames 1 0 20 5
+frames 0 100 20 752
+round
+obs 0 15140
+obs 1 15160
+frames 0 15180 20 5
+
+# Three cooldowns end at 15.1, 15.2 and 15.3 s: re-use, ordinary recovery + use, re-use.
+scenario reuse-three-cooldowns
+frames 3 0 20 5
+frames 2 100 20 5
+frames 1 200 20 5
+frames 0 300 20 740
+obs 1 15100
+frames 0 15120 20 4
+obs 1 15200
+obs 1 15220
+frames 0 15240 20 3
+obs 1 15300
+frames 0 15320 20 10
