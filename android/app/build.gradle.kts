@@ -13,6 +13,9 @@ val releaseVersionName = providers.environmentVariable("TIMER_VERSION").orNull
     ?.removePrefix("v")
     ?.takeIf { it.matches(Regex("\\d+\\.\\d+\\.\\d+")) }
     ?: "0.2.10"
+// Android (and the in-app updater) only install a higher versionCode, so it follows the tag:
+// vX.Y.Z -> X*10000 + Y*100 + Z (v0.3.0 -> 300; v0.2.9 shipped as 29). No manual bump.
+val releaseVersionCode = releaseVersionName.split('.').map(String::toInt).let { (x, y, z) -> x * 10000 + y * 100 + z }
 val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
 val releaseKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
@@ -43,7 +46,7 @@ android {
         applicationId = "com.narutotimer"
         minSdk = 31
         targetSdk = 34
-        versionCode = 30
+        versionCode = releaseVersionCode
         versionName = releaseVersionName
 
         ndk {
