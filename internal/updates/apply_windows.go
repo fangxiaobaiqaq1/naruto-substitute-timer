@@ -17,20 +17,35 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 const ApplyArgument = "--timer-apply-update"
 
-type Plan struct {
-	Parent   uint32 `json:"parent"`
-	Target   string `json:"target"`
-	Incoming string `json:"incoming"`
-	Hash     string `json:"sha256"`
-	Size     int64  `json:"size"`
-	Version  string `json:"version"`
+var errElevatedUpdate = errors.New("以管理员身份运行时不支持自动更新：请关闭计时器，以普通方式重新打开后再更新，或下载安装包手动更新")
+
+// TOKEN_ELEVATION_TYPE values (winnt.h).
+const tokenElevationTypeFull = 2
+
+// elevatedSplitToken reports whether the process runs with the elevated half of
+// a split UAC token ("Run as administrator" while UAC is on). Unelevated
+// programs of the same user can then write the update cache and the per-user
+// install directory, so the helper's verify, rename and start steps could be
+// raced into elevated code execution. Without a split token (UAC off, or a
+// standard user) there is no lower-integrity peer to defend against.
+func elevatedSplitToken() bool {
+	var elevationType, n uint32
+	token := windows.GetCurrentProcessToken()
+	if err := windows.GetTokenInformation(token, windows.TokenElevationType, (*byte)(unsafe.Pointer(&elevationType)), uint32(unsafe.Sizeof(elevationType)), &n); err != nil {
+		return token.IsElevated()
+	}
+	return elevationType == tokenElevationTypeFull
 }
 
 func PrepareRestart(incoming string, r Release) error {
+	if elevatedSplitToken() {
+		return errElevatedUpdate
+	}
 	cmp, e := Compare(r.Tag, buildinfo.Version)
 	if e != nil {
 		return e
@@ -117,7 +132,12 @@ func ApplyFile(path string) error {
 	if e = json.Unmarshal(data, &p); e != nil {
 		return e
 	}
-	err := apply(p, true)
+	// The helper is a copy of the program being replaced; bind the plan to it.
+	helper, e := os.Executable()
+	if e != nil {
+		return e
+	}
+	err := apply(p, helper, true)
 	report := struct {
 		At      time.Time `json:"at"`
 		Version string    `json:"version"`
@@ -130,21 +150,14 @@ func ApplyFile(path string) error {
 	_ = os.WriteFile(filepath.Join(d, "last-update.json"), b, 0600)
 	return err
 }
-func apply(p Plan, restart bool) error {
-	if !filepath.IsAbs(p.Target) || !filepath.IsAbs(p.Incoming) || !strings.EqualFold(filepath.Ext(p.Target), ".exe") {
-		return errors.New("更新路径无效")
+
+// apply installs a verified plan. helper is the helper's own executable (see
+// checkPlan); tests that call apply directly pass "".
+func apply(p Plan, helper string, restart bool) error {
+	if elevatedSplitToken() {
+		return errElevatedUpdate
 	}
-	rel, e := filepath.Rel(Directory(), p.Incoming)
-	if e != nil || !filepath.IsLocal(rel) {
-		return errors.New("更新文件不在缓存目录中")
-	}
-	if p.Parent == 0 || p.Parent == uint32(os.Getpid()) {
-		return errors.New("更新进程信息无效")
-	}
-	if _, ok := version(p.Version); !ok {
-		return errors.New("更新版本无效")
-	}
-	if e = verifyFile(p.Incoming, p.Hash, p.Size); e != nil {
+	if e := checkPlan(p, helper); e != nil {
 		return e
 	}
 	h, e := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, p.Parent)
