@@ -66,10 +66,14 @@ func TestComputeContentAreaStretch(t *testing.T) {
 }
 
 func TestComputeContentAreaLetterbox(t *testing.T) {
-	// 860x580 (约 1.48:1) 且非 16:9 → 等比黑边
-	// 缩放比 = min(860/1920, 580/1080) = min(0.4479, 0.5370) = 0.4479
-	// 内容区 = 860 x (1080*0.4479≈483)，垂直居中
+	// Auto has no pixels, so it must keep a native non-16:9 surface instead of
+	// guessing that it contains centered bars.
 	ca := ComputeContentArea(860, 580, ModeAuto)
+	if ca != (ContentArea{W: 860, H: 580}) {
+		t.Fatalf("auto must keep size-only surface, got %+v", ca)
+	}
+	// Explicit letterbox is the size-only mode that may crop to 16:9.
+	ca = ComputeContentArea(860, 580, ModeLetterbox)
 	wantW, wantH := 860, 483
 	if ca.W != wantW || ca.H != wantH {
 		t.Fatalf("等比内容区应 %dx%d, got %dx%d", wantW, wantH, ca.W, ca.H)
@@ -77,7 +81,7 @@ func TestComputeContentAreaLetterbox(t *testing.T) {
 	if ca.X != 0 || ca.Y != (580-wantH)/2 {
 		t.Fatalf("等比偏移应 (0,%d), got (%d,%d)", (580-wantH)/2, ca.X, ca.Y)
 	}
-	// 强制等比
+	// 16:9 explicit letterbox still fills the surface.
 	ca = ComputeContentArea(1920, 1080, ModeLetterbox)
 	if ca.W != 1920 || ca.H != 1080 {
 		t.Fatalf("1920x1080 letterbox 内容区应全屏, got %+v", ca)
@@ -100,8 +104,8 @@ func TestMap(t *testing.T) {
 	if x != 206 || y != 110 {
 		t.Fatalf("全屏映射应保持原值, got (%d,%d)", x, y)
 	}
-	// 860x483 内容区（垂直偏移 48），逻辑(206,110) → (92, 97)
-	ca = ComputeContentArea(860, 580, ModeAuto)
+	// Explicit letterbox content area (垂直偏移 48)，逻辑(206,110) → (92,97)
+	ca = ComputeContentArea(860, 580, ModeLetterbox)
 	x, y = ca.Map(206, 110)
 	if x != 92 || y != 97 {
 		t.Fatalf("等比映射错误, got (%d,%d), want (92,97)", x, y)

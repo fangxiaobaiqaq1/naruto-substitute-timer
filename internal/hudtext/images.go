@@ -11,6 +11,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
+	"narutotimer/internal/engine"
 	"narutotimer/internal/match"
 	"narutotimer/internal/ocr"
 )
@@ -47,28 +48,56 @@ func (s sheet) read(ctx context.Context, reader ocr.Recognizer) ([]ocr.Line, err
 }
 
 func nameRegions(img *image.RGBA, cfg config.LayoutConfig, profile string) ([2]image.Rectangle, bool) {
-	var out [2]image.Rectangle
+	layout, ok := newNameLayout(cfg)
+	if !ok {
+		return [2]image.Rectangle{}, false
+	}
+	return layout.regions(img, profile)
+}
+
+// nameLayout is the immutable layout behind nameRegions. The live engine
+// keeps one per layout configuration instead of rebuilding it every frame.
+type nameLayout struct {
+	cfg    config.LayoutConfig
+	mode   detect.ContentMode
+	layout *engine.ConfiguredLayout
+}
+
+func newNameLayout(cfg config.LayoutConfig) (*nameLayout, bool) {
 	mode, err := detect.ParseMode(cfg.ContentMode)
 	if err != nil {
-		return out, false
+		return nil, false
 	}
+	return &nameLayout{cfg: cfg, mode: mode, layout: engine.NewConfiguredLayout(mode, cfg)}, true
+}
+
+func (n *nameLayout) regions(img *image.RGBA, profile string) ([2]image.Rectangle, bool) {
+	var out [2]image.Rectangle
+	cfg, mode := n.cfg, n.mode
 	ca, ok := detect.ResolveContentArea(img, mode, cfg.ReferenceWidth, cfg.ReferenceHeight, cfg.AutoAspectTolerance)
 	if !ok {
 		return out, false
 	}
-	p := cfg.Profile(profile)
-	scale := float64(ca.W) / 960
-	for i, side := range []config.SideLayout{p.Left, p.Right} {
-		if len(side.NominalCenters) == 0 {
-			return out, false
-		}
-		first := side.NominalCenters[0]
-		center := image.Pt(ca.X+int(math.Round(first.X*float64(ca.W))), ca.Y+int(math.Round(first.Y*float64(ca.H))))
+	positions := n.layout.PositionsInImage(profile, img, ca)
+	if len(positions) != 2*cfg.BeadsPerSide || cfg.BeadsPerSide < 1 {
+		return out, false
+	}
+	// OCR offsets must use the same fitted HUD scale and safe-area anchors.
+	for i := range 2 {
+		first := positions[i*cfg.BeadsPerSide]
+		center := image.Pt(first.X, first.Y)
 		x0, x1 := -4., 330.
 		if i == 1 {
 			x0, x1 = -330., 4.
 		}
-		out[i] = image.Rect(center.X+int(math.Round(x0*scale)), ca.Y+int(math.Round(.020*float64(ca.H))), center.X+int(math.Round(x1*scale)), ca.Y+int(math.Round(.073*float64(ca.H)))).Intersect(img.Bounds())
+		scale := ca.HUDScale(960, 540)
+		y0, y1 := ca.Y+int(math.Round(.020*540*scale)), ca.Y+int(math.Round(.073*540*scale))
+		if c := first.Cal; c.Beads() {
+			// A calibrated row carries its own scale and vertical placement.
+			scale = c.Scale * detect.HUDReferenceWidth / 960
+			y0, y1 = c.Map(first.LX, .020*detect.HUDReferenceHeight).Y, c.Map(first.LX, .073*detect.HUDReferenceHeight).Y
+		}
+		out[i] = image.Rect(center.X+int(math.Round(x0*scale)), y0, center.X+int(math.Round(x1*scale)), y1).Intersect(img.Bounds())
 		if out[i].Dx() < 80 || out[i].Dy() < 10 {
 			return out, false
 		}
@@ -80,25 +109,33 @@ func nameRegions(img *image.RGBA, cfg config.LayoutConfig, profile string) ([2]i
 // broad strip may also contain outlined scenery, so established fields use
 // their own live glyph evidence rather than letting any strip pixel erase them.
 func lettering(img *image.RGBA, roi image.Rectangle) ([32]byte, int) {
+	roi = roi.Intersect(img.Bounds())
 	bits := make([]byte, (roi.Dx()*roi.Dy()+7)/8)
 	count := 0
+	if roi.Empty() {
+		return sha256.Sum256(bits), 0
+	}
+	bounds := img.Bounds()
+	// This runs on every fighting frame for both name strips. Reading the row
+	// slice directly avoids a bounds-checked RGBAAt call per pixel; only the
+	// rare bright, low-chroma candidates look at their four outline neighbors.
+	dark := func(x, y int) bool {
+		if x < bounds.Min.X || y < bounds.Min.Y || x >= bounds.Max.X || y >= bounds.Max.Y {
+			return false
+		}
+		o := img.PixOffset(x, y)
+		return max(img.Pix[o], img.Pix[o+1], img.Pix[o+2]) < 90
+	}
 	for y := roi.Min.Y; y < roi.Max.Y; y++ {
+		row := img.Pix[img.PixOffset(roi.Min.X, y):img.PixOffset(roi.Max.X, y)]
 		for x := roi.Min.X; x < roi.Max.X; x++ {
-			c := img.RGBAAt(x, y)
-			if min(c.R, c.G, c.B) < 180 || int(max(c.R, c.G, c.B))-int(min(c.R, c.G, c.B)) > 65 {
+			o := (x - roi.Min.X) * 4
+			r, g, b := row[o], row[o+1], row[o+2]
+			lo, hi := min(r, g, b), max(r, g, b)
+			if lo < 180 || int(hi)-int(lo) > 65 {
 				continue
 			}
-			outlined := false
-			for _, p := range []image.Point{{x - 2, y}, {x + 2, y}, {x, y - 2}, {x, y + 2}} {
-				if p.In(img.Bounds()) {
-					n := img.RGBAAt(p.X, p.Y)
-					if max(n.R, n.G, n.B) < 90 {
-						outlined = true
-						break
-					}
-				}
-			}
-			if !outlined {
+			if !dark(x-2, y) && !dark(x+2, y) && !dark(x, y-2) && !dark(x, y+2) {
 				continue
 			}
 			i := (y-roi.Min.Y)*roi.Dx() + x - roi.Min.X

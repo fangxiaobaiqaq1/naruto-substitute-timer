@@ -80,7 +80,7 @@ func (e *Engine) Analyze(img *image.RGBA) engine.Result {
 			res.Scene = "unsupported-resolution"
 			return res
 		}
-		positions = layout.PositionsIn(profile, area)
+		positions = layout.PositionsInImage(profile, img, area)
 		reference = layout.ReferenceSize()
 	}
 	res.Name += "-" + profile
@@ -96,10 +96,9 @@ func (e *Engine) Analyze(img *image.RGBA) engine.Result {
 		ys[i] = p.Y - img.Bounds().Min.Y
 	}
 
-	scaleX := float64(area.W) / float64(reference.X)
-	scaleY := float64(area.H) / float64(reference.Y)
-	sampleW := int(math.Round(e.cfg.Vision.SampleWidthReferencePX * scaleX))
-	sampleH := int(math.Round(e.cfg.Vision.SampleHeightReferencePX * scaleY))
+	scale := area.HUDScale(float64(reference.X), float64(reference.Y))
+	sampleW := int(math.Round(e.cfg.Vision.SampleWidthReferencePX * scale))
+	sampleH := int(math.Round(e.cfg.Vision.SampleHeightReferencePX * scale))
 	if sampleW < 5 {
 		sampleW = 5
 	}

@@ -1,0 +1,16 @@
+// 静态站：上传 .vitepress/dist；worker.js 只处理 /media/* 的 Range 请求。部署：npm run deploy（需要 CLOUDFLARE_API_TOKEN）
+{
+  "name": "naruto-timer-site",
+  // 固定部署到项目自己的 Cloudflare 账号：别的账号的 token 会直接报错，不会部署错地方
+  "account_id": "97ad9adaacfe2852a32ddaaac96095f9",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  // 只用 hy 子域名：根域名另有用途，不要接到 Worker 上
+  "routes": [{ "pattern": "hy.312166.xyz", "custom_domain": true }],
+  "assets": {
+    "directory": ".vitepress/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/media/*"]
+  }
+}

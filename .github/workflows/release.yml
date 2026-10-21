@@ -10,25 +10,40 @@ on:
         description: Existing tag to build and publish
         required: true
         type: string
+      force:
+        description: Replace assets that already exist on the GitHub release (a rebuild is not byte-identical, and Gitee keeps its first upload)
+        required: false
+        type: boolean
+        default: false
 
+# Supply-chain rules for this workflow (see docs/开发与发布.md):
+# - every job is read-only except `github`, the only job that writes releases;
+# - checkouts never persist the job token in .git/config;
+# - secrets live in the one step that needs them (APK signing, Gitee upload),
+#   never in a job that runs Gradle, cgo, msys2 or other third-party build code;
+# - actions are pinned by full commit SHA (release tag in the comment).
 permissions:
-  contents: write
+  contents: read
 
 env:
   ANDROID_NDK_VERSION: 27.2.12479018
   ANDROID_CMAKE_VERSION: 3.22.1
+  ANDROID_BUILD_TOOLS_VERSION: 35.0.0
 
 jobs:
   metadata:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       notes: ${{ steps.release.outputs.notes }}
       commit: ${{ steps.release.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: release
         shell: bash
         env:
@@ -47,20 +62,29 @@ jobs:
             echo "commit=$(git rev-parse "$tag^{commit}")"
           } >> "$GITHUB_OUTPUT"
 
+  # Gradle, its plugins and their dependencies run here, so this job has no
+  # signing secrets: it builds an unsigned APK that android-sign signs.
   android:
     needs: metadata
     runs-on: ubuntu-latest
-    env:
-      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.metadata.outputs.tag }}
+          persist-credentials: false
+      - name: Verify Gradle wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Official SHA-256 of gradle-8.11.1-wrapper.jar (services.gradle.org);
+          # update it together with the wrapper. The distribution itself is
+          # checked by distributionSha256Sum in gradle-wrapper.properties.
+          echo "2db75c40782f5e8ba1fc278a5574bab070adccb2d21ca5a6e5ed840888448046  android/gradle/wrapper/gradle-wrapper.jar" | sha256sum -c -
+          grep -Eq '^distributionSha256Sum=[0-9a-f]{64}$' android/gradle/wrapper/gradle-wrapper.properties
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: "17"
@@ -80,33 +104,85 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$ANDROID_SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" \
+          "$ANDROID_SDKMANAGER" "platforms;android-35" "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
             "cmake;${ANDROID_CMAKE_VERSION}" "ndk;${ANDROID_NDK_VERSION}"
-      - name: Decode release keystore
+      - name: Build unsigned release APK
+        working-directory: android
+        env:
+          TIMER_VERSION: ${{ needs.metadata.outputs.tag }}
+        run: ./gradlew --no-daemon --stacktrace -Ptimer.unsignedRelease=true :app:assembleRelease
+      - name: Prepare unsigned APK artifact
         shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p unsigned-apk
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk unsigned-apk/naruto-timer-universal-unsigned.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-unsigned
+          path: unsigned-apk
+          if-no-files-found: error
+
+  # Minimal signing job: first-party artifact actions, the runner's Android
+  # build-tools and the keystore secrets in a single step. Never checks out or
+  # builds repository code.
+  android-sign:
+    needs: android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-unsigned
+          path: unsigned-apk
+      - name: Locate apksigner
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          tools="$sdk_root/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
+          if [[ ! -x "$tools/apksigner" || ! -x "$tools/zipalign" ]]; then
+            sdkmanager_bin="$(command -v sdkmanager || echo "$sdk_root/cmdline-tools/latest/bin/sdkmanager")"
+            yes | "$sdkmanager_bin" --licenses >/dev/null || true
+            "$sdkmanager_bin" "build-tools;${ANDROID_BUILD_TOOLS_VERSION}"
+          fi
+          test -x "$tools/apksigner" && test -x "$tools/zipalign" || { echo "::error::apksigner/zipalign not found in $tools"; exit 1; }
+          echo "ANDROID_BUILD_TOOLS=$tools" >> "$GITHUB_ENV"
+      - name: Sign APK
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           test -n "$ANDROID_KEYSTORE_BASE64" || { echo "::error::ANDROID_KEYSTORE_BASE64 is required for a stable release APK"; exit 1; }
           test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "::error::ANDROID_KEYSTORE_PASSWORD is required with ANDROID_KEYSTORE_BASE64"; exit 1; }
           test -n "$ANDROID_KEY_ALIAS" || { echo "::error::ANDROID_KEY_ALIAS is required with ANDROID_KEYSTORE_BASE64"; exit 1; }
           test -n "$ANDROID_KEY_PASSWORD" || { echo "::error::ANDROID_KEY_PASSWORD is required with ANDROID_KEYSTORE_BASE64"; exit 1; }
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/naruto-timer-release.jks"
-          test -s "$RUNNER_TEMP/naruto-timer-release.jks"
-          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/naruto-timer-release.jks" >> "$GITHUB_ENV"
-      - name: Build release APK
-        working-directory: android
-        env:
-          TIMER_VERSION: ${{ needs.metadata.outputs.tag }}
-        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
-      - name: Prepare APK artifact
-        shell: bash
-        env:
-          TAG: ${{ needs.metadata.outputs.tag }}
-        run: |
-          set -euo pipefail
+          keystore="$RUNNER_TEMP/naruto-timer-release.jks"
+          trap 'rm -f "$keystore"' EXIT
+          (umask 077 && printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore")
+          test -s "$keystore"
+          unsigned=unsigned-apk/naruto-timer-universal-unsigned.apk
+          # AGP already aligned the APK (16 KiB pages for native libraries).
+          "$ANDROID_BUILD_TOOLS/zipalign" -c -P 16 4 "$unsigned"
           mkdir -p release-assets
-          cp android/app/build/outputs/apk/release/app-release.apk release-assets/naruto-timer-universal.apk
-      - uses: actions/upload-artifact@v4
+          # Same scheme as the former Gradle signing for minSdk 31 (APK Signature
+          # Scheme v2 only); the certificate decides whether updates install.
+          "$ANDROID_BUILD_TOOLS/apksigner" sign --ks "$keystore" --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD \
+            --v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled false --v4-signing-enabled false \
+            --out release-assets/naruto-timer-universal.apk "$unsigned"
+          "$ANDROID_BUILD_TOOLS/apksigner" verify --verbose --print-certs release-assets/naruto-timer-universal.apk
+          "$ANDROID_BUILD_TOOLS/zipalign" -c -P 16 4 release-assets/naruto-timer-universal.apk
+      - name: Remove keystore
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/naruto-timer-release.jks"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: android-release
           path: release-assets
@@ -115,20 +191,25 @@ jobs:
   windows:
     needs: metadata
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.metadata.outputs.tag }}
+          persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: "1.26.1"
-          cache: true
+          # Keep in step with the toolchain line in go.mod.
+          go-version: "1.26.10"
+          # A release is built from a clean module/build cache, never a restored one.
+          cache: false
       - name: Set up MinGW toolchain
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: UCRT64
-          update: true
+          update: false
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-glfw
@@ -156,20 +237,23 @@ jobs:
           Copy-Item bin\timer-app.exe release-assets\timer-app.exe
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md release-assets\windows
           Compress-Archive -Path release-assets\windows\* -DestinationPath "release-assets\naruto-timer-$env:TAG-windows-x64.zip" -CompressionLevel Optimal
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-release
           path: release-assets
           if-no-files-found: error
 
   github:
-    needs: [metadata, android, windows]
+    needs: [metadata, android-sign, windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.metadata.outputs.tag }}
-      - uses: actions/download-artifact@v4
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: "*-release"
           path: release-assets
@@ -190,14 +274,23 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.metadata.outputs.tag }}
           NOTES: ${{ needs.metadata.outputs.notes }}
+          FORCE: ${{ inputs.force }}
         shell: bash
         run: |
           set -euo pipefail
           mapfile -t assets < <(find release-assets -maxdepth 1 -type f -printf '%p\n' | sort)
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${assets[@]}" --clobber
+            existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            if [[ -n "$existing" && "$FORCE" != "true" ]]; then
+              echo "::error::GitHub release $TAG already has assets. A rebuild is not byte-identical and the Gitee mirror keeps its first upload, so they are not replaced. Re-run this workflow with force=true only to replace them deliberately."
+              exit 1
+            fi
+            clobber=()
+            if [[ "$FORCE" == "true" ]]; then clobber=(--clobber); fi
+            gh release upload "$TAG" "${assets[@]}" "${clobber[@]}"
             gh release edit "$TAG" --title "替身计时器 $TAG" --notes-file "$NOTES"
           else
             gh release create "$TAG" "${assets[@]}" --verify-tag --title "替身计时器 $TAG" --notes-file "$NOTES"
@@ -206,21 +299,24 @@ jobs:
   gitee:
     needs: [metadata, github]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
-      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
       GITEE_REPOSITORY: xiaobaiqaq/naruto-substitute-timer
       GITEE_TARGET_COMMITISH: ${{ needs.metadata.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.metadata.outputs.tag }}
-      - uses: actions/download-artifact@v4
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: "*-release"
           path: release-assets
           merge-multiple: true
       - name: Publish Gitee release
         env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           TAG: ${{ needs.metadata.outputs.tag }}
           NOTES: ${{ needs.metadata.outputs.notes }}
         shell: bash

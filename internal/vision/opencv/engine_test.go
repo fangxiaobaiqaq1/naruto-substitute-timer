@@ -114,7 +114,7 @@ func TestNativeUsesSharedContentGeometry(t *testing.T) {
 	draw.Draw(wide, wide.Bounds(), image.NewUniform(color.RGBA{R: 255, G: 190, B: 0, A: 255}), image.Point{}, draw.Src)
 	e := New(engine.NewConfiguredLayout(detect.ModeAuto, cfg.Layout), cfg)
 	result := e.Analyze(wide)
-	if !result.Uncertain || result.Scene != "unsupported-resolution" || len(result.Beads) != 0 {
-		t.Fatalf("native aspect supplied guessed coordinates: %+v", result)
+	if result.Uncertain || result.Scene == "unsupported-resolution" {
+		t.Fatalf("native aspect was rejected: %+v", result)
 	}
 }

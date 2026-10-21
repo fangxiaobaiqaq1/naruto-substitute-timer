@@ -142,18 +142,18 @@ func TestLegacyConfigInheritsNewAppearanceAndUpdateDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.UI.AutoCheckUpdates || cfg.UI.WindowOpacity != 1 || cfg.UI.FontScale != 1 {
+	if !cfg.UI.AutoCheckUpdates || cfg.UI.WindowOpacity != 1 || cfg.UI.FontScale != 1 || cfg.UI.MiniOpacity != 0.85 || cfg.UI.MiniFloating {
 		t.Fatalf("legacy UI defaults were not preserved: %+v", cfg.UI)
 	}
 }
 
 func TestValidateAppearanceBoundsAreInclusiveAndRejectInvalidValues(t *testing.T) {
 	cfg := Default()
-	cfg.UI.WindowOpacity, cfg.UI.FontScale = 0.40, 0.80
+	cfg.UI.WindowOpacity, cfg.UI.FontScale, cfg.UI.MiniOpacity = 0.40, 0.25, 0.20
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("lower bounds should be valid: %v", err)
 	}
-	cfg.UI.WindowOpacity, cfg.UI.FontScale = 1.00, 1.60
+	cfg.UI.WindowOpacity, cfg.UI.FontScale, cfg.UI.MiniOpacity = 1.00, 3.00, 1.00
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("upper bounds should be valid: %v", err)
 	}
@@ -164,8 +164,10 @@ func TestValidateAppearanceBoundsAreInclusiveAndRejectInvalidValues(t *testing.T
 	}{
 		{"opacity too low", func(c *Config) { c.UI.WindowOpacity = 0.39 }, "windowOpacity"},
 		{"opacity too high", func(c *Config) { c.UI.WindowOpacity = 1.01 }, "windowOpacity"},
-		{"font too low", func(c *Config) { c.UI.FontScale = 0.79 }, "fontScale"},
-		{"font too high", func(c *Config) { c.UI.FontScale = 1.61 }, "fontScale"},
+		{"mini opacity too low", func(c *Config) { c.UI.MiniOpacity = 0.19 }, "miniOpacity"},
+		{"mini opacity too high", func(c *Config) { c.UI.MiniOpacity = 1.01 }, "miniOpacity"},
+		{"font too low", func(c *Config) { c.UI.FontScale = 0.24 }, "fontScale"},
+		{"font too high", func(c *Config) { c.UI.FontScale = 3.01 }, "fontScale"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bad := Default()
@@ -174,5 +176,57 @@ func TestValidateAppearanceBoundsAreInclusiveAndRejectInvalidValues(t *testing.T
 				t.Fatalf("Validate() = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestLeidianCaptureMethodsValidate(t *testing.T) {
+	for _, provider := range []string{"leidian-adb", "leidian-adb-raw", "leidian-window"} {
+		cfg := Default()
+		cfg.Capture.Provider = provider
+		cfg.Capture.PreferredMethods = []string{"leidian-window", "leidian-adb-raw", "leidian-adb"}
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("provider %s should validate: %v", provider, err)
+		}
+	}
+	cfg := Default()
+	cfg.Capture.PreferredMethods = []string{"leidian-raw"}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "preferredMethods") {
+		t.Fatalf("expected preferredMethods error, got %v", err)
+	}
+	cfg = Default()
+	cfg.Capture.Provider = "leidian-png"
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "provider") {
+		t.Fatalf("expected provider error, got %v", err)
+	}
+	cfg = Default()
+	cfg.Capture.Leidian.ADBServerPort = 70000
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "adbServerPort") {
+		t.Fatalf("expected adbServerPort error, got %v", err)
+	}
+}
+
+func TestDefaultCaptureKeepsMuMuMethods(t *testing.T) {
+	cfg := Default()
+	if cfg.Capture.Provider != "mumu-sdk" || len(cfg.Capture.PreferredMethods) != 1 || cfg.Capture.PreferredMethods[0] != "mumu-sdk" || cfg.Capture.Leidian.ADBServerPort != 0 {
+		t.Fatalf("MuMu defaults changed: %+v", cfg.Capture)
+	}
+}
+
+func TestRegionCalibrationIsOptionalAndValidated(t *testing.T) {
+	c := Default()
+	if err := Validate(c); err != nil || c.Layout.Calibration != nil {
+		t.Fatalf("default calibration %+v err %v", c.Layout.Calibration, err)
+	}
+	c.Layout.Calibration = &RegionCalibration{Profile: "duel", LeftBeads: &NormalizedRect{X: 0.08, Y: 0.1, Width: 0.05, Height: 0.02}}
+	if err := Validate(c); err != nil {
+		t.Fatal(err)
+	}
+	c.Layout.Calibration.RightAvatar = &NormalizedRect{X: 0.95, Y: 0, Width: 0.1, Height: 0.1}
+	if Validate(c) == nil {
+		t.Fatal("rect outside the frame accepted")
+	}
+	c.Layout.Calibration = &RegionCalibration{Profile: "lobby"}
+	if Validate(c) == nil {
+		t.Fatal("unknown profile accepted")
 	}
 }

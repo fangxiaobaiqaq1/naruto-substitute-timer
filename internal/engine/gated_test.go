@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 type stubGate struct{ d GateDecision }
@@ -212,4 +213,56 @@ func TestGatedConcurrentFramesCannotExchangeProfiles(t *testing.T) {
 		}
 	}
 	wg.Wait()
+}
+
+func TestGatedProfileSwitchNeedsTwoDistinctFrames(t *testing.T) {
+	var hashes int
+	pixelHashHook = func() { hashes++ }
+	defer func() { pixelHashHook = nil }()
+	gate := &mutableGate{d: GateDecision{Kind: GateFight, SceneID: "fight", LayoutProfile: "camp"}}
+	g := NewGated(gate, &profileInner{})
+	start := time.Unix(1000, 0)
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	analyze := func(frame *image.RGBA, offset time.Duration) Result {
+		return g.(TimedEngine).AnalyzeAt(frame, start.Add(offset))
+	}
+	if res := analyze(img, 0); !res.Fighting {
+		t.Fatalf("camp fight not established: %+v", res)
+	}
+	if hashes != 0 {
+		t.Fatalf("steady profile must not hash, got %d", hashes)
+	}
+	gate.d.LayoutProfile = "duel"
+	step := 100 * time.Millisecond
+	// The same pixels repeated past the confirmation window never confirm.
+	for i := 1; i <= 6; i++ {
+		res := analyze(img, time.Duration(i)*step)
+		if res.Fighting || g.(*Gated).lastFight.LayoutProfile != "camp" {
+			t.Fatalf("identical frame %d confirmed switch: %+v", i, res)
+		}
+	}
+	// Hash once for the pending candidate, then only after 300ms has elapsed.
+	if hashes != 1+3 {
+		t.Fatalf("hash count = %d, want 4", hashes)
+	}
+	other := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	other.Pix[0] = 1
+	if res := analyze(other, 7*step); !res.Fighting || g.(*Gated).lastFight.LayoutProfile != "duel" {
+		t.Fatalf("distinct frame after window must confirm: %+v", res)
+	}
+}
+
+func TestGatedProfileSwitchDistinctFrameTooEarly(t *testing.T) {
+	gate := &mutableGate{d: GateDecision{Kind: GateFight, SceneID: "fight", LayoutProfile: "camp"}}
+	g := NewGated(gate, &profileInner{}).(*Gated)
+	start := time.Unix(1000, 0)
+	a := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	b := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	b.Pix[0] = 1
+	g.AnalyzeAt(a, start)
+	gate.d.LayoutProfile = "duel"
+	g.AnalyzeAt(a, start.Add(100*time.Millisecond))
+	if res := g.AnalyzeAt(b, start.Add(200*time.Millisecond)); res.Fighting || g.lastFight.LayoutProfile != "camp" {
+		t.Fatalf("distinct frame inside window confirmed switch: %+v", res)
+	}
 }

@@ -13,7 +13,7 @@ import (
 )
 
 func TestObitoCurrentTemplateRejectsPartialVersion(t *testing.T) {
-	data, err := templates.ReadFile("templates/obito_current.png")
+	data, err := diskTemplates.ReadFile("templates/obito_current.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestObitoCurrentTrainingNames(t *testing.T) {
 			r := NewReader()
 			got := r.Read(img, roi, scale)
 			if got.Name != Obito {
-				for _, templ := range r.prepared {
+				for _, templ := range r.testPrepared() {
 					score, _ := (match.NCC{}).Match(match.Query{Image: img, ROI: roi, Prepared: templ.ncc})
 					t.Logf("candidate %s score=%+v", templ.readout.Name, score)
 				}

@@ -17,9 +17,10 @@ func TestObservationSpaceRetainsKnownFieldsAcrossIncompleteFrames(t *testing.T) 
 		{"error without metadata", 0, 0, "", false},
 		{"partly missing dimensions", 1600, 0, "", false},
 		{"recovery in new geometry", 1280, 720, "mumu-sdk", false},
-		{"method changes without geometry", 0, 0, "printwindow", true},
+		{"failed capture of another method", 0, 0, "printwindow", false},
 		{"missing method", 1280, 720, "", false},
-		{"same recovered method", 1280, 720, "printwindow", false},
+		{"first image of the new method", 1280, 720, "printwindow", true},
+		{"same method", 1280, 720, "printwindow", false},
 		{"both change", 1920, 1080, "mumu-sdk", true},
 	}
 	for _, step := range steps {
@@ -29,6 +30,23 @@ func TestObservationSpaceRetainsKnownFieldsAcrossIncompleteFrames(t *testing.T) 
 	}
 	if space.width != 1920 || space.height != 1080 || space.method != "mumu-sdk" {
 		t.Fatalf("last known source lost: %+v", space)
+	}
+}
+
+// GE-09: failed captures carry the method id ("mumu-sdk") while frames with an
+// image carry the client's Source() ("MuMu 实例 0 · …"). Only a frame with an
+// image describes the coordinate system, so an error between two good frames
+// is not a source change, neither on the way in nor on the way back.
+func TestObservationSpaceIgnoresMethodOfFramesWithoutImage(t *testing.T) {
+	var space ObservationSpace
+	source := "MuMu 实例 0 · C:\\MuMu"
+	for i, step := range []struct {
+		width, height int
+		method        string
+	}{{1920, 1080, source}, {0, 0, "mumu-sdk"}, {1920, 1080, source}, {0, 0, "mumu-sdk"}, {0, 0, ""}, {1920, 1080, source}} {
+		if space.Update(step.width, step.height, step.method) {
+			t.Fatalf("step %d (%dx%d %q) reported a source change", i, step.width, step.height, step.method)
+		}
 	}
 }
 

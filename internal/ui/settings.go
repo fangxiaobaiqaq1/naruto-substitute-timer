@@ -10,12 +10,12 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"narutotimer/internal/config"
 	"narutotimer/internal/identity"
 	"narutotimer/internal/ninja"
-	"narutotimer/internal/updates"
 )
 
 const identityFreshFor = 2 * time.Second
@@ -86,23 +86,27 @@ func (s *session) clearAutoIdentity() {
 	}
 }
 
-// Serialize saves with state changes. Never let an old capture goroutine write
-// a configuration snapshot over the user's more recent selection.
-func (s *session) saveSettingsLocked() error {
+// settingsSnapshotLocked captures the settings to persist; the caller holds
+// s.mu and calls Save on the result after releasing it. The capture loop takes
+// s.mu on every frame, so the disk write (fsync, antivirus) must not run under
+// it. Snapshots are ordered by s.cfgWriter: an older one never overwrites the
+// user's more recent selection.
+func (s *session) settingsSnapshotLocked() config.Snapshot {
 	cfg := s.cfg
 	cfg.UI.RememberSide = s.remember
 	if !s.remember {
 		cfg.UI.PlayerSide = "auto"
 	}
-	return config.Save(s.cfgPath, cfg)
+	return s.cfgWriter.Snapshot(s.cfgPath, cfg)
 }
 
 func (s *session) selectSideMode(mode string) error {
 	mode = sideMode(mode)
 	s.mu.Lock()
 	s.setSideModeLocked(mode)
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	s.syncSettingsSide()
 	s.refreshOverlay()
 	return err
@@ -111,9 +115,9 @@ func (s *session) selectSideMode(mode string) error {
 func (s *session) setRememberSide(remember bool) error {
 	s.mu.Lock()
 	s.remember, s.cfg.UI.RememberSide = remember, remember
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
-	return err
+	return snapshot.Save()
 }
 
 func (s *session) syncSettingsSide() {
@@ -137,11 +141,45 @@ func showSettingsError(err error, w fyne.Window) {
 	}
 }
 
+// settingsWindow is where errors from overlay/mini actions are shown: the
+// open settings window if any, else the full overlay.
+func (s *session) dialogWindow() fyne.Window {
+	if s.settings != nil {
+		return s.settings
+	}
+	return s.win
+}
+
+// openSettings shows the settings window. An existing window is only brought
+// forward: rebuilding it would cancel a running update download or emulator
+// scan and lose the selected tab. Live-applied controls are kept in sync by
+// syncSettingsControls, so nothing in it can be stale.
 func (s *session) openSettings() {
+	if s.settings != nil && s.settingsTabs != nil {
+		s.syncSettingsControls()
+		s.settings.Show()
+		s.settings.RequestFocus()
+		return
+	}
+	s.buildSettings(0)
+}
+
+// rebuildSettings replaces the content in place (e.g. after the update source
+// changes), keeping the selected tab.
+func (s *session) rebuildSettings() {
+	tab := 0
+	if s.settingsTabs != nil {
+		tab = s.settingsTabs.SelectedIndex()
+	}
+	s.buildSettings(tab)
+}
+
+func (s *session) buildSettings(tab int) {
 	w := s.settings
 	if w == nil {
 		w = fyne.CurrentApp().NewWindow("替身设置")
 		s.settings = w
+		addToggleMiniShortcut(w, s)
 		w.SetOnClosed(func() {
 			if s.captureCancel != nil {
 				s.captureCancel()
@@ -150,31 +188,31 @@ func (s *session) openSettings() {
 				s.aboutCancel()
 			}
 			s.settings, s.settingsSide = nil, nil
+			s.settingsMini, s.settingsBoth = nil, nil
 			s.textStatusLabel = nil
 			s.settingsTabs = nil
 		})
 	}
-	// Rebuild from current state every time, not the stale controls from the last
-	// time this window was hidden (the overlay's swap button may have changed it).
 	s.mu.Lock()
 	name := strings.Join(s.cfg.UI.PlayerNames, "，")
 	ninjaText := s.cfg.UI.NinjaQuery
 	mode, remember, top := s.cfg.UI.PlayerSide, s.remember, s.topmost
 	autoText := s.cfg.UI.AutoTextRecognition
-	autoUpdates := s.cfg.UI.AutoCheckUpdates
-	updateSource := s.cfg.UI.UpdateSource
 	opacity, fontScale := s.cfg.UI.WindowOpacity, s.cfg.UI.FontScale
+	overlayMode, showBoth, gpuAccel := s.cfg.UI.OverlayMode, s.cfg.UI.ShowBothSides, s.cfg.UI.GPUAcceleration
+	miniOpacity, miniAutoScale := s.cfg.UI.MiniOpacity, s.cfg.UI.MiniAutoScale
 	appearanceError := s.appearanceError
 	textStatus := s.textStatusText()
 	s.mu.Unlock()
 
-	nameEntry := widget.NewEntry()
-	nameEntry.SetPlaceHolder("自己的账号名，用来自动认边")
-	nameEntry.SetText(name)
-	ninjaEntry := widget.NewSelectEntry([]string{"", ninja.FifthMizukage, ninja.Hashirama, ninja.Madara, ninja.Obito, ninja.Naruto})
-	ninjaEntry.SetPlaceHolder("留空自动；或选择完整忍者版本")
-	ninjaEntry.SetText(ninjaText)
+	wrapped := func(text string) *widget.Label {
+		l := widget.NewLabel(text)
+		l.Wrapping = fyne.TextWrapWord
+		l.Importance = widget.LowImportance
+		return l
+	}
 
+	// ---- 认边 ----
 	sideSel := widget.NewRadioGroup([]string{"自动认边", "左边", "右边"}, nil)
 	sideSel.Required, sideSel.Horizontal = true, true
 	sideSel.SetSelected(sideLabel(mode))
@@ -185,51 +223,96 @@ func (s *session) openSettings() {
 	rememberChk := widget.NewCheck("记住认边方式（下次启动沿用）", nil)
 	rememberChk.SetChecked(remember)
 	rememberChk.OnChanged = func(checked bool) { showSettingsError(s.setRememberSide(checked), w) }
-	topChk := widget.NewCheck("窗口置顶", nil)
-	topChk.SetChecked(top)
+
+	// ---- 名字与忍者（点保存生效） ----
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("自己的账号名，用来自动认边；多个用逗号分隔")
+	nameEntry.SetText(name)
+	ninjaEntry := widget.NewSelectEntry([]string{"", ninja.FifthMizukage, ninja.Hashirama, ninja.Madara, ninja.Obito, ninja.Naruto, ninja.HanzoEdo})
+	ninjaEntry.SetPlaceHolder("留空自动；或选择完整忍者版本")
+	ninjaEntry.SetText(ninjaText)
 	textCheck := widget.NewCheck("后台识别名字（内置本地 OCR）", nil)
 	textCheck.SetChecked(autoText)
 	textCheck.OnChanged = func(on bool) { showSettingsError(s.setTextRecognition(on), w) }
-
-	autoUpdateCheck := widget.NewCheck("自动检查软件更新", nil)
-	autoUpdateCheck.SetChecked(autoUpdates)
-	autoUpdateCheck.OnChanged = func(on bool) { showSettingsError(s.setAutoCheckUpdates(on), w) }
-	updateSourceSelect := widget.NewRadioGroup([]string{updates.Gitee.Label(), updates.GitHub.Label()}, nil)
-	if updateSource == string(updates.GitHub) {
-		updateSourceSelect.SetSelected(updates.GitHub.Label())
-	} else {
-		updateSourceSelect.SetSelected(updates.Gitee.Label())
+	s.textStatusLabel = wrapped(textStatus)
+	gpuChk := widget.NewCheck("OCR 使用 GPU 加速（DirectML，重启生效）", nil)
+	gpuChk.SetChecked(gpuAccel)
+	gpuChk.OnChanged = func(on bool) {
+		s.mu.Lock()
+		s.cfg.UI.GPUAcceleration = on
+		snapshot := s.settingsSnapshotLocked()
+		s.mu.Unlock()
+		showSettingsError(snapshot.Save(), w)
 	}
-	updateSourceSelect.Horizontal = true
-	updateSourceSelect.OnChanged = func(label string) {
-		source := updates.Gitee
-		if label == updates.GitHub.Label() {
-			source = updates.GitHub
-		}
-		if err := s.setUpdateSource(source); err != nil {
+	topChk := widget.NewCheck("窗口置顶", nil)
+	topChk.SetChecked(top)
+	save := widget.NewButtonWithIcon("保存名字与忍者", theme.DocumentSaveIcon(), func() {
+		if err := s.applySettings(nameEntry.Text, ninjaEntry.Text, sideSel.Selected, rememberChk.Checked, topChk.Checked); err != nil {
 			showSettingsError(err, w)
 			return
 		}
-		// Rebuild update controls so manual checks/downloads immediately use the
-		// newly selected client and its source-specific cached feed.
-		s.openSettings()
-	}
-	updateHint := widget.NewLabel("启动约10秒后检查；之后最多每6小时检查一次。只显示提醒，不会自动下载、重启或打断对局。")
-	updateHint.Wrapping = fyne.TextWrapWord
+		w.Hide()
+	})
+	save.Importance = widget.HighImportance
 
+	// ---- 浮窗显示（立即生效） ----
+	miniSel := widget.NewRadioGroup([]string{"完整浮窗", "仅计时器"}, nil)
+	miniSel.Horizontal, miniSel.Required = true, true
+	if overlayMode == "mini" {
+		miniSel.SetSelected("仅计时器")
+	} else {
+		miniSel.SetSelected("完整浮窗")
+	}
+	miniSel.OnChanged = func(label string) {
+		if on := label == "仅计时器"; on != s.isMini() {
+			showSettingsError(s.setMiniMode(on), w)
+		}
+	}
+	s.settingsMini = miniSel
+	bothChk := widget.NewCheck("左右两边都显示替身倒计时", nil)
+	bothChk.SetChecked(showBoth)
+	bothChk.OnChanged = func(on bool) { showSettingsError(s.setShowBothSides(on), w) }
+	s.settingsBoth = bothChk
+	// Topmost applies at once like the other display options.
+	topChk.OnChanged = func(on bool) {
+		s.mu.Lock()
+		s.topmost, s.cfg.UI.AlwaysOnTop = on, on
+		snapshot := s.settingsSnapshotLocked()
+		s.mu.Unlock()
+		err := snapshot.Save()
+		s.applyFullTopmost()
+		showSettingsError(err, w)
+	}
+	autoScaleChk := widget.NewCheck("仅计时器贴合文字（关闭后可拖动右边缘调长度、下边缘调高度和字号）", nil)
+	autoScaleChk.SetChecked(miniAutoScale)
+	autoScaleChk.OnChanged = func(on bool) {
+		s.mu.Lock()
+		s.cfg.UI.MiniAutoScale = on
+		snapshot := s.settingsSnapshotLocked()
+		s.mu.Unlock()
+		err := snapshot.Save()
+		s.applyMiniContentScale()
+		showSettingsError(err, w)
+	}
+
+	// ---- 外观（拖动即预览，松手保存） ----
 	opacityText := widget.NewLabel("")
 	fontScaleText := widget.NewLabel("")
-	appearanceNote := widget.NewLabel(appearanceError)
-	appearanceNote.Wrapping = fyne.TextWrapWord
+	miniOpacityText := widget.NewLabel("")
+	appearanceNote := wrapped(appearanceError)
 	opacitySlider := widget.NewSlider(minimumOverlayOpacity, maximumOverlayOpacity)
 	opacitySlider.Step = 0.05
 	opacitySlider.SetValue(opacity)
 	fontScaleSlider := widget.NewSlider(minimumOverlayScale, maximumOverlayScale)
-	fontScaleSlider.Step = 0.10
+	fontScaleSlider.Step = 0.01
 	fontScaleSlider.SetValue(fontScale)
+	miniOpacitySlider := widget.NewSlider(minimumMiniOpacity, maximumMiniOpacity)
+	miniOpacitySlider.Step = 0.05
+	miniOpacitySlider.SetValue(miniOpacity)
 	updateAppearanceLabels := func() {
-		opacityText.SetText(fmt.Sprintf("窗口不透明度：%.0f%%", opacitySlider.Value*100))
-		fontScaleText.SetText(fmt.Sprintf("计时浮窗字号：%.0f%%", fontScaleSlider.Value*100))
+		opacityText.SetText(fmt.Sprintf("完整浮窗不透明度：%.0f%%", opacitySlider.Value*100))
+		fontScaleText.SetText(fmt.Sprintf("计时字号：%.0f%%", fontScaleSlider.Value*100))
+		miniOpacityText.SetText(fmt.Sprintf("仅计时器不透明度：%.0f%%", miniOpacitySlider.Value*100))
 	}
 	previewAppearance := func() {
 		if err := s.previewAppearance(opacitySlider.Value, fontScaleSlider.Value); err != nil {
@@ -249,6 +332,11 @@ func (s *session) openSettings() {
 	}
 	opacitySlider.OnChangeEnded = commitAppearance
 	fontScaleSlider.OnChangeEnded = commitAppearance
+	miniOpacitySlider.OnChanged = func(v float64) {
+		updateAppearanceLabels()
+		_ = s.setMiniOpacity(v, false)
+	}
+	miniOpacitySlider.OnChangeEnded = func(v float64) { showSettingsError(s.setMiniOpacity(v, true), w) }
 	resetAppearance := widget.NewButton("恢复默认外观", func() {
 		opacitySlider.SetValue(1)
 		fontScaleSlider.SetValue(1)
@@ -258,29 +346,26 @@ func (s *session) openSettings() {
 	})
 	updateAppearanceLabels()
 
-	s.textStatusLabel = widget.NewLabel(textStatus)
-	s.textStatusLabel.Wrapping = fyne.TextWrapWord
-	hint := widget.NewLabel("认边方式点选即生效。选择的是我方，浮窗计时的是另一边；自动尚未认出时显示待认边。")
-	hint.Wrapping = fyne.TextWrapWord
-	save := widget.NewButton("保存", func() {
-		if err := s.applySettings(nameEntry.Text, ninjaEntry.Text, sideSel.Selected, rememberChk.Checked, topChk.Checked); err != nil {
-			showSettingsError(err, w)
-			return
-		}
-		w.Hide()
-	})
-	save.Importance = widget.HighImportance
-	form := container.NewVBox(
-		widget.NewLabel("我方所在边"), sideSel, rememberChk, hint, widget.NewSeparator(),
-		widget.NewLabel("我的名字"), nameEntry, textCheck, s.textStatusLabel,
-		widget.NewLabel("指定对面忍者（留空自动识别）"), ninjaEntry,
-		widget.NewLabel("仅照美冥［五代目水影］同时显示15秒/10秒"), topChk,
-		widget.NewSeparator(), widget.NewLabel("外观与更新"),
-		opacityText, opacitySlider, fontScaleText, fontScaleSlider, resetAppearance,
-		widget.NewLabel("透明度只应用于计时浮窗；设置和更新窗口始终保持不透明。字号会立即预览并自动留出所需空间。"), appearanceNote,
-		autoUpdateCheck, widget.NewLabel("更新源"), updateSourceSelect, updateHint,
-	)
-	diagnosticEntry := widget.NewButton("采集与延迟诊断 / 原帧录制", s.openDiagnostics)
+	calibrationEntry := widget.NewButtonWithIcon("区域校准（豆/头像）", theme.MediaPhotoIcon(), s.openCalibration)
+	diagnosticEntry := widget.NewButtonWithIcon("采集与延迟诊断 / 原帧录制", theme.MediaRecordIcon(), s.openDiagnostics)
+	general := container.NewVScroll(container.NewVBox(
+		sectionCard("我方所在边", container.NewVBox(sideSel, rememberChk,
+			wrapped("点选即生效。选的是我方，浮窗计时的是另一边；自动尚未认出时显示“待认边”。"))),
+		sectionCard("名字与对面忍者", container.NewVBox(
+			widget.NewLabel("我的名字"), nameEntry, textCheck, s.textStatusLabel, gpuChk,
+			widget.NewLabel("指定对面忍者（留空自动识别）"), ninjaEntry,
+			wrapped("照美冥［五代目水影］和半藏［秽土转生］同时显示 15 秒 / 10 秒。名字和忍者点下方按钮保存。"),
+			save)),
+		sectionCard("浮窗显示", container.NewVBox(miniSel, bothChk, topChk, autoScaleChk,
+			wrapped("Ctrl+M 随时切换仅计时器；点击仅计时器展开设置、换边、两边计时和退出，拖动可移动。"))),
+		sectionCard("外观", container.NewVBox(
+			opacityText, opacitySlider, fontScaleText, fontScaleSlider, miniOpacityText, miniOpacitySlider,
+			resetAppearance, appearanceNote)),
+		sectionCard("区域校准", container.NewVBox(
+			wrapped("少见分辨率识别不准时，在对局/训练场画面上自己框出豆和头像"), calibrationEntry)),
+		sectionCard("诊断", container.NewVBox(
+			wrapped("采集异常、延迟或识别问题时录制诊断，导出后反馈。"), diagnosticEntry)),
+	))
 	bg := canvas.NewRectangle(panelBG)
 	if s.aboutCancel != nil {
 		s.aboutCancel()
@@ -288,18 +373,53 @@ func (s *session) openSettings() {
 	if s.captureCancel != nil {
 		s.captureCancel()
 	}
-	general := container.NewBorder(diagnosticEntry, save, nil, nil, container.NewVScroll(form))
-	tabs := container.NewAppTabs(container.NewTabItem("常规", general), container.NewTabItem("模拟器", s.captureControls(w)), container.NewTabItem("关于与更新", s.aboutControls(w)))
+	tabs := container.NewAppTabs(
+		container.NewTabItemWithIcon("常规", theme.SettingsIcon(), general),
+		container.NewTabItemWithIcon("模拟器", theme.ComputerIcon(), s.captureControls(w)),
+		container.NewTabItemWithIcon("关于与更新", theme.InfoIcon(), s.aboutControls(w)),
+	)
 	s.settingsTabs = tabs
+	scanned := false
 	tabs.OnSelected = func(tab *container.TabItem) {
-		if tab.Text == "模拟器" && s.captureRefresh != nil {
+		// Scan once per window: a rescan on every visit would re-highlight the
+		// saved instance over the user's not-yet-applied choice.
+		if tab.Text == "模拟器" && s.captureRefresh != nil && !scanned {
+			scanned = true
 			s.captureRefresh()
 		}
 	}
+	tabs.SelectIndex(tab)
 	w.SetContent(container.NewStack(bg, container.NewPadded(tabs)))
-	w.Resize(fyne.NewSize(620, 640))
+	w.Resize(fyne.NewSize(600, 660))
 	w.Show()
 	w.RequestFocus()
+}
+
+// syncSettingsControls mirrors changes made from the overlay, mini window or
+// shortcuts into an open (or hidden) settings window.
+func (s *session) syncSettingsControls() {
+	s.syncSettingsSide()
+	s.mu.Lock()
+	mini, both := s.miniMode, s.cfg.UI.ShowBothSides
+	s.mu.Unlock()
+	if s.settingsMini != nil {
+		label := "完整浮窗"
+		if mini {
+			label = "仅计时器"
+		}
+		if s.settingsMini.Selected != label {
+			onChanged := s.settingsMini.OnChanged
+			s.settingsMini.OnChanged = nil
+			s.settingsMini.SetSelected(label)
+			s.settingsMini.OnChanged = onChanged
+		}
+	}
+	if s.settingsBoth != nil && s.settingsBoth.Checked != both {
+		onChanged := s.settingsBoth.OnChanged
+		s.settingsBoth.OnChanged = nil
+		s.settingsBoth.SetChecked(both)
+		s.settingsBoth.OnChanged = onChanged
+	}
 }
 
 func (s *session) applySettings(nameText, ninjaText, sideText string, remember, top bool) error {
@@ -323,10 +443,11 @@ func (s *session) applySettings(nameText, ninjaText, sideText string, remember, 
 	}
 	s.setSideModeLocked(sideMode(sideText))
 	identity.SetMineNames(names)
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if topChanged {
-		applyTopmost(overlayTitle, top)
+		s.applyFullTopmost()
 	}
 	s.syncSettingsSide()
 	s.refreshOverlay()
@@ -335,11 +456,18 @@ func (s *session) applySettings(nameText, ninjaText, sideText string, remember, 
 
 func (s *session) swapSide() {
 	s.mu.Lock()
-	next := "right"
-	if s.side == "right" {
-		next = "left"
+	next := "left"
+	switch s.side {
+	case "left":
+		next = "right"
+	case "right":
+		next = "auto"
 	}
 	s.mu.Unlock()
+	if next == "auto" {
+		showSettingsError(s.selectSideMode(next), s.dialogWindow())
+		return
+	}
 	s.lockSide(next)
 }
 
@@ -347,7 +475,7 @@ func (s *session) lockSide(side string) {
 	if !manualSide(side) {
 		return
 	}
-	showSettingsError(s.selectSideMode(side), s.win)
+	showSettingsError(s.selectSideMode(side), s.dialogWindow())
 }
 
 func (s *session) pick(side string) { s.lockSide(side) }
@@ -355,8 +483,9 @@ func (s *session) pick(side string) { s.lockSide(side) }
 func (s *session) setTextRecognition(on bool) error {
 	s.mu.Lock()
 	s.cfg.UI.AutoTextRecognition = on
-	err := s.saveSettingsLocked()
+	snapshot := s.settingsSnapshotLocked()
 	s.mu.Unlock()
+	err := snapshot.Save()
 	if s.textControl != nil {
 		s.textControl(on)
 	}

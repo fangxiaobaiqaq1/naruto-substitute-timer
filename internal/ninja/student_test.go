@@ -10,7 +10,7 @@ import (
 )
 
 func TestStudentNameIsDisplayOnlyAndRejectsOcclusion(t *testing.T) {
-	data, err := templates.ReadFile("templates/naruto_student.png")
+	data, err := diskTemplates.ReadFile("templates/naruto_student.png")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,10 +2,11 @@ package frame
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"hash/maphash"
 	"image"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,13 +15,14 @@ import (
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
+	"narutotimer/internal/safego"
 	"narutotimer/internal/win"
 )
 
 // AnalyzeImage is the same pixel-to-observation path for live capture and replay.
 // capturedAt is acquisition completion, NOT an asserted Android render time.
-func AnalyzeImage(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
-	f := Frame{Img: img, CaptureStarted: started, CapturedAt: capturedAt, CaptureMethod: source}
+func AnalyzeImage(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) (f Frame) {
+	f = Frame{Img: img, CaptureStarted: started, CapturedAt: capturedAt, CaptureMethod: source}
 	if img == nil {
 		f.CapturedAt = time.Time{}
 		f.Hold = true
@@ -39,6 +41,7 @@ func AnalyzeImage(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, s
 		f.Status = "空帧，等待画面"
 		return f
 	}
+	defer recoverAnalysis(&f)
 	var res engine.Result
 	f.AnalysisStarted = time.Now()
 	if timed, ok := eng.(engine.TimedEngine); ok {
@@ -50,6 +53,34 @@ func AnalyzeImage(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, s
 	fillFromEngine(&f, win.Window{Title: source}, img, res)
 	f.Hold = res.Uncertain
 	return f
+}
+
+// recoverAnalysis is deferred around engine analysis. A panic in the engine,
+// including one re-raised from its helper goroutines (safego.Group), fails this
+// frame only: it keeps the capture (image, times, method), drops any partial
+// result, shows the error in the status line and logs the stack.
+func recoverAnalysis(f *Frame) {
+	p := safego.Recovered(recover())
+	if p == nil {
+		return
+	}
+	safego.Report("analysis", p)
+	*f = Frame{Img: f.Img, CaptureStarted: f.CaptureStarted, CapturedAt: f.CapturedAt, CaptureMethod: f.CaptureMethod,
+		AnalysisStarted: f.AnalysisStarted, AnalyzedAt: time.Now(), Hold: true,
+		Err: fmt.Errorf("识别出错，已跳过本帧：%w", p)}
+}
+
+// captureGuarded runs one capture request on the provider's worker. A panic in
+// the capture client or the frame plumbing fails this request only; the
+// worker keeps serving later requests.
+func captureGuarded(inner Provider) (f Frame) {
+	defer func() {
+		if p := safego.Recovered(recover()); p != nil {
+			safego.Report("capture", p)
+			f = Frame{Hold: true, Err: fmt.Errorf("采集出错，已跳过本帧：%w", p)}
+		}
+	}()
+	return inner()
 }
 
 // NewConfiguredSnapshotter keeps one screenshot connection. A single worker is
@@ -109,7 +140,10 @@ func newSelectableSnapshotterLegacy(eng engine.Engine, cfg config.Config) (Provi
 func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, func(), func(config.CaptureConfig) uint64, func() CaptureState) {
 	var selectionMu sync.Mutex
 	selected := cfg.Capture
-	var revision, activeRevision uint64
+	var revision uint64
+	// activeRevision and appliedConfig describe one moment: the worker (their
+	// only writer) changes both under stateMu and state() reads both under it.
+	var activeRevision uint64
 	var appliedConfig = cfg.Capture
 	var stateMu sync.RWMutex
 	var lastCaptureError string
@@ -127,6 +161,9 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 	}
 
 	mode, _ := detect.ParseMode(cfg.Layout.ContentMode)
+	var analyzed dedupedAnalysis
+	var rowHashes []uint64
+	var printWindowFrames captureRing
 	var client capture.Client
 	var retryAfter time.Time
 	var retryError error
@@ -143,8 +180,8 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 		return attempt
 	}
 	preferredMethods := func(c config.CaptureConfig) []string {
-		if c.Provider == capture.MethodLeidianADB {
-			return []string{capture.MethodLeidianADB}
+		if isLeidianMethod(c.Provider) {
+			return []string{c.Provider}
 		}
 		if c.Provider == capture.MethodMuMuSDK {
 			return []string{capture.MethodMuMuSDK}
@@ -166,17 +203,17 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 			cfg.Capture = next
 			stateMu.Lock()
 			appliedConfig = next
+			activeRevision = rev
 			stateSource = ""
 			lastCaptureError = ""
 			stateMu.Unlock()
 			retryAfter = time.Time{}
-			activeRevision = rev
 		}
 		var f Frame
 		for _, method := range preferredMethods(cfg.Capture) {
 			started := time.Now()
 			setAttempt(started, method)
-			if method == capture.MethodMuMuSDK || method == capture.MethodLeidianADB {
+			if method == capture.MethodMuMuSDK || isLeidianMethod(method) {
 				if client == nil {
 					if time.Now().Before(retryAfter) {
 						f = Frame{Hold: true, Err: fmt.Errorf("%s 重连等待中：%w", method, retryError), CaptureStarted: started, CaptureMethod: method}
@@ -200,7 +237,17 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 				}
 				started = time.Now()
 				setAttempt(started, method)
-				img, err := client.Capture()
+				// A row-hashing client fingerprints each row while it is in
+				// cache; the fold equals frameFingerprint of the image.
+				var img *image.RGBA
+				var err error
+				hashedRows := false
+				if rows, ok := client.(capture.RowHashClient); ok {
+					img, rowHashes, err = rows.CaptureRowHashes(fingerprintRow, rowHashes)
+					hashedRows = err == nil && img != nil && len(rowHashes) == img.Rect.Dy()
+				} else {
+					img, err = client.Capture()
+				}
 				captured := time.Now()
 				if err != nil {
 					client.Close()
@@ -214,9 +261,14 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 					f = Frame{Hold: true, Err: err, CaptureStarted: started, CaptureMethod: method}
 					continue
 				}
-				f = AnalyzeImage(img, eng, mode, started, captured, client.Source())
+				source := client.Source()
+				if hashedRows {
+					f = analyzed.analyzeFingerprinted(img, frameFingerprintRows(img.Rect, source, rowHashes), eng, mode, started, captured, source)
+				} else {
+					f = analyzed.analyze(img, eng, mode, started, captured, source)
+				}
 			} else if method == capture.MethodPrintWindow {
-				f = snapshot(eng, mode)
+				f = snapshotFingerprinted(eng, mode, &printWindowFrames)
 			} else {
 				f = Frame{Hold: true, Err: fmt.Errorf("unsupported capture method %q", method), CaptureStarted: started, CaptureMethod: method}
 			}
@@ -254,10 +306,10 @@ func newSelectableSnapshotter(eng engine.Engine, cfg config.Config) (Provider, f
 	state := func() CaptureState {
 		selectionMu.Lock()
 		requestedRevision := revision
-		appliedRevision := activeRevision
 		requested := selected
 		selectionMu.Unlock()
 		stateMu.RLock()
+		appliedRevision := activeRevision
 		applied := appliedConfig
 		lastError := lastCaptureError
 		source := stateSource
@@ -300,7 +352,7 @@ func boundedProvider(inner Provider, cleanup func(), timeout time.Duration, atte
 	// has already completed. Rejected/late results never change this state.
 	var delivering atomic.Bool
 	var sequence uint64
-	var previous [32]byte
+	var previous uint64
 	havePrevious := false
 	go func() {
 		defer func() {
@@ -324,7 +376,7 @@ func boundedProvider(inner Provider, cleanup func(), timeout time.Duration, atte
 					return
 				default:
 				}
-				f := inner()
+				f := captureGuarded(inner)
 				busy.Store(false)
 				// Each request owns one buffer, so a timed-out caller cannot block
 				// cleanup or cause its late frame to satisfy the next request.
@@ -380,7 +432,10 @@ func boundedProvider(inner Provider, cleanup func(), timeout time.Duration, atte
 			if f.Img != nil && f.Err == nil {
 				sequence++
 				f.Sequence = sequence
-				hash := imageFingerprint(f)
+				hash := f.fingerprint
+				if !f.fingerprinted {
+					hash = frameFingerprint(f.Img, f.CaptureMethod)
+				}
 				f.Duplicate = havePrevious && hash == previous
 				previous, havePrevious = hash, true
 			}
@@ -394,27 +449,171 @@ func boundedProvider(inner Provider, cleanup func(), timeout time.Duration, atte
 	return provider, func() { once.Do(func() { close(done) }) }
 }
 
-// Hash visible pixels, geometry and source. Padding bytes are not observations;
-// a different image geometry or capture coordinate system is a new observation.
-func imageFingerprint(f Frame) [32]byte {
-	h := sha256.New()
-	var bounds [32]byte
-	r := f.Img.Rect
-	for i, value := range []int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} {
-		binary.LittleEndian.PutUint64(bounds[i*8:], uint64(value))
+// fingerprintSeed is process-local: fingerprints are only ever compared within
+// one run, never persisted or sent anywhere.
+var fingerprintSeed = maphash.MakeSeed()
+
+// fingerprintHook is a test-only counter hook; nil in production.
+var fingerprintHook func()
+
+// frameFingerprint hashes visible pixels, geometry and capture source with the
+// runtime's AES-based hash. Padding bytes are not observations; a different
+// image geometry or capture coordinate system is a new observation. A 64-bit
+// process-local hash is ample for equality and duplicate detection.
+//
+// Rows go through maphash.Bytes rather than a streaming maphash.Hash: Write
+// re-chunks input into 128-byte blocks and measured ~10% slower at 1080p.
+func frameFingerprint(img *image.RGBA, method string) uint64 {
+	if img == nil {
+		return 0
 	}
-	h.Write(bounds[:])
-	h.Write([]byte(f.CaptureMethod))
+	if fingerprintHook != nil {
+		fingerprintHook()
+	}
+	r := img.Rect
+	sum := fingerprintHeader(r, method)
 	rowBytes := r.Dx() * 4
-	if f.Img.Stride == rowBytes {
-		h.Write(f.Img.Pix[:rowBytes*r.Dy()])
-	} else {
-		for y := 0; y < r.Dy(); y++ {
-			start := y * f.Img.Stride
-			h.Write(f.Img.Pix[start : start+rowBytes])
-		}
+	if rowBytes <= 0 || r.Dy() <= 0 {
+		return sum
 	}
-	var sum [32]byte
-	copy(sum[:], h.Sum(nil))
+	// Hash row by row so a padded stride and a packed buffer with the same
+	// visible pixels produce the same fingerprint.
+	for y := 0; y < r.Dy(); y++ {
+		start := y * img.Stride
+		sum = mixHash(sum, fingerprintRow(img.Pix[start:start+rowBytes]))
+	}
 	return sum
+}
+
+func fingerprintHeader(r image.Rectangle, method string) uint64 {
+	var header [32]byte
+	for i, value := range []int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} {
+		binary.LittleEndian.PutUint64(header[i*8:], uint64(value))
+	}
+	sum := maphash.Bytes(fingerprintSeed, header[:])
+	return mixHash(sum, maphash.String(fingerprintSeed, method))
+}
+
+// fingerprintRow hashes one row of visible pixels (capture.RowHashClient).
+func fingerprintRow(row []byte) uint64 { return maphash.Bytes(fingerprintSeed, row) }
+
+// frameFingerprintRows is frameFingerprint(img, method) for an image of
+// bounds r whose visible rows hash (fingerprintRow) to rows, top to bottom.
+func frameFingerprintRows(r image.Rectangle, method string, rows []uint64) uint64 {
+	if fingerprintHook != nil {
+		fingerprintHook()
+	}
+	sum := fingerprintHeader(r, method)
+	if r.Dx() <= 0 || r.Dy() <= 0 {
+		return sum
+	}
+	for _, row := range rows {
+		sum = mixHash(sum, row)
+	}
+	return sum
+}
+
+// Fingerprint is the duplicate-frame fingerprint the live provider uses, for
+// diagnostic tools that must count duplicates with identical semantics. It is
+// process-local and only comparable within one run.
+func Fingerprint(img *image.RGBA, method string) uint64 { return frameFingerprint(img, method) }
+
+func mixHash(acc, value uint64) uint64 {
+	acc ^= value + 0x9e3779b97f4a7c15 + (acc << 6) + (acc >> 2)
+	return acc
+}
+
+// withFingerprint records the capture fingerprint once at the source so the
+// delivery layer never hashes the same pixels again.
+func withFingerprint(f Frame) Frame {
+	if f.Img != nil && !f.fingerprinted {
+		f.fingerprint, f.fingerprinted = frameFingerprint(f.Img, f.CaptureMethod), true
+	}
+	return f
+}
+
+// calibrationRevision is the engine's region-calibration revision (0 = never
+// replaced). Fingerprints include it: after a live replacement identical
+// pixels are a new observation, analysed again and not a duplicate.
+func calibrationRevision(eng engine.Engine) uint64 {
+	if c, ok := eng.(engine.Calibrator); ok {
+		return c.CalibrationRevision()
+	}
+	return 0
+}
+
+func withRevision(sum, revision uint64) uint64 {
+	if revision != 0 {
+		sum = mixHash(sum, revision)
+	}
+	return sum
+}
+
+func engineFingerprint(img *image.RGBA, method string, eng engine.Engine) uint64 {
+	return withRevision(frameFingerprint(img, method), calibrationRevision(eng))
+}
+
+// snapshotFingerprinted reads the revision before analysing, so a replacement
+// during the analysis is never attributed to this frame.
+func snapshotFingerprinted(eng engine.Engine, mode detect.ContentMode, ring *captureRing) Frame {
+	revision := calibrationRevision(eng)
+	f := snapshot(eng, mode, ring)
+	if f.Img != nil && !f.fingerprinted {
+		f.fingerprint, f.fingerprinted = withRevision(frameFingerprint(f.Img, f.CaptureMethod), revision), true
+	}
+	return f
+}
+
+// dedupedAnalysis skips the recognition chain for a capture whose pixels are
+// identical to the previously analyzed capture. The emulator does not present a
+// new frame for every poll; re-analyzing the same pixels would only burn CPU and
+// could never produce different beads. The reused result keeps this capture's
+// own image and acquisition times; the delivery layer still decides Duplicate
+// against the frame the UI actually received last.
+type dedupedAnalysis struct {
+	valid       bool
+	fingerprint uint64
+	last        Frame
+}
+
+func (d *dedupedAnalysis) analyze(img *image.RGBA, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
+	return d.analyzeWith(img, engineFingerprint(img, source, eng), eng, mode, started, capturedAt, source)
+}
+
+// analyzeFingerprinted is analyze for a capture whose frameFingerprint (base,
+// without the calibration revision) the client already computed.
+func (d *dedupedAnalysis) analyzeFingerprinted(img *image.RGBA, base uint64, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
+	return d.analyzeWith(img, withRevision(base, calibrationRevision(eng)), eng, mode, started, capturedAt, source)
+}
+
+func (d *dedupedAnalysis) analyzeWith(img *image.RGBA, fingerprint uint64, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
+	if d.valid && img != nil && fingerprint == d.fingerprint && d.last.Err == nil {
+		f := d.last
+		f.Img = img
+		f.CaptureStarted, f.CapturedAt = started, capturedAt
+		f.AnalysisStarted, f.AnalyzedAt = time.Time{}, time.Time{}
+		f.Beads = append([]Bead(nil), d.last.Beads...)
+		for i := range f.Geometry {
+			f.Geometry[i].Beads = slices.Clone(f.Geometry[i].Beads)
+		}
+		f.fingerprint, f.fingerprinted = fingerprint, true
+		return f
+	}
+	f := AnalyzeImage(img, eng, mode, started, capturedAt, source)
+	f.fingerprint, f.fingerprinted = fingerprint, true
+	if img != nil && f.Err == nil {
+		d.valid, d.fingerprint, d.last = true, fingerprint, f
+	} else {
+		d.valid = false
+	}
+	return f
+}
+
+// isLeidianMethod reports whether method is served by the 雷电 client.
+func isLeidianMethod(method string) bool {
+	switch method {
+	case capture.MethodLeidianADB, capture.MethodLeidianADBRaw, capture.MethodLeidianWindow:
+		return true
+	}
+	return false
 }

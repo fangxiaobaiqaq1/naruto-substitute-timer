@@ -1,10 +1,13 @@
 package engine
 
 import (
-	"crypto/sha256"
+	"hash/maphash"
 	"image"
 	"sync"
 	"time"
+
+	"narutotimer/internal/config"
+	"narutotimer/internal/detect"
 )
 
 // GateKind 是场景门闩的四种结论。场景名本身来自资源，不写死在代码里。
@@ -35,6 +38,28 @@ type FightSupportGate interface {
 	SupportsFight(img *image.RGBA, profile string) bool
 }
 
+// HUDStartGate may recover a covered primary marker only with multiple
+// independent current battle controls. Gated additionally requires complete,
+// legal, freshly sampled bean rows; a single continuity control is not enough.
+type HUDStartGate interface {
+	StartFight(img *image.RGBA, profile string) GateDecision
+}
+
+// TimedGate receives the acquisition time so bounded rescans follow frame time
+// in recorded replay exactly as in live capture.
+type TimedGate interface {
+	DecideAt(img *image.RGBA, at time.Time) GateDecision
+}
+
+// FrameScopedGate may share one frame's work (gray views, full-ROI scores)
+// between DecideAt and the StartFight/SupportsFight calls that follow on the
+// same image. Gated brackets each AnalyzeAt with BeginFrame/EndFrame; the
+// image is not modified in between. Results are identical with or without it.
+type FrameScopedGate interface {
+	BeginFrame(img *image.RGBA)
+	EndFrame()
+}
+
 // Identity 是 VS / 换人画面上认出的双方账号。
 type Identity struct {
 	Side string
@@ -57,7 +82,21 @@ type Gated struct {
 	lastBounds     image.Rectangle
 	pendingProfile string
 	pendingAt      time.Time
-	pendingImage   [32]byte
+	pendingImage   uint64
+}
+
+var pixelHashSeed = maphash.MakeSeed()
+
+// pixelHashHook is a test-only counter hook; nil in production.
+var pixelHashHook func()
+
+// pixelHash distinguishes two captures during profile-switch confirmation; a
+// process-local 64-bit hash is sufficient and far cheaper than a digest.
+func pixelHash(img *image.RGBA) uint64 {
+	if pixelHashHook != nil {
+		pixelHashHook()
+	}
+	return maphash.Bytes(pixelHashSeed, img.Pix)
 }
 
 // NewGated 包装任意 Engine。gate 或 inner 为 nil 时退回 inner / 空结果。
@@ -87,6 +126,20 @@ func (g *Gated) Analyze(img *image.RGBA) Result {
 	return g.AnalyzeAt(img, time.Now())
 }
 
+// SetCalibration forwards a live region calibration to the inner engine.
+func (g *Gated) SetCalibration(c *config.RegionCalibration) {
+	if inner, ok := g.Inner.(Calibrator); ok {
+		inner.SetCalibration(c)
+	}
+}
+
+func (g *Gated) CalibrationRevision() uint64 {
+	if inner, ok := g.Inner.(Calibrator); ok {
+		return inner.CalibrationRevision()
+	}
+	return 0
+}
+
 const profileSwitchConfirmation = 300 * time.Millisecond
 const profileEvidenceMaxGap = 300 * time.Millisecond
 
@@ -100,6 +153,10 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 		g.pendingProfile = "" // An explicit missing frame breaks confirmation.
 		return Result{Name: g.name + "+gate", Uncertain: true}
 	}
+	if scoped, ok := g.Gate.(FrameScopedGate); ok {
+		scoped.BeginFrame(img)
+		defer scoped.EndFrame()
+	}
 	if img.Bounds() != g.lastBounds || (!g.lastAt.IsZero() && at.Before(g.lastAt)) {
 		g.clearScene()
 		g.lastBounds = img.Bounds()
@@ -110,7 +167,12 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 		g.pendingProfile = ""
 	}
 	g.lastAt = at
-	d := g.Gate.Decide(img)
+	var d GateDecision
+	if timed, ok := g.Gate.(TimedGate); ok {
+		d = timed.DecideAt(img, at)
+	} else {
+		d = g.Gate.Decide(img)
+	}
 	var sampled *Result
 	// Compare a competing label against fresh evidence in the established
 	// coordinate system BEFORE changing it. Animated backgrounds may match a
@@ -126,11 +188,13 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 	// A single competing marker cannot switch coordinate profiles and erase
 	// active clocks. Require a second independent image of the new profile.
 	if d.Kind == GateFight && g.lastFight.SceneID != "" && d.LayoutProfile != g.lastFight.LayoutProfile {
-		sum := sha256.Sum256(img.Pix)
+		// The pending image is hashed once when the candidate starts; later
+		// frames are hashed only once the confirmation window has elapsed, as
+		// earlier frames stay uncertain regardless of their pixels.
 		if g.pendingProfile != d.LayoutProfile {
-			g.pendingProfile, g.pendingAt, g.pendingImage = d.LayoutProfile, at, sum
+			g.pendingProfile, g.pendingAt, g.pendingImage = d.LayoutProfile, at, pixelHash(img)
 			d = GateDecision{Kind: GateUncertain}
-		} else if sum == g.pendingImage || at.Sub(g.pendingAt) < profileSwitchConfirmation {
+		} else if at.Sub(g.pendingAt) < profileSwitchConfirmation || pixelHash(img) == g.pendingImage {
 			d = GateDecision{Kind: GateUncertain}
 		} else {
 			g.pendingProfile = ""
@@ -179,6 +243,17 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 		res = *sampled
 	} else {
 		res = g.analyzeInner(img, at)
+	}
+	if d.Kind == GateUncertain && d.SceneID == "" && g.lastFight.SceneID == "" && !res.Uncertain && hasCompleteHUD(res) {
+		if start, ok := g.Gate.(HUDStartGate); ok {
+			candidate := start.StartFight(img, res.LayoutProfile)
+			if candidate.Kind == GateFight && candidate.LayoutProfile == res.LayoutProfile {
+				d = candidate
+				if p, ok := g.Inner.(LayoutPreferrer); ok {
+					p.Prefer(d.LayoutProfile)
+				}
+			}
+		}
 	}
 	if res.Name == "" {
 		res.Name = g.name
@@ -258,6 +333,36 @@ func hasBilateralHUD(beads []BeadInfo) bool {
 		}
 	}
 	return known[0] >= 3 && known[1] >= 3
+}
+
+func hasCompleteHUD(res Result) bool {
+	if res.LayoutProfile != "camp" && res.LayoutProfile != "duel" {
+		return false
+	}
+	for _, side := range []byte{'L', 'R'} {
+		var states []detect.BeadState
+		for _, b := range res.Beads {
+			if len(b.Label) == 0 || b.Label[0] != side {
+				continue
+			}
+			if b.Unknown || b.Conf < .6 || len(b.Label) != 2 || b.Label[1] != byte('1'+len(states)) {
+				return false
+			}
+			st := detect.StateDark
+			if b.Lit || b.Gold {
+				st = detect.StateLight
+			}
+			states = append(states, st)
+		}
+		slots := res.LeftSlots
+		if side == 'R' {
+			slots = res.RightSlots
+		}
+		if (slots > 0 && len(states) != slots) || (len(states) != 4 && len(states) != 6) || !detect.IsLegalPrefix(states) {
+			return false
+		}
+	}
+	return true
 }
 
 func readyBeads(beads []BeadInfo) int {

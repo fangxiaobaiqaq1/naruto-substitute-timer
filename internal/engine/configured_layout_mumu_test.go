@@ -32,6 +32,14 @@ func TestConfiguredLayoutMapsMuMuReferenceAcrossResolutions(t *testing.T) {
 		})
 	}
 
+	// NGUI keeps HUD size tied to height on an ultrawide native surface. The
+	// left row stays at the same x as a 1600x900 HUD, while the right row moves
+	// with the physical right edge instead of stretching toward the center.
+	wide := layout.PositionsFor("camp", 3440, 1440)
+	if wide[0].X != 248 || wide[0].Y != 162 || wide[4].X != 3106 {
+		t.Fatalf("ultrawide HUD mapping=%+v", wide[:5])
+	}
+
 	// A 1280x800 MuMu client is centered letterbox content, not a second
 	// coordinate table. The same reference point must include the 40px bar.
 	letterbox := NewConfiguredLayout(detect.ModeLetterbox, cfg)

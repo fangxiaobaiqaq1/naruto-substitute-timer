@@ -13,6 +13,7 @@ import (
 	"narutotimer/internal/engine"
 	"narutotimer/internal/match"
 	"narutotimer/internal/ocr"
+	"narutotimer/internal/safego"
 )
 
 const requestInterval = 400 * time.Millisecond
@@ -87,6 +88,8 @@ type Engine struct {
 	pausedAt              time.Time // Nonzero only during a bounded same-scene hold.
 	retryAt               time.Time // backend failure, independent of scene generation
 	sides                 [2]sideState
+	names_                *nameLayout // cached for e.cfg.Layout; nil = rebuild
+	namesBad              bool        // e.cfg.Layout has an invalid content mode
 	status, lastError     string
 	jobs                  chan job
 	results               chan completion
@@ -135,20 +138,7 @@ func (e *Engine) work() {
 			if e.ctx.Err() != nil {
 				return
 			}
-			sheet := buildSheet(request.strips)
-			ctx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
-			lines, err := sheet.read(ctx, e.reader)
-			cancel()
-			out := completion{job: request, err: err}
-			if err == nil {
-				for i, raw := range sheet.texts(lines) {
-					out.titles[i] = e.dict.consensus(raw)
-					out.proofs[i][0] = sheet.evidence(lines, request, i, out.titles[i].Ninja)
-					if out.titles[i].Account != "" {
-						out.proofs[i][1] = sheet.evidence(lines, request, i, "("+out.titles[i].Account+")")
-					}
-				}
-			}
+			out := e.read(request)
 			select {
 			case e.results <- out:
 			case <-e.ctx.Done():
@@ -156,6 +146,34 @@ func (e *Engine) work() {
 			}
 		}
 	}
+}
+
+// read runs one OCR job. A panic in the OCR backend or the text matching fails
+// this job like a backend error (status "unavailable", retried later) instead
+// of ending the process from this background goroutine.
+func (e *Engine) read(request job) (out completion) {
+	defer func() {
+		if p := safego.Recovered(recover()); p != nil {
+			safego.Report("text recognition", p)
+			out = completion{job: request, err: p}
+		}
+	}()
+	sheet := buildSheet(request.strips)
+	ctx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
+	defer cancel()
+	lines, err := sheet.read(ctx, e.reader)
+	cancel()
+	out = completion{job: request, err: err}
+	if err == nil {
+		for i, raw := range sheet.texts(lines) {
+			out.titles[i] = e.dict.consensus(raw)
+			out.proofs[i][0] = sheet.evidence(lines, request, i, out.titles[i].Ninja)
+			if out.titles[i].Account != "" {
+				out.proofs[i][1] = sheet.evidence(lines, request, i, "("+out.titles[i].Account+")")
+			}
+		}
+	}
+	return out
 }
 
 func (e *Engine) invalidate() {
@@ -198,6 +216,37 @@ func (e *Engine) SetEnabled(enabled bool) {
 	}
 }
 
+// SetCalibration applies a live region calibration (docs/区域校准.md) to
+// the OCR name strips and the wrapped engine; text read with the old strips
+// is discarded.
+func (e *Engine) SetCalibration(c *config.RegionCalibration) {
+	if c != nil {
+		clone := *c
+		for _, r := range []**config.NormalizedRect{&clone.LeftBeads, &clone.RightBeads, &clone.LeftAvatar, &clone.RightAvatar} {
+			if *r != nil {
+				v := **r
+				*r = &v
+			}
+		}
+		c = &clone
+	}
+	e.mu.Lock()
+	e.cfg.Layout.Calibration = c
+	e.names_, e.namesBad = nil, false
+	e.invalidate()
+	e.mu.Unlock()
+	if inner, ok := e.inner.(engine.Calibrator); ok {
+		inner.SetCalibration(c)
+	}
+}
+
+func (e *Engine) CalibrationRevision() uint64 {
+	if inner, ok := e.inner.(engine.Calibrator); ok {
+		return inner.CalibrationRevision()
+	}
+	return 0
+}
+
 func (e *Engine) Analyze(img *image.RGBA) engine.Result { return e.AnalyzeAt(img, time.Now()) }
 func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	var res engine.Result
@@ -229,7 +278,7 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	var regions [2]image.Rectangle
 	if active {
 		var ok bool
-		regions, ok = nameRegions(img, e.cfg.Layout, res.LayoutProfile)
+		regions, ok = e.nameRegions(img, res.LayoutProfile)
 		active = ok
 	}
 	if !active {
@@ -394,6 +443,19 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		res.TextError = e.lastError
 	}
 	return res
+}
+
+// nameRegions is nameRegions(img, e.cfg.Layout, profile) with the layout
+// built once per configuration (caller holds mu).
+func (e *Engine) nameRegions(img *image.RGBA, profile string) ([2]image.Rectangle, bool) {
+	if e.names_ == nil && !e.namesBad {
+		e.names_, _ = newNameLayout(e.cfg.Layout)
+		e.namesBad = e.names_ == nil
+	}
+	if e.names_ == nil {
+		return [2]image.Rectangle{}, false
+	}
+	return e.names_.regions(img, profile)
 }
 
 func (e *Engine) Close() error {

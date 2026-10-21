@@ -191,7 +191,11 @@ func TestReplayAcceptsValidNonFightAndHeldImages(t *testing.T) {
 }
 
 func TestReplayRetentionAndCapEviction(t *testing.T) {
-	r, err := New(Options{Root: t.TempDir(), Replay: true, ReplayDuration: time.Second, ReplayInterval: time.Millisecond, MaxReplayBytes: 4000})
+	// GE-15: the cap used to be 4000 bytes, smaller than one annotated JPEG
+	// (~37 KB for this frame), so nothing could ever be saved. The cap must
+	// hold at least two raw+annotated pairs; eviction here is the 1 s window.
+	const capBytes = 200_000
+	r, err := New(Options{Root: t.TempDir(), Replay: true, ReplayDuration: time.Second, ReplayInterval: time.Millisecond, MaxReplayBytes: capBytes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,6 +209,17 @@ func TestReplayRetentionAndCapEviction(t *testing.T) {
 	m := readReplayManifest(t, r)
 	if m.Evicted == 0 || m.Saved == 0 {
 		t.Fatalf("expected cap/window eviction: %+v", m)
+	}
+	if last := m.Frames[len(m.Frames)-1]; last.State != "saved" || last.AnnotatedPath == "" {
+		t.Fatalf("newest frame not kept with its annotation: %+v", last)
+	}
+	for _, f := range m.Frames {
+		if f.State == "saved" && f.CapturedAt.Before(m.Cutoff.Add(-time.Second)) {
+			t.Fatalf("frame outside the 1 s window kept: %+v", f)
+		}
+	}
+	if got := r.Snapshot().ReplayBytes; got > capBytes {
+		t.Fatalf("replay bytes %d exceed the cap", got)
 	}
 	if got := r.Snapshot().ReplaySaved; got != m.Saved {
 		t.Fatalf("saved counter includes evicted frames: status=%d manifest=%d", got, m.Saved)
@@ -299,8 +314,10 @@ func TestAnnotatedReplayUsesSameFrameUIState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	at := time.Unix(1700000000, 0)
-	id := r.Observe(replayTestFrame(at, color.RGBA{R: 31}), at)
+	// GE-15: a fixed 2023 timestamp fell outside the 180 s window that the
+	// final prune keeps, so the frame was evicted before annotation.
+	at := time.Now().Add(-time.Second)
+	id := r.Observe(replayTestFrame(at, color.RGBA{R: 31}), at.Add(4*time.Millisecond))
 	r.RecordReplayUIState(ReplayUIState{FrameID: id, PlayerSide: "left", OpponentSide: "right", OpponentNinja: "Right Ninja", PrimaryText: "14.9", EventText: "event 7", LeftEventCount: 1, RightEventCount: 7, PreparedAt: at.Add(time.Millisecond)})
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
@@ -342,14 +359,16 @@ func TestReplayManifestCorrelatesTimerEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// GE-15: frames must be received after AnalyzedAt (capture +3 ms in
+	// validFrame); otherwise every trace is invalid and nothing correlates.
 	at := time.Now().Add(-time.Second)
-	first := r.Observe(replayTestFrame(at, color.RGBA{R: 1}), at)
+	first := r.Observe(replayTestFrame(at, color.RGBA{R: 1}), at.Add(4*time.Millisecond))
 	confirmedAt := at.Add(time.Millisecond)
-	confirmed := r.Observe(replayTestFrame(confirmedAt, color.RGBA{R: 2}), confirmedAt)
+	confirmed := r.Observe(replayTestFrame(confirmedAt, color.RGBA{R: 2}), confirmedAt.Add(4*time.Millisecond))
 	r.Confirm(Event{FrameID: confirmed, Side: "right", Serial: 9, Number: 3,
 		FirstObservedAt: at.Add(time.Millisecond), ConfirmedAt: confirmedAt.Add(4 * time.Millisecond), UIVisible: true})
 	carrierAt := at.Add(2 * time.Millisecond)
-	carrier := r.Observe(replayTestFrame(carrierAt, color.RGBA{R: 3}), carrierAt)
+	carrier := r.Observe(replayTestFrame(carrierAt, color.RGBA{R: 3}), carrierAt.Add(4*time.Millisecond))
 	r.CarryEvents(carrier, 0, 9)
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
@@ -377,8 +396,10 @@ func TestReplayStopRejectsAfterCutoffAndDoesNotBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	at := time.Now()
-	r.Observe(replayTestFrame(at, color.RGBA{R: 1}), at)
+	// GE-15: validFrame captures at +1 ms, so a frame taken "now" could carry a
+	// CapturedAt after a fast Close's cutoff and fail at random.
+	at := time.Now().Add(-time.Second)
+	r.Observe(replayTestFrame(at, color.RGBA{R: 1}), at.Add(4*time.Millisecond))
 	done := make(chan error, 1)
 	go func() { done <- r.Close() }()
 	deadline := time.Now().Add(time.Second)

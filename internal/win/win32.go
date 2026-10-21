@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package win 封装 Win32 窗口相关 API。
 package win
 
@@ -10,6 +12,7 @@ var (
 	user32 = syscall.NewLazyDLL("user32.dll")
 
 	procEnumWindows                   = user32.NewProc("EnumWindows")
+	procEnumChildWindows              = user32.NewProc("EnumChildWindows")
 	procIsWindowVisible               = user32.NewProc("IsWindowVisible")
 	procIsWindow                      = user32.NewProc("IsWindow")
 	procGetWindowTextW                = user32.NewProc("GetWindowTextW")

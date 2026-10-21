@@ -4,7 +4,6 @@ package mumu
 
 import (
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,92 +12,6 @@ import (
 	"strings"
 	"time"
 )
-
-const (
-	// ProbeWorkerArgument is handled by timer-app before it starts OCR or Fyne.
-	ProbeWorkerArgument = "--timer-mumu-sdk-probe-v1"
-
-	ProbeStageResolveRoot = "定位 MuMu 安装目录"
-	ProbeStageFindSDK     = "定位 MuMu 截图 SDK"
-	ProbeStageLoadSDK     = "加载 MuMu 截图 SDK"
-	ProbeStageExports     = "检查 MuMu SDK 导出函数"
-	ProbeStageConnect     = "连接 MuMu 实例"
-	ProbeStageDisplay     = "查询游戏显示层"
-	ProbeStageDimensions  = "读取截图尺寸"
-	ProbeStagePixels      = "读取截图像素"
-	ProbeStageCapture     = "读取一帧游戏画面"
-)
-
-// StageError preserves the exact API boundary that failed. Vendor connect
-// returns only zero on failure, so no unverified system cause is inferred.
-type StageError struct {
-	Stage string
-	Err   error
-}
-
-func (e *StageError) Error() string {
-	if e == nil || e.Err == nil {
-		return e.Stage
-	}
-	return e.Stage + "：" + e.Err.Error()
-}
-
-func (e *StageError) Unwrap() error { return e.Err }
-
-func stageError(stage string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &StageError{Stage: stage, Err: err}
-}
-
-func errorStage(err error) string {
-	var target *StageError
-	if errors.As(err, &target) {
-		return target.Stage
-	}
-	return ""
-}
-
-// SDKFile identifies one SDK DLL without loading it. An installation can
-// contain several copies; diagnostic output keeps all of them in a stable order.
-type SDKFile struct {
-	Path      string    `json:"path"`
-	Size      int64     `json:"size"`
-	Modified  time.Time `json:"modified"`
-	SHA256    string    `json:"sha256,omitempty"`
-	Preferred bool      `json:"preferred"`
-	Error     string    `json:"error,omitempty"`
-}
-
-// ProbeStep records an observable SDK boundary. MuMu's connect API only
-// returns a handle or zero, so a zero result is intentionally not attributed to
-// a guessed cause such as permissions or an incorrect directory.
-type ProbeStep struct {
-	Stage      string    `json:"stage"`
-	StartedAt  time.Time `json:"started_at"`
-	DurationMS float64   `json:"duration_ms"`
-	OK         bool      `json:"ok"`
-	Detail     string    `json:"detail,omitempty"`
-	Error      string    `json:"error,omitempty"`
-}
-
-// ProbeResult is persisted in a support bundle and can be read without the
-// original MuMu installation.
-type ProbeResult struct {
-	StartedAt      time.Time   `json:"started_at"`
-	EndedAt        time.Time   `json:"ended_at"`
-	Requested      Options     `json:"requested"`
-	ResolvedRoot   string      `json:"resolved_root,omitempty"`
-	SDKCandidates  []SDKFile   `json:"sdk_candidates,omitempty"`
-	SelectedSDK    SDKFile     `json:"selected_sdk"`
-	Width          int         `json:"width,omitempty"`
-	Height         int         `json:"height,omitempty"`
-	ImageAvailable bool        `json:"image_available"`
-	FailureStage   string      `json:"failure_stage,omitempty"`
-	Error          string      `json:"error,omitempty"`
-	Steps          []ProbeStep `json:"steps"`
-}
 
 // FindDLLCandidates returns SDK files in deterministic preference order. The
 // old implementation selected the last glob result, which could depend on the

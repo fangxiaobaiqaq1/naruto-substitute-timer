@@ -7,6 +7,9 @@
 
 # 本机配置、工具状态与临时目录
 /config.json
+/.env
+/.env.*
+!/.env.example
 /tmp/
 /.reasonix/
 /.zcode/
@@ -21,6 +24,7 @@
 *.log
 *.txt
 !/scripts/fyne-diagnostics/frame_hook.go.txt
+!/android/app/src/main/cpp/CMakeLists.txt
 /assets/identity/*.png
 /assets/identity/**/*.png
 /assets/identity/seen/

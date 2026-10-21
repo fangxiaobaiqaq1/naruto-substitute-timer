@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
+	"narutotimer/internal/imgsafe"
 	"narutotimer/internal/match"
 )
 
@@ -25,6 +27,12 @@ const (
 	minGap              = 0.08
 	fightMinScore       = 0.80
 	recognitionInterval = 500 * time.Millisecond
+	// maxSeenCrops bounds SeenDir (GE-05). Every crop there is decoded when the
+	// book loads and matched on every VS/death-swap read in the capture worker,
+	// so an unbounded folder turned those reads into multi-second stalls and
+	// grew RAM by ~140 MiB per 1000 crops. Only the newest crops are loaded,
+	// and older crops written by the timer are deleted after each new save.
+	maxSeenCrops = 100
 )
 
 var (
@@ -114,26 +122,68 @@ func LoadBook(cfg config.Config) []Named {
 		out = append(out, Named{Name: label, Image: img, Mine: mine[label], Scene: scene})
 	}
 
-	scanDir := func(dir, scene string) {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			low := strings.ToLower(e.Name())
-			if !strings.HasSuffix(low, ".png") && !strings.HasSuffix(low, ".jpg") && !strings.HasSuffix(low, ".jpeg") {
-				continue
-			}
-			addFile(filepath.Join(dir, e.Name()), labelFromFile(e.Name()), scene)
+	scanDir := func(dir, scene string, limit int) {
+		for _, name := range bookImageNames(dir, limit) {
+			addFile(filepath.Join(dir, name), labelFromFile(name), scene)
 		}
 	}
-	scanDir(AssetDir, "vs")
-	scanDir(SeenDir, "vs")
-	scanDir(FightDir, "fight")
+	scanDir(AssetDir, "vs", 0)
+	scanDir(SeenDir, "vs", maxSeenCrops)
+	scanDir(FightDir, "fight", 0)
 	return out
+}
+
+func isBookImage(name string) bool {
+	low := strings.ToLower(name)
+	return strings.HasSuffix(low, ".png") || strings.HasSuffix(low, ".jpg") || strings.HasSuffix(low, ".jpeg")
+}
+
+type datedFile struct {
+	name string
+	mod  time.Time
+}
+
+// newestFirst orders files by modification time, newest first (name breaks ties).
+func newestFirst(files []datedFile) {
+	sort.Slice(files, func(i, j int) bool {
+		if !files[i].mod.Equal(files[j].mod) {
+			return files[i].mod.After(files[j].mod)
+		}
+		return files[i].name > files[j].name
+	})
+}
+
+// bookImageNames lists the image files of dir in name order. With limit > 0
+// only the limit most recently modified files are returned (still in name
+// order, which for saved crops is their time order).
+func bookImageNames(dir string, limit int) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var files []datedFile
+	for _, e := range entries {
+		if e.IsDir() || !isBookImage(e.Name()) {
+			continue
+		}
+		var mod time.Time
+		if limit > 0 {
+			if info, err := e.Info(); err == nil {
+				mod = info.ModTime()
+			}
+		}
+		files = append(files, datedFile{name: e.Name(), mod: mod})
+	}
+	if limit > 0 && len(files) > limit {
+		newestFirst(files)
+		files = files[:limit]
+		sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
+	}
+	names := make([]string, len(files))
+	for i, f := range files {
+		names[i] = f.name
+	}
+	return names
 }
 
 func labelFromFile(name string) string {
@@ -146,13 +196,10 @@ func labelFromFile(name string) string {
 	return NormalizeName(base)
 }
 
+// loadImage reads a user-placed template or a saved crop. The header is
+// checked before decoding so one oversized file cannot exhaust memory at start.
 func loadImage(path string) (image.Image, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
+	img, _, err := imgsafe.DecodeFile(path, imgsafe.Asset)
 	return img, err
 }
 
@@ -218,7 +265,11 @@ func Guesser(cfg config.Config) func(*image.RGBA, string) Readout {
 		}
 		r := Read(img, book, mode)
 		if r.Side != "" && r.Opp == "" {
-			go saveOppCrop(img, opposite(r.Side), mode)
+			// The frame may be a reused capture buffer: crop (copy) it now and
+			// only encode/write in the background.
+			if crop := oppCrop(img, opposite(r.Side), mode); crop != nil {
+				go saveOppCrop(crop)
+			}
 		}
 		return r
 	}
@@ -264,10 +315,10 @@ func readNames(img *image.RGBA, book []Named, mode detect.ContentMode, rois side
 		return out
 	}
 	others := othersOf(book)
-	leftMine := bestHit(img, ca, rois.Left, mine, maxWidth)
-	rightMine := bestHit(img, ca, rois.Right, mine, maxWidth)
-	leftOpp := bestHit(img, ca, rois.Left, others, maxWidth)
-	rightOpp := bestHit(img, ca, rois.Right, others, maxWidth)
+	leftMine := bestHit(img, ca, rois.Left, mine, maxWidth, "left")
+	rightMine := bestHit(img, ca, rois.Right, mine, maxWidth, "right")
+	leftOpp := bestHit(img, ca, rois.Left, others, maxWidth, "left")
+	rightOpp := bestHit(img, ca, rois.Right, others, maxWidth, "right")
 	switch {
 	case leftMine.Score >= threshold && leftMine.Score >= rightMine.Score+minGap:
 		out.Side, out.Mine = "left", leftMine.Name
@@ -308,18 +359,27 @@ type hit struct {
 	Score float64
 }
 
-func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, names []Named, maxWidth int) hit {
+func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, names []Named, maxWidth int, sides ...string) hit {
 	var best hit
 	if len(names) == 0 {
 		return best
 	}
-	search := match.CropRGBA(img, mapRect(ca, roi))
+	side := "left"
+	if len(sides) > 0 && sides[0] != "" {
+		side = sides[0]
+	} else if roi.X+roi.Width/2 >= 0.5 {
+		side = "right"
+	}
+	search := match.CropRGBA(img, mapRect(ca, roi, side))
 	if search == nil || search.Bounds().Empty() {
 		return best
 	}
 	gray := match.ToGray(search)
 	scale := 1.0
 	if maxWidth > 0 && ca.W > maxWidth {
+		// maxWidth is a processing cap in physical pixels, not another HUD
+		// reference dimension. The template itself still uses the fixed-height
+		// HUD scale below before this optional downsample is applied.
 		scale = float64(maxWidth) / float64(ca.W)
 		w := int(math.Round(float64(gray.Bounds().Dx()) * scale))
 		h := int(math.Round(float64(gray.Bounds().Dy()) * scale))
@@ -330,21 +390,23 @@ func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, 
 		if n.Image == nil {
 			continue
 		}
-		tw := int(math.Round(float64(n.Image.Bounds().Dx()) * float64(ca.W) / detect.LogicWidth * scale))
-		th := int(math.Round(float64(n.Image.Bounds().Dy()) * float64(ca.H) / detect.LogicHeight * scale))
+		hudScale := ca.HUDScale(detect.LogicWidth, detect.LogicHeight)
+		tw := int(math.Round(float64(n.Image.Bounds().Dx()) * hudScale * scale))
+		th := int(math.Round(float64(n.Image.Bounds().Dy()) * hudScale * scale))
 		if tw < 8 || th < 8 || tw > gray.Bounds().Dx() || th > gray.Bounds().Dy() {
 			continue
 		}
-		templ := match.ScaleGray(match.ToGray(n.Image), tw, th)
+		t := scaledNameTemplate(n.Image, tw, th)
+		templ, prepared := t.gray, t.full
 		var mask *image.Gray
 		if maxWidth > 0 {
-			mask = accountGlyphMask(templ)
+			mask, prepared = t.mask, t.masked
 		}
-		score, err := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: search.Bounds(), Template: templ, Mask: mask})
+		score, err := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: search.Bounds(), Template: templ, Mask: mask, Prepared: prepared})
 		// Preserve the original full-patch path where downsampling leaves too
 		// little glyph/outline detail for the mask. Neither threshold is lowered.
 		if mask != nil && (err != nil || score.Value < fightMinScore) {
-			full, fullErr := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: search.Bounds(), Template: templ})
+			full, fullErr := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: search.Bounds(), Template: templ, Prepared: t.full})
 			if fullErr == nil && (err != nil || full.Value > score.Value) {
 				score, err = full, nil
 			}
@@ -359,9 +421,9 @@ func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, 
 					if dw == 0 && dh == 0 {
 						continue
 					}
-					adjusted := match.ScaleGray(match.ToGray(n.Image), tw+dw, th+dh)
-					roi := image.Rectangle{Min: peak, Max: peak.Add(adjusted.Bounds().Size())}.Inset(-2).Intersect(search.Bounds())
-					refined, e := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: roi, Template: adjusted, Mask: accountGlyphMask(adjusted)})
+					adjusted := scaledNameTemplate(n.Image, tw+dw, th+dh)
+					roi := image.Rectangle{Min: peak, Max: peak.Add(adjusted.gray.Bounds().Size())}.Inset(-2).Intersect(search.Bounds())
+					refined, e := (match.NCC{}).Match(match.Query{Image: search, Gray: gray, ROI: roi, Template: adjusted.gray, Mask: adjusted.mask, Prepared: adjusted.masked})
 					if e == nil && refined.Value > score.Value {
 						score = refined
 					}
@@ -375,9 +437,75 @@ func bestHit(img *image.RGBA, ca detect.ContentArea, roi config.NormalizedRect, 
 	return best
 }
 
-func mapRect(ca detect.ContentArea, r config.NormalizedRect) image.Rectangle {
-	x0, y0 := ca.Map(r.X*detect.LogicWidth, r.Y*detect.LogicHeight)
-	x1, y1 := ca.Map((r.X+r.Width)*detect.LogicWidth, (r.Y+r.Height)*detect.LogicHeight)
+// nameTemplate is what bestHit derives from one book image at one size: the
+// scaled gray template, its glyph mask and both prepared matchers. All are
+// pure functions of the image and the size.
+type nameTemplate struct {
+	gray, mask   *image.Gray
+	masked, full *match.PreparedNCC
+}
+
+type nameTemplateKey struct {
+	img  image.Image
+	w, h int
+}
+
+// nameTemplates memoizes nameTemplate across recognitions (every 500 ms per
+// confirmed scene), instead of rescaling every book image on each of them.
+// Book images are immutable once loaded; a reloaded book brings new images
+// and the bounded map is simply dropped when it grows past its cap.
+var nameTemplates struct {
+	sync.Mutex
+	m map[nameTemplateKey]*nameTemplate
+}
+
+const nameTemplateCap = 512
+
+// cacheNameTemplates lets tests compare against uncached preparation.
+var cacheNameTemplates = true
+
+func scaledNameTemplate(img image.Image, w, h int) *nameTemplate {
+	build := func() *nameTemplate {
+		gray := match.ScaleGray(match.ToGray(img), w, h)
+		mask := accountGlyphMask(gray)
+		return &nameTemplate{gray: gray, mask: mask, masked: match.PrepareNCC(gray, mask), full: match.PrepareNCC(gray, nil)}
+	}
+	// Only pointer images are comparable map keys with identity semantics.
+	switch img.(type) {
+	case *image.NRGBA, *image.RGBA, *image.Gray, *image.Paletted, *image.YCbCr, *image.NRGBA64, *image.RGBA64, *image.Gray16, *image.CMYK:
+	default:
+		return build()
+	}
+	if !cacheNameTemplates {
+		return build()
+	}
+	key := nameTemplateKey{img, w, h}
+	nameTemplates.Lock()
+	t, ok := nameTemplates.m[key]
+	nameTemplates.Unlock()
+	if ok {
+		return t
+	}
+	t = build()
+	nameTemplates.Lock()
+	if nameTemplates.m == nil || len(nameTemplates.m) >= nameTemplateCap {
+		nameTemplates.m = make(map[nameTemplateKey]*nameTemplate)
+	}
+	nameTemplates.m[key] = t
+	nameTemplates.Unlock()
+	return t
+}
+
+func mapRect(ca detect.ContentArea, r config.NormalizedRect, sides ...string) image.Rectangle {
+	side := "left"
+	if len(sides) > 0 && sides[0] != "" {
+		side = sides[0]
+	} else if r.X+r.Width/2 >= 0.5 {
+		side = "right"
+	}
+	p0 := ca.MapHUDNormalized(r.X, r.Y, side, detect.LogicWidth, detect.LogicHeight)
+	p1 := ca.MapHUDNormalized(r.X+r.Width, r.Y+r.Height, side, detect.LogicWidth, detect.LogicHeight)
+	x0, y0, x1, y1 := p0.X, p0.Y, p1.X, p1.Y
 	if x1 <= x0 {
 		x1 = x0 + 1
 	}
@@ -397,40 +525,100 @@ func opposite(side string) string {
 var saveMu sync.Mutex
 var lastSave time.Time
 
-func saveOppCrop(img *image.RGBA, side string, mode detect.ContentMode) {
+// oppCrop copies the opponent's footer name strip out of img, synchronously,
+// when a save is due (at most one per 8 s). nil means nothing to save.
+func oppCrop(img *image.RGBA, side string, mode detect.ContentMode) *image.RGBA {
 	saveMu.Lock()
-	defer saveMu.Unlock()
-	if time.Since(lastSave) < 8*time.Second {
-		return
-	}
-	if img == nil {
-		return
-	}
-	if err := os.MkdirAll(SeenDir, 0o755); err != nil {
-		return
+	due := time.Since(lastSave) >= 8*time.Second
+	saveMu.Unlock()
+	if !due || img == nil {
+		return nil
 	}
 	ca, ok := detect.ResolveContentArea(img, mode, detect.LogicWidth, detect.LogicHeight, 0.015)
 	if !ok {
-		return
+		return nil
 	}
 	roi := DefaultROIs.Left
 	if side == "right" {
 		roi = DefaultROIs.Right
 	}
-	crop := match.CropRGBA(img, mapRect(ca, roi))
+	crop := match.CropRGBA(img, mapRect(ca, roi, side))
 	if crop == nil || crop.Bounds().Dx() < 8 {
+		return nil
+	}
+	return crop
+}
+
+// saveOppCrop writes an owned crop (oppCrop) to SeenDir, at most once per 8 s,
+// then trims SeenDir to the newest maxSeenCrops crops.
+func saveOppCrop(crop *image.RGBA) {
+	saveMu.Lock()
+	defer saveMu.Unlock()
+	if time.Since(lastSave) < 8*time.Second {
 		return
 	}
-	path := filepath.Join(SeenDir, fmt.Sprintf("opp-%s.png", time.Now().Format("20060102-150405")))
-	f, err := os.Create(path)
-	if err != nil {
+	if err := os.MkdirAll(SeenDir, 0o755); err != nil {
 		return
 	}
-	defer f.Close()
-	if err := png.Encode(f, crop); err != nil {
+	path := filepath.Join(SeenDir, fmt.Sprintf("%s%s.png", seenCropPrefix, time.Now().Format("20060102-150405")))
+	if err := writePNGAtomic(path, crop); err != nil {
 		return
 	}
 	lastSave = time.Now()
+	pruneSeenCrops(SeenDir, maxSeenCrops)
+}
+
+// seenCropPrefix marks crops written by saveOppCrop; only those are pruned.
+const seenCropPrefix = "opp-"
+
+// writePNGAtomic never leaves a truncated PNG under its final name (LoadBook
+// would read it on the next start): it writes a temporary file and renames it.
+func writePNGAtomic(path string, img image.Image) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+seenCropPrefix+"*.png.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	if err := png.Encode(tmp, img); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// pruneSeenCrops deletes the oldest timer-written crops beyond keep, plus
+// temporary files left by an interrupted save. Other files are left alone.
+func pruneSeenCrops(dir string, keep int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var crops []datedFile
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		name := e.Name()
+		switch {
+		case strings.HasPrefix(name, "."+seenCropPrefix) && strings.HasSuffix(name, ".png.tmp"):
+			if time.Since(info.ModTime()) > time.Hour {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
+		case strings.HasPrefix(name, seenCropPrefix) && strings.HasSuffix(strings.ToLower(name), ".png"):
+			crops = append(crops, datedFile{name: name, mod: info.ModTime()})
+		}
+	}
+	if len(crops) <= keep {
+		return
+	}
+	newestFirst(crops)
+	for _, f := range crops[keep:] {
+		_ = os.Remove(filepath.Join(dir, f.name))
+	}
 }
 
 // NormalizeName 去掉空白和路径字符，方便当文件名、当配置项。

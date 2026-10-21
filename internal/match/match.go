@@ -64,17 +64,7 @@ func (NCC) Match(q Query) (Score, error) {
 	}
 
 	// 小模板 1px 错位就会打穿；大厅底栏那种大图才粗扫。
-	minSide := tw
-	if th < minSide {
-		minSide = th
-	}
-	step := 1
-	if minSide >= 48 {
-		step = minSide / 8
-		if step < 2 {
-			step = 2
-		}
-	}
+	step := coarseStep(tw, th)
 
 	gray := q.Gray
 	if gray == nil {
@@ -83,7 +73,25 @@ func (NCC) Match(q Query) (Score, error) {
 	// ToGray(RGBA) 从零开始，而调用方也可传带原点和 stride 的 Gray 子图。
 	// nccAt 使用相对于 Gray.Bounds().Min 的偏移，输出仍是截图坐标。
 	origin := ib.Min
+	// Every footprint scanned lies inside the ROI. The SIMD kernel reads the
+	// gray pixels directly (no bounds checks), so it is used only when the
+	// ROI's last pixel provably lies inside gray.Pix; otherwise the portable
+	// path keeps Go's bounds checks. Both give bit-identical scores.
+	kernel := nccKernel != nil && kernelFits(gray, roi.Sub(origin))
+	var pre *grayPrefix
+	if !kernel {
+		// The prefix sums cover exactly the ROI; they are local to this call,
+		// hence single-goroutine.
+		pre = newGrayPrefix(gray, roi.Min.X-origin.X, roi.Min.Y-origin.Y, roi.Dx(), roi.Dy())
+		defer pre.release()
+	}
 	best := Score{Peak: roi.Min}
+	// Grid points already scored by an earlier pass of this call are not
+	// scored again: best.Value can only have grown since, so an identical
+	// re-score could never pass the strict '>' below. The result is the same,
+	// with fewer NCC evaluations in the refinement windows.
+	var passes [2]scanPass
+	npass := 0
 	scan := func(x0, y0, x1, y1, st int) {
 		if st < 1 {
 			st = 1
@@ -101,20 +109,80 @@ func (NCC) Match(q Query) (Score, error) {
 			y1 = roi.Max.Y - th
 		}
 		for y := y0; y <= y1; y += st {
+			var rows [2]bool
+			anyRow := false
+			for i, p := range passes[:npass] {
+				rows[i] = p.onRow(y)
+				anyRow = anyRow || rows[i]
+			}
 			for x := x0; x <= x1; x += st {
-				v := prepared.at(gray, x-origin.X, y-origin.Y)
+				if anyRow && ((rows[0] && passes[0].onCol(x)) || (rows[1] && passes[1].onCol(x))) {
+					continue
+				}
+				var v float64
+				if kernel {
+					v = prepared.atKernel(gray.Pix, gray.Stride, (y-origin.Y)*gray.Stride+x-origin.X)
+				} else {
+					v = prepared.at(gray, pre, x-origin.X, y-origin.Y)
+				}
 				if v > best.Value {
 					best.Value = v
 					best.Peak = image.Pt(x, y)
 				}
 			}
 		}
+		if npass < len(passes) {
+			passes[npass] = scanPass{x0, y0, x1, y1, st}
+			npass++
+		}
 	}
 	scan(roi.Min.X, roi.Min.Y, roi.Max.X-tw, roi.Max.Y-th, step)
 	if step > 1 {
-		scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, 1)
+		// Refine the coarse peak. For large templates the old exhaustive
+		// (2*step+1)^2 window was the dominant cost of the whole scene gate; a
+		// medium grid narrows the window first, then 1-px search finishes.
+		if mid := refineStep(step); mid > 1 {
+			scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, mid)
+			scan(best.Peak.X-mid, best.Peak.Y-mid, best.Peak.X+mid, best.Peak.Y+mid, 1)
+		} else {
+			scan(best.Peak.X-step, best.Peak.Y-step, best.Peak.X+step, best.Peak.Y+step, 1)
+		}
 	}
 	return best, nil
+}
+
+// scanPass is the grid one scan visited: x0+i*st <= x1, y0+j*st <= y1.
+type scanPass struct{ x0, y0, x1, y1, st int }
+
+func (p scanPass) onRow(y int) bool { return y >= p.y0 && y <= p.y1 && (y-p.y0)%p.st == 0 }
+func (p scanPass) onCol(x int) bool { return x >= p.x0 && x <= p.x1 && (x-p.x0)%p.st == 0 }
+
+// kernelFits reports whether rel (ROI in gray offsets, i.e. relative to the
+// image origin) lies inside gray.Pix, so that every template footprint within
+// it can be read without bounds checks.
+func kernelFits(gray *image.Gray, rel image.Rectangle) bool {
+	if rel.Empty() || rel.Min.X < 0 || rel.Min.Y < 0 || gray.Stride < rel.Max.X {
+		return false
+	}
+	last := (rel.Max.Y-1)*gray.Stride + rel.Max.X - 1
+	return last < len(gray.Pix)
+}
+
+// coarseStep is the sparse grid for large templates; small templates cannot
+// tolerate a single pixel of misalignment and are scanned exhaustively.
+func coarseStep(tw, th int) int {
+	minSide := min(tw, th)
+	if minSide < 48 {
+		return 1
+	}
+	return max(2, minSide/8)
+}
+
+// refineStep is the medium grid used between the coarse scan and the final
+// 1-px window. It stays within a quarter of the coarse step so the true peak,
+// whose correlation lobe is a few pixels wide for HUD text, is not skipped.
+func refineStep(step int) int {
+	return step / 4
 }
 
 // ToGray 把任意图转成灰度。
@@ -137,11 +205,20 @@ func ToGray(src image.Image) *image.Gray {
 		// a cropped HUD ROI is converted from its own current pixels, not from
 		// the top-left of the parent frame.
 		xoff, yoff := b.Min.X-rgba.Rect.Min.X, b.Min.Y-rgba.Rect.Min.Y
-		for y := 0; y < b.Dy(); y++ {
+		w, h := b.Dx(), b.Dy()
+		done := 0 // leading columns converted by the SIMD rows
+		if w4 := w &^ 3; grayRows != nil && w4 > 0 && h > 0 && xoff >= 0 && yoff >= 0 {
+			first := yoff*rgba.Stride + xoff*4
+			if last := first + (h-1)*rgba.Stride + w4*4; last <= len(rgba.Pix) && rgba.Stride >= w4*4 {
+				grayRows(&out.Pix[0], out.Stride, &rgba.Pix[first], rgba.Stride, w4, h)
+				done = w4
+			}
+		}
+		for y := 0; y < h; y++ {
 			start := (y+yoff)*rgba.Stride + xoff*4
-			srcRow := rgba.Pix[start : start+b.Dx()*4]
-			dstRow := out.Pix[y*out.Stride : y*out.Stride+b.Dx()]
-			for x := range dstRow {
+			srcRow := rgba.Pix[start : start+w*4]
+			dstRow := out.Pix[y*out.Stride : y*out.Stride+w]
+			for x := done; x < len(dstRow); x++ {
 				i := x * 4
 				dstRow[x] = uint8((299*uint32(srcRow[i]) + 587*uint32(srcRow[i+1]) + 114*uint32(srcRow[i+2]) + 500) / 1000)
 			}

@@ -260,3 +260,206 @@ func TestDeduplicationUsesVisibleGeometryAndCaptureSource(t *testing.T) {
 		}
 	}
 }
+
+type countingEngine struct {
+	calls int
+}
+
+func (e *countingEngine) Analyze(*image.RGBA) engine.Result {
+	e.calls++
+	return engine.Result{Name: "counting", Fighting: true, Beads: []engine.BeadInfo{{Label: "L1", Lit: true}}}
+}
+
+func TestIdenticalCapturesSkipAnalysisAndChangedPixelsRunItAgain(t *testing.T) {
+	eng := &countingEngine{}
+	img := image.NewRGBA(image.Rect(0, 0, 400, 250))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{90, 120, 140, 255}), image.Point{}, draw.Src)
+	var d dedupedAnalysis
+	at := time.Unix(1700000000, 0)
+	first := d.analyze(img, eng, detect.ModeStretch, at, at.Add(time.Millisecond), "sdk")
+	second := d.analyze(img, eng, detect.ModeStretch, at.Add(16*time.Millisecond), at.Add(17*time.Millisecond), "sdk")
+	if eng.calls != 1 {
+		t.Fatalf("identical pixels were analyzed again: %d calls", eng.calls)
+	}
+	if !second.Fighting || len(second.Beads) != 1 || second.Img != img || !second.CapturedAt.Equal(at.Add(17*time.Millisecond)) {
+		t.Fatalf("reused analysis lost its result or this capture's own metadata: %+v", second)
+	}
+	if !second.AnalysisStarted.IsZero() || !second.AnalyzedAt.IsZero() {
+		t.Fatal("a skipped analysis must not report analysis stage timings")
+	}
+	second.Beads[0].Lit = false
+	if !first.Beads[0].Lit {
+		t.Fatal("reused frames must not share bead slices")
+	}
+	img.SetRGBA(10, 10, color.RGBA{255, 0, 0, 255})
+	if d.analyze(img, eng, detect.ModeStretch, at.Add(32*time.Millisecond), at.Add(33*time.Millisecond), "sdk"); eng.calls != 2 {
+		t.Fatalf("changed pixels must be analyzed: %d calls", eng.calls)
+	}
+	if d.analyze(img, eng, detect.ModeStretch, at.Add(48*time.Millisecond), at.Add(49*time.Millisecond), "window"); eng.calls != 3 {
+		t.Fatalf("a different capture source is a new observation: %d calls", eng.calls)
+	}
+}
+
+type geometryEngine struct{ countingEngine }
+
+func (e *geometryEngine) Analyze(img *image.RGBA) engine.Result {
+	res := e.countingEngine.Analyze(img)
+	res.Geometry[1] = engine.SideGeometry{Beads: []image.Point{{300, 40}, {280, 40}}, NameROI: image.Rect(1, 2, 3, 4), AvatarROI: image.Rect(5, -6, 7, 8),
+		BeadBox: config.NormalizedRect{X: .7, Y: .1, Width: .2, Height: .05}, AvatarBox: config.NormalizedRect{X: .9, Y: .01, Width: .05, Height: .09}}
+	return res
+}
+
+// A frame reused from the duplicate cache reports the geometry of the
+// analysis it reuses, without sharing its slices.
+func TestReusedFrameCarriesGeometry(t *testing.T) {
+	eng := &geometryEngine{}
+	img := image.NewRGBA(image.Rect(0, 0, 400, 250))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{90, 120, 140, 255}), image.Point{}, draw.Src)
+	var d dedupedAnalysis
+	at := time.Unix(1700000000, 0)
+	first := d.analyze(img, eng, detect.ModeStretch, at, at, "sdk")
+	second := d.analyze(img, eng, detect.ModeStretch, at.Add(16*time.Millisecond), at.Add(16*time.Millisecond), "sdk")
+	want := eng.Analyze(img).Geometry
+	if eng.calls != 2 || fmt.Sprint(first.Geometry) != fmt.Sprint(want) || fmt.Sprint(second.Geometry) != fmt.Sprint(want) || first.Geometry[0].Beads != nil {
+		t.Fatalf("geometry %+v / %+v, want %+v (calls %d)", first.Geometry, second.Geometry, want, eng.calls)
+	}
+	second.Geometry[1].Beads[0].X = 0
+	if first.Geometry[1].Beads[0].X != 300 {
+		t.Fatal("reused frames must not share geometry slices")
+	}
+}
+
+func TestFrameFingerprintIgnoresPaddingButNotGeometryOrSource(t *testing.T) {
+	base := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	padded := &image.RGBA{Pix: make([]byte, 20), Stride: 12, Rect: base.Rect}
+	padded.Pix[8] = 100
+	if frameFingerprint(base, "sdk") != frameFingerprint(padded, "sdk") {
+		t.Fatal("row padding is not an observation")
+	}
+	reshaped := image.NewRGBA(image.Rect(0, 0, 4, 1))
+	if frameFingerprint(base, "sdk") == frameFingerprint(reshaped, "sdk") {
+		t.Fatal("different geometry must differ")
+	}
+	if frameFingerprint(base, "sdk") == frameFingerprint(base, "window") {
+		t.Fatal("different capture source must differ")
+	}
+	changed := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	changed.Pix[5] = 1
+	if frameFingerprint(base, "sdk") == frameFingerprint(changed, "sdk") {
+		t.Fatal("a changed pixel must differ")
+	}
+}
+
+func TestFingerprintRunsOncePerDeliveredFrame(t *testing.T) {
+	var calls atomic.Int64
+	fingerprintHook = func() { calls.Add(1) }
+	defer func() { fingerprintHook = nil }()
+	eng := &countingEngine{}
+	img := image.NewRGBA(image.Rect(0, 0, 400, 250))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{90, 120, 140, 255}), image.Point{}, draw.Src)
+	var d dedupedAnalysis
+	var n int
+	inner := func() Frame {
+		n++
+		at := time.Now()
+		if n == 3 {
+			img.SetRGBA(10, 10, color.RGBA{255, 0, 0, 255})
+		}
+		return d.analyze(img, eng, detect.ModeStretch, at, at, "sdk")
+	}
+	// A PrintWindow-style frame produced outside dedupedAnalysis.
+	printWindow := func() Frame {
+		return withFingerprint(Frame{Img: img, CaptureMethod: "printwindow-fullcontent", CapturedAt: time.Now()})
+	}
+	for _, tc := range []struct {
+		name  string
+		inner Provider
+		dups  []bool
+	}{
+		{"sdk", inner, []bool{false, true, false}},
+		{"printwindow", printWindow, []bool{false, true, true}},
+	} {
+		calls.Store(0)
+		p, closeProvider := boundedProvider(tc.inner, nil, time.Second)
+		for i, want := range tc.dups {
+			f := p()
+			if f.Err != nil || f.Duplicate != want {
+				t.Fatalf("%s frame %d: err=%v duplicate=%v want %v", tc.name, i, f.Err, f.Duplicate, want)
+			}
+		}
+		closeProvider()
+		if got := calls.Load(); got != int64(len(tc.dups)) {
+			t.Fatalf("%s: fingerprint ran %d times for %d frames", tc.name, got, len(tc.dups))
+		}
+	}
+}
+
+func BenchmarkFrameFingerprint(b *testing.B) {
+	img := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
+	for i := range img.Pix {
+		img.Pix[i] = byte(i * 31)
+	}
+	b.SetBytes(int64(len(img.Pix)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		frameFingerprint(img, "sdk")
+	}
+}
+
+// calibratingEngine counts analyses and exposes a calibration revision.
+type calibratingEngine struct {
+	countingEngine
+	revision uint64
+}
+
+func (e *calibratingEngine) SetCalibration(*config.RegionCalibration) { e.revision++ }
+func (e *calibratingEngine) CalibrationRevision() uint64              { return e.revision }
+
+// After a live calibration replacement the same screen is analysed again and
+// delivered as a new observation, on both capture paths.
+func TestCalibrationReplacementReanalysesIdenticalScreen(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 400, 250))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{90, 120, 140, 255}), image.Point{}, draw.Src)
+	eng := &calibratingEngine{}
+	var d dedupedAnalysis
+	sdk := func() Frame {
+		at := time.Now()
+		return d.analyze(img, eng, detect.ModeStretch, at, at, "sdk")
+	}
+	printWindow := func() Frame {
+		revision := calibrationRevision(eng)
+		eng.Analyze(img)
+		f := Frame{Img: img, CaptureMethod: "printwindow-fullcontent", CapturedAt: time.Now()}
+		f.fingerprint, f.fingerprinted = withRevision(frameFingerprint(img, f.CaptureMethod), revision), true
+		return f
+	}
+	for _, tc := range []struct {
+		name  string
+		inner Provider
+	}{{"sdk", sdk}, {"printwindow", printWindow}} {
+		eng.calls, eng.revision = 0, 0
+		p, closeProvider := boundedProvider(tc.inner, nil, time.Second)
+		var dups []bool
+		for i := range 4 {
+			if i == 2 {
+				eng.SetCalibration(&config.RegionCalibration{Profile: "duel"})
+			}
+			f := p()
+			if f.Err != nil {
+				t.Fatal(f.Err)
+			}
+			dups = append(dups, f.Duplicate)
+		}
+		closeProvider()
+		if want := []bool{false, true, false, true}; fmt.Sprint(dups) != fmt.Sprint(want) {
+			t.Fatalf("%s: duplicates %v, want %v", tc.name, dups, want)
+		}
+		if tc.name == "sdk" && eng.calls != 2 {
+			t.Fatalf("sdk: %d analyses, want 2 (one per calibration)", eng.calls)
+		}
+	}
+	// Without a replacement the fingerprint is exactly the pixel fingerprint.
+	if engineFingerprint(img, "sdk", &calibratingEngine{}) != frameFingerprint(img, "sdk") {
+		t.Fatal("revision 0 changed the fingerprint")
+	}
+}

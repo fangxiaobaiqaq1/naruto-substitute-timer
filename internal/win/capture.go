@@ -1,9 +1,11 @@
+//go:build windows
+
 package win
 
 import (
 	"errors"
 	"image"
-	"image/color"
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -43,12 +45,79 @@ type bmiHeader struct {
 	BiClrImportant  uint32
 }
 
+// dibCache keeps one memory DC with a window-sized DIB section across
+// captures instead of creating (and zero-faulting ~8 MiB), selecting and
+// releasing them on every frame. Captures are serialized by its mutex.
+type dibCache struct {
+	sync.Mutex
+	dc, bmp uintptr
+	bits    unsafe.Pointer
+	w, h    int
+}
+
+var captureDIB dibCache
+
+// ensure selects a w x h top-down 32-bit DIB into the cached memory DC,
+// recreating both only when the window size changes (caller holds the lock).
+func (d *dibCache) ensure(screenDC uintptr, w, h int) error {
+	if d.dc != 0 && d.w == w && d.h == h {
+		return nil
+	}
+	d.release()
+	dc, _, _ := procCreateCompatibleDC.Call(screenDC)
+	if dc == 0 {
+		return errors.New("创建内存 DC 失败")
+	}
+	header := bmiHeader{
+		BiSize:        uint32(unsafe.Sizeof(bmiHeader{})),
+		BiWidth:       int32(w),
+		BiHeight:      -int32(h),
+		BiPlanes:      1,
+		BiBitCount:    32,
+		BiCompression: biRGB,
+	}
+	var bits unsafe.Pointer
+	bmp, _, _ := procCreateDIBSection.Call(screenDC,
+		uintptr(unsafe.Pointer(&header)),
+		dibRGBColor,
+		uintptr(unsafe.Pointer(&bits)),
+		0, 0)
+	if bmp == 0 || bits == nil {
+		if bmp != 0 {
+			procDeleteObject.Call(bmp)
+		}
+		procDeleteDC.Call(dc)
+		return errors.New("创建 DIB 位图失败")
+	}
+	procSelectObject.Call(dc, bmp)
+	d.dc, d.bmp, d.bits, d.w, d.h = dc, bmp, bits, w, h
+	return nil
+}
+
+// release deletes the DC first: a bitmap still selected into a DC cannot be
+// deleted.
+func (d *dibCache) release() {
+	if d.dc != 0 {
+		procDeleteDC.Call(d.dc)
+	}
+	if d.bmp != 0 {
+		procDeleteObject.Call(d.bmp)
+	}
+	d.dc, d.bmp, d.bits, d.w, d.h = 0, 0, nil, 0, 0
+}
+
 // CaptureClient 截取窗口客户区。
 //
 // 只抓目标窗口自身：PrintWindow 整窗，再裁客户区。
 // 不用 BitBlt：那是屏幕合成，被其它窗口挡住就会采到覆盖物。
 // PrintWindow 若按客户区尺寸画，会把标题栏压进画面、豆位整体下移。
-func CaptureClient(hwnd uintptr) (*image.RGBA, error) {
+func CaptureClient(hwnd uintptr) (*image.RGBA, error) { return CaptureClientInto(hwnd, nil) }
+
+// CaptureClientInto is CaptureClient writing into dst(width, height), which
+// must return a packed image of exactly that size (every pixel is
+// overwritten); nil allocates a new image. A failed capture may leave the
+// returned buffer partly written.
+func CaptureClientInto(hwnd uintptr, dst func(width, height int) *image.RGBA) (*image.RGBA, error) {
 	wr, err := getWindowRect(hwnd)
 	if err != nil {
 		return nil, err
@@ -86,31 +155,16 @@ func CaptureClient(hwnd uintptr) (*image.RGBA, error) {
 	}
 	defer user32ReleaseDC.Call(0, screenDC)
 
-	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
-	if memDC == 0 {
-		return nil, errors.New("创建内存 DC 失败")
+	captureDIB.Lock()
+	defer captureDIB.Unlock()
+	if err := captureDIB.ensure(screenDC, ww, wh); err != nil {
+		return nil, err
 	}
-	defer procDeleteDC.Call(memDC)
-
-	header := bmiHeader{
-		BiSize:        uint32(unsafe.Sizeof(bmiHeader{})),
-		BiWidth:       int32(ww),
-		BiHeight:      -int32(wh),
-		BiPlanes:      1,
-		BiBitCount:    32,
-		BiCompression: biRGB,
-	}
-	var bitsPtr unsafe.Pointer
-	bmp, _, _ := procCreateDIBSection.Call(screenDC,
-		uintptr(unsafe.Pointer(&header)),
-		dibRGBColor,
-		uintptr(unsafe.Pointer(&bitsPtr)),
-		0, 0)
-	if bmp == 0 {
-		return nil, errors.New("创建 DIB 位图失败")
-	}
-	defer procDeleteObject.Call(bmp)
-	procSelectObject.Call(memDC, bmp)
+	memDC := captureDIB.dc
+	src := unsafe.Slice((*byte)(captureDIB.bits), ww*wh*4)
+	// A new DIB section is zero-filled; PrintWindow need not paint every
+	// pixel, so the reused one starts from the same zeros.
+	clear(src)
 
 	ok, _, _ := user32PrintWindow.Call(hwnd, memDC, pwRenderFullContent)
 	if ok == 0 {
@@ -130,27 +184,16 @@ func CaptureClient(hwnd uintptr) (*image.RGBA, error) {
 		}
 	}
 
-	src := unsafe.Slice((*byte)(bitsPtr), ww*wh*4)
-	img := image.NewRGBA(image.Rect(0, 0, cw, ch))
-	for y := 0; y < ch; y++ {
-		sy := oy + y
-		if sy < 0 || sy >= wh {
-			continue
-		}
-		for x := 0; x < cw; x++ {
-			sx := ox + x
-			if sx < 0 || sx >= ww {
-				continue
-			}
-			i := (sy*ww + sx) * 4
-			img.SetRGBA(x, y, color.RGBA{
-				R: src[i+2],
-				G: src[i+1],
-				B: src[i],
-				A: 255,
-			})
-		}
+	var img *image.RGBA
+	if dst != nil {
+		img = dst(cw, ch)
 	}
+	if img == nil || img.Rect != image.Rect(0, 0, cw, ch) || img.Stride != cw*4 {
+		img = image.NewRGBA(image.Rect(0, 0, cw, ch))
+	}
+	// ox, oy >= 0, ox+cw <= ww and oy+ch <= wh (clamped above): the whole
+	// client area lies inside the DIB and every output pixel is written.
+	bgraToRGBA(img, src, ww, ox, oy)
 	if imageLooksBlank(img) {
 		return nil, errors.New("截到空画面，丢弃本帧")
 	}

@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"image"
+	"image/color"
+	"image/draw"
 	"testing"
 
 	"narutotimer/internal/config"
@@ -32,6 +35,33 @@ func TestConfiguredLayoutOwnsIndependentProfileCoordinates(t *testing.T) {
 	}
 	if got := layout.PositionsFor("unknown", 1600, 900); got != nil {
 		t.Fatalf("unknown profile synthesized coordinates: %+v", got)
+	}
+}
+
+func TestConfiguredLayoutWideAnchorsPreserveExplicitCalibration(t *testing.T) {
+	cfg := config.Default().Layout
+	img := image.NewRGBA(image.Rect(0, 0, 2400, 1080))
+	// Only the left health-bar end is visible. Do not mirror it to the right.
+	for y := 88; y <= 90; y++ {
+		draw.Draw(img, image.Rect(314-(y-89), y, 600, y+1), image.NewUniform(color.RGBA{240, 70, 10, 255}), image.Point{}, draw.Src)
+	}
+	for _, custom := range []bool{false, true} {
+		if custom {
+			cfg.Left.NominalCenters[0].X += .001
+		}
+		l := NewConfiguredLayout(detect.ModeStretch, cfg)
+		area, _ := l.ContentArea(img)
+		before := l.PositionsIn("duel", area)
+		after := l.PositionsInImage("duel", img, area)
+		for i, b := range after {
+			wantX := before[i].X
+			if !custom && b.Side == "left" {
+				wantX += 314 - before[0].X
+			}
+			if b.X != wantX || b.Y != before[i].Y || b.Bead != before[i].Bead {
+				t.Fatalf("custom=%v: %v => %v, want x=%d and unchanged calibration", custom, before[i], b, wantX)
+			}
+		}
 	}
 }
 

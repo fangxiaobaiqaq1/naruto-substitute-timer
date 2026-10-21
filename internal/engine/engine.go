@@ -12,6 +12,7 @@ import (
 	"image"
 	"time"
 
+	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 )
 
@@ -61,11 +62,35 @@ type Result struct {
 	PlayerSide          string // 从 VS 底栏 / 对局顶部账号认出的我方 left/right，无新证据时为空
 	PlayerName          string // 我方账号，来自 ui.playerNames
 	OppName             string // 对面账号，能对上图鉴才有
+	// Geometry is what each side (0 left, 1 right) of this frame actually
+	// used; zero when the HUD was not analysed.
+	Geometry [2]SideGeometry
+}
+
+// SideGeometry is one side's per-frame geometry for the calibration screens
+// (docs/区域校准.md 每帧几何). Pixels are image coordinates like BeadInfo;
+// boxes are fractions of the image bounds in calibration form (Width 0 =
+// none). Zero when not available (no HUD analysis, legacy layouts, OpenCV).
+type SideGeometry struct {
+	Beads     []image.Point         // sampled centres: row drops, re-reads, slots 5/6
+	NameROI   image.Rectangle       // title-template search rect, not clipped
+	AvatarROI image.Rectangle       // portrait window, not clipped
+	BeadBox   config.NormalizedRect // saved as is: same layout centres and scale
+	AvatarBox config.NormalizedRect // saved as is: same AvatarROI and scale
 }
 
 // LayoutPreferrer receives only a template's explicit camp/duel binding.
 type LayoutPreferrer interface {
 	Prefer(kind string)
+}
+
+// Calibrator replaces the player's region calibration in a running engine
+// (docs/区域校准.md); the next frame uses it. CalibrationRevision changes
+// with every replacement, so caches keyed on pixels analyse an identical
+// screen again.
+type Calibrator interface {
+	SetCalibration(*config.RegionCalibration)
+	CalibrationRevision() uint64
 }
 
 // Engine 是检测引擎接口：输入一张客户区截图，输出画面与豆状态。

@@ -43,12 +43,24 @@ type DeviceConfig struct {
 
 type CaptureConfig struct {
 	// Provider selects the primary emulator adapter. Empty keeps legacy MuMu behavior.
-	Provider         string               `json:"provider,omitempty"`
-	MuMu             MuMuCaptureConfig    `json:"mumu"`
-	Leidian          LeidianCaptureConfig `json:"leidian"`
-	PreferredMethods []string             `json:"preferredMethods"`
-	TimeoutMS        int                  `json:"timeoutMs"`
-	HUDRegion        NormalizedRect       `json:"hudRegion"`
+	Provider string               `json:"provider,omitempty"`
+	MuMu     MuMuCaptureConfig    `json:"mumu"`
+	Leidian  LeidianCaptureConfig `json:"leidian"`
+	// PreferredMethods is the ordered method chain. Accepted values:
+	// mumu-sdk, printwindow-fullcontent, and the 雷电 per-frame methods
+	// leidian-window (PrintWindow of the LDPlayer render HWND),
+	// leidian-adb-raw (uncompressed screencap over the adb host protocol)
+	// and leidian-adb (adb exec-out screencap -p, the always-available
+	// fallback). For 雷电, the leidian-* entries are taken in order; when
+	// none are listed the chain defaults to
+	// [leidian-window, leidian-adb-raw, leidian-adb]. MuMu defaults are
+	// unchanged.
+	PreferredMethods []string `json:"preferredMethods"`
+	// TimeoutMS is the per-frame capture budget. 雷电 frame commands use a
+	// timeout slightly below it (minimum 300 ms); setup commands such as
+	// adb connect and ldconsole list2 keep a separate 5 s timeout.
+	TimeoutMS int            `json:"timeoutMs"`
+	HUDRegion NormalizedRect `json:"hudRegion"`
 }
 
 type MuMuCaptureConfig struct {
@@ -69,6 +81,9 @@ type LeidianCaptureConfig struct {
 	Serial         string `json:"serial"`
 	Package        string `json:"package"`
 	ConnectOnStart bool   `json:"connectOnStart"`
+	// ADBServerPort is the local adb host server port used by
+	// leidian-adb-raw. Zero means 5037.
+	ADBServerPort int `json:"adbServerPort,omitempty"`
 }
 
 type NormalizedRect struct {
@@ -84,7 +99,10 @@ type NormalizedPoint struct {
 }
 
 type SideLayout struct {
-	Search         NormalizedRect    `json:"search"`
+	Search NormalizedRect `json:"search"`
+	// NominalCenters are normalized in the fixed-height 1600x900 HUD
+	// calibration space. Layout.ReferenceWidth/Height still describe the
+	// scene/content transform and are not the HUD width basis.
 	NominalCenters []NormalizedPoint `json:"nominalCenters"`
 }
 
@@ -103,6 +121,20 @@ type LayoutConfig struct {
 	SpacingTolerance                   float64                  `json:"spacingTolerance"`
 	MirrorTolerance                    float64                  `json:"mirrorTolerance"`
 	RelocalizeAfterLowConfidenceFrames int                      `json:"relocalizeAfterLowConfidenceFrames"`
+	// Calibration holds the player's own boxes; nil keeps the automatic layout.
+	Calibration *RegionCalibration `json:"calibration,omitempty"`
+}
+
+// RegionCalibration is drawn by the player on one captured frame (see
+// docs/区域校准.md). Rects are fractions of the whole frame; each one is
+// independent and nil means automatic for that region and side.
+type RegionCalibration struct {
+	// Profile is the layout (camp/duel) of the frame the boxes were drawn on.
+	Profile     string          `json:"profile"`
+	LeftBeads   *NormalizedRect `json:"leftBeads,omitempty"`
+	RightBeads  *NormalizedRect `json:"rightBeads,omitempty"`
+	LeftAvatar  *NormalizedRect `json:"leftAvatar,omitempty"`
+	RightAvatar *NormalizedRect `json:"rightAvatar,omitempty"`
 }
 
 // LayoutProfile keeps camp and duel calibration independent. Coordinates are
@@ -181,6 +213,11 @@ type TrackingConfig struct {
 	ResetAfterMS         int     `json:"resetAfterMs"`
 }
 
+// DebugConfig: Directory holds diagnostics, bead dumps and crash.log;
+// RetentionFiles is how many bead dump files are kept there (0 = all).
+// SaveRaw, SaveAnnotated, SaveOnLowConfidence, MinimumIntervalMS and LogFile
+// have no consumer; they stay so existing config.json files keep loading under
+// strict decoding.
 type DebugConfig struct {
 	Enabled             bool   `json:"enabled"`
 	Directory           string `json:"directory"`
@@ -220,9 +257,34 @@ type UIConfig struct {
 	UpdateSource     string `json:"updateSource,omitempty"`
 	// WindowOpacity applies only to the compact timer overlay, in [0.40, 1.00].
 	WindowOpacity float64 `json:"windowOpacity"`
-	// FontScale scales compact-overlay text, in [0.80, 1.60].
-	FontScale   float64  `json:"fontScale"`
-	PlayerNames []string `json:"playerNames"`
+	// FontScale scales compact-overlay text, in [0.25, 3.00].
+	FontScale     float64 `json:"fontScale"`
+	OverlayMode   string  `json:"overlayMode"`
+	ShowBothSides bool    `json:"showBothSides"`
+	// MiniOpacity replaces WindowOpacity while the mini overlay is shown, in [0.20, 1.00].
+	MiniOpacity float64 `json:"miniOpacity"`
+	// MiniFloating is retained for config compatibility; desktop mini mode is always a separate floating window.
+	MiniFloating    bool     `json:"miniFloating"`
+	MiniAutoScale   bool     `json:"miniAutoScale"`
+	GPUAcceleration bool     `json:"gpuAcceleration"`
+	PlayerNames     []string `json:"playerNames"`
+	// Last top-left corners (screen pixels) of the full overlay and the mini
+	// window; nil centres the window. Restores are clamped to a visible monitor.
+	WindowPosition *ScreenPoint `json:"windowPosition,omitempty"`
+	MiniPosition   *ScreenPoint `json:"miniPosition,omitempty"`
+	// MiniSize is the timer-only pill size the user dragged its edges to
+	// (Fyne units); nil fits the text. The height also sets the clock size.
+	MiniSize *ScreenSize `json:"miniSize,omitempty"`
+}
+
+type ScreenPoint struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+type ScreenSize struct {
+	Width  float32 `json:"width"`
+	Height float32 `json:"height"`
 }
 
 func Default() Config {
@@ -244,7 +306,9 @@ func Default() Config {
 		},
 		Layout: LayoutConfig{
 			PreferredProfile: "auto",
-			ReferenceWidth:   1920, ReferenceHeight: 1080, ContentMode: "auto",
+			// Unity SurfaceView 覆盖完整物理屏幕；超宽/超高设备的装饰边框
+			// 也是游戏绘制内容，坐标必须按完整 Surface 映射，不能裁成 16:9。
+			ReferenceWidth: 1920, ReferenceHeight: 1080, ContentMode: "stretch",
 			AutoAspectTolerance: 0.015, BeadsPerSide: 4,
 			Left: SideLayout{
 				Search:         NormalizedRect{X: 0.04, Y: 0.05, Width: 0.18, Height: 0.12},
@@ -302,7 +366,7 @@ func Default() Config {
 		UI: UIConfig{
 			PollIntervalMS: 16, IdlePollIntervalMS: 400,
 			WindowWidth: 420, WindowHeight: 320,
-			MiniWidth: 280, MiniHeight: 96,
+			MiniWidth: 280, MiniHeight: 48,
 			SubstituteCooldownSeconds: 15,
 			SubstituteTable:           "assets/game/substitutes.json",
 			PlayerSide:                "auto",
@@ -313,6 +377,12 @@ func Default() Config {
 			UpdateSource:              "gitee",
 			WindowOpacity:             1,
 			FontScale:                 1,
+			OverlayMode:               "full",
+			ShowBothSides:             false,
+			MiniOpacity:               0.85,
+			MiniFloating:              false,
+			MiniAutoScale:             false,
+			GPUAcceleration:           false,
 			// Keep the published default neutral. Users can add their own names
 			// in config.json or through the settings window.
 			PlayerNames: []string{},
