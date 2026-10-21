@@ -189,6 +189,34 @@ object AssetLoader {
     }
 
     /**
+     * Brings an imported account-name image to the 1920×1080 HUD scale the engine reads it at:
+     * [scale] is [IdentityStore.importScale] of this phone's screen. Rewrites [file] as a PNG scaled
+     * by [scale] (a JPG becomes `<name>.png`, written to a temporary file first). Returns the stored
+     * file; [file] itself when [scale] is 1 or it cannot be decoded.
+     */
+    fun scaleIdentityImage(file: File, scale: Double): File {
+        if (scale == 1.0) return file
+        val src = BitmapFactory.decodeFile(file.path) ?: return file
+        val w = Math.round(src.width * scale).toInt().coerceAtLeast(1)
+        val h = Math.round(src.height * scale).toInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(src, w, h, true)
+        val out = File(file.parentFile, file.name.substringBeforeLast('.') + ".png")
+        val tmp = File(file.parentFile, out.name + IdentityStore.TMP_SUFFIX)
+        try {
+            FileOutputStream(tmp).use {
+                if (!scaled.compress(Bitmap.CompressFormat.PNG, 100, it)) throw java.io.IOException("encode ${out.name} failed")
+            }
+            if (!tmp.renameTo(out)) throw java.io.IOException("rename ${tmp.name} failed")
+            if (out != file) file.delete()
+        } finally {
+            tmp.delete()
+            if (scaled !== src) scaled.recycle()
+            src.recycle()
+        }
+        return out
+    }
+
+    /**
      * 取走 native 待保存的对面账号裁剪（Go identity.saveOppCrop），写成
      * filesDir/identity/seen/opp-<yyyyMMdd-HHmmss>.png（先写 .tmp 再改名，不留半个文件）并注册回
      * AssetStore；seen/ 只保留最新 [IdentityStore.SEEN_CAP] 张（AND-05）。

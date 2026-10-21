@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Host check of the Android app's pure-Kotlin capture / identity / update / loader logic:
-# capture/CaptureSize.kt, Housekeeping.kt, IdentityStore.kt, update/ApkCheck.kt, NewestWins.kt
+# capture/CaptureSize.kt, Housekeeping.kt, IdentityStore.kt (+ tracker/NinjaRules.kt for GoText),
+# update/ApkCheck.kt, NewestWins.kt
 # (AppCheck.kt says what each case covers). Compiled with Kotlin 2.0.21 from the Gradle cache and
 # run on the host JVM: no device, no Gradle, no network.
 # Run: android/tools/appcheck/run.sh
@@ -30,6 +31,6 @@ trap 'rm -rf "$OUT"' EXIT
 # No android.jar on the classpath: these files must stay free of Android APIs.
 "$JAVA_HOME/bin/java" -cp "$COMPILER" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
     -jvm-target 17 -no-stdlib -no-reflect -classpath "$STDLIB:$ANNOTATIONS" -d "$OUT/check.jar" \
-    "$KT/capture/CaptureSize.kt" "$KT/Housekeeping.kt" "$KT/IdentityStore.kt" "$KT/update/ApkCheck.kt" \
-    "$KT/NewestWins.kt" "$HERE/AppCheck.kt"
+    "$KT/capture/CaptureSize.kt" "$KT/Housekeeping.kt" "$KT/IdentityStore.kt" "$KT/tracker/NinjaRules.kt" \
+    "$KT/update/ApkCheck.kt" "$KT/NewestWins.kt" "$HERE/AppCheck.kt"
 "$JAVA_HOME/bin/java" -cp "$OUT/check.jar:$STDLIB" appcheck.AppCheckKt
