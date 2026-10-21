@@ -98,10 +98,30 @@ struct nameTemplate {
     bool requirePortrait = false;
 };
 
-struct scaledName {
-    Readout readout;
+// fineTemplate is one prepared size of a title strip.
+struct fineTemplate {
     PreparedPtr ncc;
     Point size;
+};
+
+// fineVariants are a strip's other fineFactors sizes at one scale, part of
+// that scale's cached set. They are prepared on first use: only strips whose
+// coarse locate passes ever need them, so the cache stays near its old size.
+struct fineVariants {
+    std::once_flag once;  // Go sync.Once
+    Gray src;             // the source strip (shares its pixels)
+    double scale = 0;
+    Point nominal;
+    std::vector<fineTemplate> list;
+    // get returns the distinct sizes in fineFactors order (reader.cpp).
+    const std::vector<fineTemplate>& get();
+};
+
+struct scaledName {
+    Readout readout;
+    PreparedPtr ncc;  // nominal size round(src·scale)
+    Point size;
+    std::shared_ptr<fineVariants> variants;  // nearby sizes, prepared on first use
     PreparedPtr coarse;
     PreparedPtr portrait;
     Point portraitSize;

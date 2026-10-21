@@ -11,6 +11,7 @@
 // （等价 Go 对 png.Decode 结果调用 match.ToGray）。
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -48,7 +49,37 @@ struct templateSpec {
     bool requirePortrait;
 };
 
+// fineFactors are the strip sizes the fine stage scores, relative to the
+// nominal round(src·scale): the nominal first, then a fixed order. A rendered
+// title can be a percent or two off its strip times the bead-derived HUD scale
+// (strip crop, resampling, phone aspect ratios): 鸣人[暴怒·第六尾] fits best at
+// +1%, and at the nominal size alone it hovered around the .80 threshold and
+// dropped out at many capture scales. Every size keeps the same threshold and
+// margin; a template scores the max over its sizes (earliest size on ties).
+// ±2% in 1% steps covers what the unchanged coarse locator admits (beyond
+// about ±2.5% it drops strips anyway) with at most 0.5% left over.
+constexpr double fineFactors[] = {1, .99, 1.01, .98, 1.02};
+
 }  // namespace
+
+// get returns the distinct sizes in fineFactors order, skipping sizes below
+// the 8px minimum and sizes already listed (the nominal included): at small
+// scales several factors round to the same pixels.
+const std::vector<fineTemplate>& fineVariants::get() {
+    std::call_once(once, [this] {
+        std::vector<Point> seen{nominal};
+        for (size_t k = 1; k < std::size(fineFactors); ++k) {
+            const double f = fineFactors[k];
+            Point size(iround(static_cast<double>(src.Bounds().Dx()) * scale * f),
+                       iround(static_cast<double>(src.Bounds().Dy()) * scale * f));
+            if (size.X < 8 || size.Y < 8 || std::find(seen.begin(), seen.end(), size) != seen.end()) continue;
+            seen.push_back(size);
+            Gray gray = match::ScaleGray(&src, size.X, size.Y);
+            list.push_back(fineTemplate{match::PrepareNCC(&gray, nullptr), size});
+        }
+    });
+    return list;
+}
 
 // NewReader uses the embedded A/S catalog by default.（Go NewReaderWithAvatars(AvatarOptions{})：
 // Android 没有外部开发图鉴，只用内置图鉴；图鉴不可用时 avatars == nullptr。）
@@ -141,6 +172,10 @@ evidence Reader::readAnchored(const RGBA* img, Rect roi, double scale, const por
                 p.ncc = match::PrepareNCC(&gray, nullptr);
                 p.size = gray.Bounds().Size();
                 p.coarse = match::PrepareNCC(&small, nullptr);
+                p.variants = std::make_shared<fineVariants>();
+                p.variants->src = t.gray;
+                p.variants->scale = scale;
+                p.variants->nominal = p.size;
                 p.requirePortrait = t.requirePortrait;
                 if (!t.portrait.Nil()) {
                     int pw = iround(static_cast<double>(t.portrait.Bounds().Dx()) * scale);
@@ -186,6 +221,7 @@ evidence Reader::readAnchored(const RGBA* img, Rect roi, double scale, const por
     // the same strict '>', so ties still go to the first template.
     struct titleResult {
         match::Score score;
+        fineTemplate matched;  // the size that matched
         bool ok = false;
     };
     std::vector<titleResult> results(templates.size());
@@ -202,16 +238,29 @@ evidence Reader::readAnchored(const RGBA* img, Rect roi, double scale, const por
         Point point(roi.Min.X + iround(static_cast<double>(coarse.Peak.X) / factor),
                     roi.Min.Y + iround(static_cast<double>(coarse.Peak.Y) / factor));
         int radius = static_cast<int>(std::ceil(2 / factor));
-        Rect candidate = Rect(point, point.Add(t.size)).Inset(-radius).Intersect(roi);
-        match::Query fq;
-        fq.Image = &view;
-        fq.Gray = &gray;
-        fq.ROI = candidate;
-        fq.Prepared = t.ncc.get();
-        match::Score score;
-        if (!match::NCC{}.Match(fq, score)) return;
-        results[i].score = score;
-        results[i].ok = true;
+        // Every size is scored at the same top-left positions around the
+        // coarse peak; only its window grows to fit the size.
+        auto fine = [&](const fineTemplate& f, match::Score& score) {
+            Rect candidate = Rect(point, point.Add(f.size)).Inset(-radius).Intersect(roi);
+            match::Query fq;
+            fq.Image = &view;
+            fq.Gray = &gray;
+            fq.ROI = candidate;
+            fq.Prepared = f.ncc.get();
+            return match::NCC{}.Match(fq, score);
+        };
+        titleResult result;
+        result.matched = fineTemplate{t.ncc, t.size};
+        if (!fine(result.matched, result.score)) return;
+        for (const fineTemplate& v : t.variants->get()) {
+            match::Score score;
+            if (fine(v, score) && score.Value > result.score.Value) {
+                result.score = score;
+                result.matched = v;
+            }
+        }
+        result.ok = true;
+        results[i] = std::move(result);
     });
     evidence best;
     // Go map[string]float64：只用于逐名取最大值，结果与迭代顺序无关。
@@ -224,10 +273,12 @@ evidence Reader::readAnchored(const RGBA* img, Rect roi, double scale, const por
         double prev = it == scores.end() ? 0 : it->second;
         scores[t.readout.Name] = std::max(prev, score.Value);
         if (score.Value > best.Score) {
+            // The Tracker rechecks exactly the size that matched.
+            const fineTemplate& matched = results[i].matched;
             best = evidence{};
             static_cast<Readout&>(best) = t.readout;
-            best.template_ = t.ncc;
-            best.rect = Rect(score.Peak, score.Peak.Add(t.size));
+            best.template_ = matched.ncc;
+            best.rect = Rect(score.Peak, score.Peak.Add(matched.size));
             best.Score = score.Value;
         }
     }

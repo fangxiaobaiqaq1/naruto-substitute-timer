@@ -6,6 +6,7 @@ import (
 	"image"
 	_ "image/png"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -63,8 +64,9 @@ type nameTemplate struct {
 }
 type scaledName struct {
 	readout         Readout
-	ncc             *match.PreparedNCC
+	ncc             *match.PreparedNCC // nominal size round(src·scale)
 	size            image.Point
+	variants        *fineVariants // nearby sizes, prepared on first use
 	coarse          *match.PreparedNCC
 	portrait        *match.PreparedNCC
 	portraitSize    image.Point
@@ -89,6 +91,55 @@ type readerScale struct {
 
 // readerScales bounds the scale cache: two sides times two profiles.
 const readerScales = 4
+
+// fineTemplate is one prepared size of a title strip.
+type fineTemplate struct {
+	ncc  *match.PreparedNCC
+	size image.Point
+}
+
+// fineFactors are the strip sizes the fine stage scores, relative to the
+// nominal round(src·scale): the nominal first, then a fixed order. A rendered
+// title can be a percent or two off its strip times the bead-derived HUD scale
+// (strip crop, resampling, phone aspect ratios): 鸣人[暴怒·第六尾] fits best at
+// +1%, and at the nominal size alone it hovered around the .80 threshold and
+// dropped out at many capture scales. Every size keeps the same threshold and
+// margin; a template scores the max over its sizes (earliest size on ties).
+// ±2% in 1% steps covers what the unchanged coarse locator admits (beyond
+// about ±2.5% it drops strips anyway) with at most 0.5% left over.
+var fineFactors = []float64{1, .99, 1.01, .98, 1.02}
+
+// fineVariants are a strip's other fineFactors sizes at one scale, part of
+// that scale's cached set. They are prepared on first use: only strips whose
+// coarse locate passes ever need them, so the cache stays near its old size.
+type fineVariants struct {
+	once    sync.Once
+	src     *image.Gray
+	scale   float64
+	nominal image.Point
+	list    []fineTemplate
+}
+
+// get returns the distinct sizes in fineFactors order, skipping sizes below
+// the 8px minimum and sizes already listed (the nominal included): at small
+// scales several factors round to the same pixels.
+func (v *fineVariants) get() []fineTemplate {
+	if v == nil {
+		return nil
+	}
+	v.once.Do(func() {
+		seen := []image.Point{v.nominal}
+		for _, f := range fineFactors[1:] {
+			size := image.Pt(int(math.Round(float64(v.src.Bounds().Dx())*v.scale*f)), int(math.Round(float64(v.src.Bounds().Dy())*v.scale*f)))
+			if size.X < 8 || size.Y < 8 || slices.Contains(seen, size) {
+				continue
+			}
+			seen = append(seen, size)
+			v.list = append(v.list, fineTemplate{ncc: match.PrepareNCC(match.ScaleGray(v.src, size.X, size.Y), nil), size: size})
+		}
+	})
+	return v.list
+}
 
 func NewReader() *Reader { return NewReaderWithAvatars(AvatarOptions{}) }
 
@@ -203,8 +254,9 @@ func (r *Reader) readAnchored(img *image.RGBA, roi image.Rectangle, scale float6
 	// concurrently. The reduction below stays sequential in prepared order with
 	// the same strict '>', so ties still go to the first template.
 	type titleResult struct {
-		score match.Score
-		ok    bool
+		score    match.Score
+		template fineTemplate // the size that matched
+		ok       bool
 	}
 	results := make([]titleResult, len(prepared))
 	parallelFor(len(prepared), func(i int) {
@@ -215,12 +267,24 @@ func (r *Reader) readAnchored(img *image.RGBA, roi image.Rectangle, scale float6
 		}
 		point := image.Pt(roi.Min.X+int(math.Round(float64(coarse.Peak.X)/factor)), roi.Min.Y+int(math.Round(float64(coarse.Peak.Y)/factor)))
 		radius := int(math.Ceil(2 / factor))
-		candidate := image.Rectangle{Min: point, Max: point.Add(t.size)}.Inset(-radius).Intersect(roi)
-		score, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: candidate, Prepared: t.ncc})
+		// Every size is scored at the same top-left positions around the
+		// coarse peak; only its window grows to fit the size.
+		fine := func(f fineTemplate) (match.Score, error) {
+			candidate := image.Rectangle{Min: point, Max: point.Add(f.size)}.Inset(-radius).Intersect(roi)
+			return (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: candidate, Prepared: f.ncc})
+		}
+		nominal := fineTemplate{ncc: t.ncc, size: t.size}
+		score, err := fine(nominal)
 		if err != nil {
 			return
 		}
-		results[i] = titleResult{score, true}
+		result := titleResult{score, nominal, true}
+		for _, v := range t.variants.get() {
+			if score, err := fine(v); err == nil && score.Value > result.score.Value {
+				result = titleResult{score, v, true}
+			}
+		}
+		results[i] = result
 	})
 	var best evidence
 	scores := map[string]float64{}
@@ -231,7 +295,9 @@ func (r *Reader) readAnchored(img *image.RGBA, roi image.Rectangle, scale float6
 		score := results[i].score
 		scores[t.readout.Name] = max(scores[t.readout.Name], score.Value)
 		if score.Value > best.Score {
-			best = evidence{Readout: t.readout, template: t.ncc, rect: image.Rectangle{Min: score.Peak, Max: score.Peak.Add(t.size)}}
+			// The Tracker rechecks exactly the size that matched.
+			matched := results[i].template
+			best = evidence{Readout: t.readout, template: matched.ncc, rect: image.Rectangle{Min: score.Peak, Max: score.Peak.Add(matched.size)}}
 			best.Score = score.Value
 		}
 	}
@@ -278,6 +344,7 @@ func (r *Reader) preparedAt(scale float64) []scaledName {
 		coarseScale := min(scale, .5)
 		small := match.ScaleGray(t.gray, int(math.Round(float64(t.gray.Bounds().Dx())*coarseScale)), int(math.Round(float64(t.gray.Bounds().Dy())*coarseScale)))
 		p := scaledName{readout: t.readout, ncc: match.PrepareNCC(gray, nil), size: gray.Bounds().Size(), coarse: match.PrepareNCC(small, nil), requirePortrait: t.requirePortrait}
+		p.variants = &fineVariants{src: t.gray, scale: scale, nominal: p.size}
 		if t.portrait != nil {
 			pw := int(math.Round(float64(t.portrait.Bounds().Dx()) * scale))
 			ph := int(math.Round(float64(t.portrait.Bounds().Dy()) * scale))

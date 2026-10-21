@@ -3,6 +3,7 @@ package ninja
 // Verbatim copies of the pre-parallel implementations (serial NCC under the
 // catalog lock, full-frame portrait gray, At()-based gray/mask, serial
 // catalog load). The equivalence tests compare the current code against them.
+// legacyRead also scores the nearby title sizes (fineFactors), serially.
 
 import (
 	"bytes"
@@ -272,6 +273,7 @@ func legacyRead(r *Reader, img *image.RGBA, roi image.Rectangle, scale float64) 
 			coarseScale := min(scale, .5)
 			small := match.ScaleGray(t.gray, int(math.Round(float64(t.gray.Bounds().Dx())*coarseScale)), int(math.Round(float64(t.gray.Bounds().Dy())*coarseScale)))
 			p := scaledName{readout: t.readout, ncc: match.PrepareNCC(gray, nil), size: gray.Bounds().Size(), coarse: match.PrepareNCC(small, nil), requirePortrait: t.requirePortrait}
+			p.variants = &fineVariants{src: t.gray, scale: scale, nominal: p.size}
 			if t.portrait != nil {
 				pw := int(math.Round(float64(t.portrait.Bounds().Dx()) * scale))
 				ph := int(math.Round(float64(t.portrait.Bounds().Dy()) * scale))
@@ -312,9 +314,16 @@ func legacyRead(r *Reader, img *image.RGBA, roi image.Rectangle, scale float64) 
 		if err != nil {
 			continue
 		}
+		matched, size := t.ncc, t.size
+		for _, v := range t.variants.get() {
+			candidate := image.Rectangle{Min: point, Max: point.Add(v.size)}.Inset(-radius).Intersect(roi)
+			if s, err := (match.NCC{}).Match(match.Query{Image: view, Gray: gray, ROI: candidate, Prepared: v.ncc}); err == nil && s.Value > score.Value {
+				score, matched, size = s, v.ncc, v.size
+			}
+		}
 		scores[t.readout.Name] = max(scores[t.readout.Name], score.Value)
 		if score.Value > best.Score {
-			best = evidence{Readout: t.readout, template: t.ncc, rect: image.Rectangle{Min: score.Peak, Max: score.Peak.Add(t.size)}}
+			best = evidence{Readout: t.readout, template: matched, rect: image.Rectangle{Min: score.Peak, Max: score.Peak.Add(size)}}
 			best.Score = score.Value
 		}
 	}
