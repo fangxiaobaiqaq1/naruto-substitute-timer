@@ -198,7 +198,7 @@ func Validate(c Config) error {
 	default:
 		return fmt.Errorf("ui.playerSide: must be ask, left, right or auto")
 	}
-	return nil
+	return validateRanges(c)
 }
 
 // captureMethod reports whether method is an accepted capture method name.
