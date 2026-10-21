@@ -140,7 +140,7 @@ namespace {
 //
 // 标定：4 豆来自实机（188/218/248/278 @ y=155）。
 const std::vector<Bead>& defaultBeadLayout() {
-    static const std::vector<Bead> v = {
+    static const std::vector<Bead>& v = *new std::vector<Bead>{
         {"left", 0, 188, 155},
         {"left", 1, 218, 155},
         {"left", 2, 248, 155},
@@ -157,7 +157,7 @@ const std::vector<Bead>& defaultBeadLayout() {
 // duelBeadLayout 真决斗场 HUD 比训练营整排偏右约 21 逻辑像素。
 // 985×594 实机：训练营左豆 x≈96/111/127/142，决斗场 x≈107/122/137/152。
 const std::vector<Bead>& duelBeadLayout() {
-    static const std::vector<Bead> v = {
+    static const std::vector<Bead>& v = *new std::vector<Bead>{
         {"left", 0, 209, 174},
         {"left", 1, 239, 174},
         {"left", 2, 269, 174},

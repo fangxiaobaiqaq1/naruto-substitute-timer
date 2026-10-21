@@ -11,8 +11,9 @@
 namespace nt {
 
 AssetStore& AssetStore::Instance() {
-    static AssetStore store;
-    return store;
+    // Never destroyed: exit() runs static destructors while a frame may still read assets.
+    static AssetStore* store = new AssetStore();
+    return *store;
 }
 
 void AssetStore::Clear() {

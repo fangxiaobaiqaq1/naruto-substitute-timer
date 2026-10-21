@@ -145,11 +145,11 @@ void avatarGrayMask(const AssetImage& src, Gray& gray, Gray& mask);
 Rect avatarAnchorRect(const Rect& roi, double scale);
 double coarseAvatarScore(const Gray* query, const Gray* templ, const Gray* mask);
 // avatarFactorsFull is the strict multi-scale display-factor sweep.
-inline const std::vector<double> avatarFactorsFull = {.55, .60, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45};
+inline const std::vector<double>& avatarFactorsFull = *new std::vector<double>{.55, .60, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45};
 // avatarFactorPrimary is the full-scan locator factor; avatarFactorsFine is the
 // full sweep without it, in the same order, for the re-scored leaders.
-inline const std::vector<double> avatarFactorPrimary = {.60};
-inline const std::vector<double> avatarFactorsFine = {.55, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45};
+inline const std::vector<double>& avatarFactorPrimary = *new std::vector<double>{.60};
+inline const std::vector<double>& avatarFactorsFine = *new std::vector<double>{.55, .65, .70, .75, .85, 1.0, 1.15, 1.30, 1.45};
 bool avatarVariantPolicy(const std::string& name);
 void avatarFactorSize(const avatarEntry* entry, double scale, double factor, int& w, int& h);
 bool samePackedPix(const std::vector<uint8_t>& packed, const RGBA* img, const Rect& roi);

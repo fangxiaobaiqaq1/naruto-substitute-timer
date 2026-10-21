@@ -25,9 +25,9 @@
 
 namespace nt::scene {
 
-inline const std::string DefaultManifest = "assets/templates/manifest.json";
+inline const std::string& DefaultManifest = *new std::string("assets/templates/manifest.json");
 // AssetStore key of the embedded manifest.
-inline const std::string ManifestAsset = "templates/manifest.json";
+inline const std::string& ManifestAsset = *new std::string("templates/manifest.json");
 
 struct TemplateSpec {
     double TemplateScale = 0;       // "templateScale"

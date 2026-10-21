@@ -13,9 +13,9 @@ namespace nt::factory {
 
 // Kind 是引擎类型标识。
 using Kind = std::string;
-inline const Kind KindRGB = "rgb";      // 纯 RGB 区间判色
-inline const Kind KindOpenCV = "opencv";  // 不支持
-inline const Kind KindModel = "model";    // 不支持
+inline const Kind& KindRGB = *new Kind("rgb");      // 纯 RGB 区间判色
+inline const Kind& KindOpenCV = *new Kind("opencv");  // 不支持
+inline const Kind& KindModel = *new Kind("model");    // 不支持
 
 struct Config {
     Kind Kind_ = KindRGB;

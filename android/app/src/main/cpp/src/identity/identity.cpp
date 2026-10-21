@@ -21,8 +21,11 @@ namespace nt::identity {
 
 namespace {
 
-std::mutex mineMu;
-std::shared_ptr<const std::set<std::string>> mineSet = std::make_shared<const std::set<std::string>>();
+// Process-global state is never destroyed: exit() runs static destructors
+// while the analysis thread and the pool workers may still read it.
+std::mutex& mineMu = *new std::mutex;
+std::shared_ptr<const std::set<std::string>>& mineSet =
+    *new std::shared_ptr<const std::set<std::string>>(std::make_shared<const std::set<std::string>>());
 uint64_t mineRevision = 0;
 
 // The set is immutable after publication. Readers can keep a snapshot while
@@ -245,10 +248,10 @@ Readout readNames(const RGBA* img, const std::vector<Named>& book, detect::Conte
     return out;
 }
 
-std::mutex saveMu;
+std::mutex& saveMu = *new std::mutex;
 TimeNs lastSave = 0;
 bool havePending = false;
-RGBA pendingCrop;
+RGBA& pendingCrop = *new RGBA;
 
 }  // namespace
 

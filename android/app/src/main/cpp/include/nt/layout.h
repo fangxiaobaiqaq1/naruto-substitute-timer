@@ -10,9 +10,9 @@ namespace nt::layout {
 
 // Go: type Mode string
 using Mode = std::string;
-inline const Mode Auto = "auto";
-inline const Mode Stretch = "stretch";
-inline const Mode Letterbox = "letterbox";
+inline const Mode& Auto = *new Mode("auto");
+inline const Mode& Stretch = *new Mode("stretch");
+inline const Mode& Letterbox = *new Mode("letterbox");
 
 struct Transform {
     Rect Client;
