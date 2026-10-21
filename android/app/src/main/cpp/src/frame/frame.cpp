@@ -12,6 +12,8 @@
 #include <vector>
 
 #include "nt/factory.h"
+#include "nt/hudtext.h"
+#include "nt/identity.h"
 #include "nt/hash.h"
 #include "nt/match.h"
 #include "nt/parallel.h"
@@ -204,7 +206,7 @@ Frame DedupedAnalysis::analyze(const RGBA* img, engine::Engine* eng, detect::Con
     return f;
 }
 
-Pipeline::Pipeline(const config::Config& cfg) : cfg_(cfg) {
+Pipeline::Pipeline(const config::Config& cfg, bool text) : cfg_(cfg), textWanted_(text) {
     // Go newSelectableSnapshotter: mode, _ := detect.ParseMode(cfg.Layout.ContentMode)
     detect::ContentMode mode = detect::ModeAuto;
     if (!detect::ParseMode(cfg_.Layout.ContentMode, mode)) {
@@ -212,10 +214,32 @@ Pipeline::Pipeline(const config::Config& cfg) : cfg_(cfg) {
     }
     mode_ = mode;
     std::string err;
-    engine_ = factory::New(factory::FromApp(cfg_), &err);
+    engine_ = build(cfg_, &err);
     if (engine_ == nullptr) {
         error_ = err.empty() ? std::string("engine build failed") : err;
     }
+}
+
+Pipeline::~Pipeline() = default;
+
+// factory::New, wrapped by the account text reader for the live pipeline (Go factory.NewLive).
+std::shared_ptr<engine::Engine> Pipeline::build(const config::Config& cfg, std::string* err) {
+    std::shared_ptr<engine::Engine> inner = factory::New(factory::FromApp(cfg), err);
+    if (inner == nullptr || !textWanted_) {
+        if (inner != nullptr) text_ = nullptr;
+        return inner;
+    }
+    hudtext::Worker* worker = &hudtext::Worker::Instance();
+    auto text = std::make_shared<hudtext::Engine>(inner, cfg, identity::MineNames,
+                                                  [worker](char32_t r) { return worker->Known(r); }, worker);
+    text->SetEnabled(textEnabled_);
+    text_ = text;
+    return text;
+}
+
+void Pipeline::SetTextEnabled(bool enabled) {
+    textEnabled_ = enabled;
+    if (text_ != nullptr) text_->SetEnabled(enabled);
 }
 
 Frame Pipeline::Analyze(const RGBA* img, TimeNs started, TimeNs capturedAt, const std::string& method) {
@@ -257,8 +281,10 @@ void Pipeline::ResetDelivery() {
 // 对 UI 的效果相同：同一画面不复用旧结果、不算重复观测。
 bool Pipeline::Rebuild(const config::Config& cfg, std::string* err) {
     std::string e;
-    std::shared_ptr<engine::Engine> next = factory::New(factory::FromApp(cfg), &e);
+    std::shared_ptr<hudtext::Engine> previousText = text_;
+    std::shared_ptr<engine::Engine> next = build(cfg, &e);
     if (next == nullptr) {
+        text_ = previousText;
         if (err != nullptr) *err = e.empty() ? std::string("engine build failed") : e;
         return false;
     }

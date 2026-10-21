@@ -7,8 +7,10 @@
 - 包名 `com.narutotimer`，minSdk 31 / targetSdk 34 / compileSdk 35，AGP 8.7.3，Kotlin 2.0.21，
   Gradle 8.11.1（wrapper 已生成），NDK 27.2.12479018，CMake 3.22.1，ABI x86_64 + arm64-v8a。
 - 无 AndroidX、无第三方 Kotlin 依赖（纯 framework API）。C++ 只依赖 vendored nlohmann/json。
+  文字识别模型由自写的 C++ 执行（§2 cpp-ocr-hudtext），不带 ONNX Runtime。
 - **忠实移植原则（继承本来的思想）**：算法、阈值、ROI、常量、模板名、判定顺序逐行对应 Go；
-  保留 Go 里解释"为什么"的中文注释。只删掉 Windows/桌面/OCR(onnx, hudtext)/更新/诊断录制。
+  保留 Go 里解释"为什么"的中文注释。只删掉 Windows/桌面/更新/诊断录制；OCR 只移植账号认边部分
+  （Go hudtext 的账号 + internal/ocr 的行识别），与 Go 不同之处写在 nt/hudtext.h 开头。
   识别烟测使用 hostcheck；事件验收必须再经过 JNI 解码和真实 Session/SideClock，不能以静态豆数替代。
 
 ---
@@ -151,11 +153,32 @@ android/
 - `ConfiguredLayout::PositionsInImage(profile, img, area)` 在内置默认四槽标定上应用当前帧 `HUDRowOffset`；
   显式用户标定及仅尺寸的 `PositionsIn/PositionsFor` 保持原值。六槽扩展必须保留首豆的 X 偏移。
 - `factory::New` = `NewGatedWithGuess(scene::NewGate(cfg.App), rgb::Engine(ConfiguredLayout(mode, cfg.App.Layout), cfg.App.Vision), adapt(identity::Guesser(cfg.App)))`。
-  hudtext/OCR 包装（Go `NewLive`）不移植；`Result.TextStatus/TextError` 恒空。
+  `Pipeline(cfg, text = true)`（只有 jni.cpp，且已 `nativeSetTextModel`）再包 `hudtext::Engine`（Go `NewLive` 的安卓版，
+  §cpp-ocr-hudtext）；hostcheck / 一致性语料用 `Pipeline(cfg)`，结果与 Go `factory.New` 相同。
 - `Pipeline::Analyze(img, started, capturedAt, method)` = `DedupedAnalysis::analyze` → 交付判定（成功帧 `Sequence++`，
   `Duplicate = havePrevious && fingerprint == previous`）。`Frame::Reused` 标记命中去重缓存。
 - 哈希：`nt/hash.h`（进程内 wyhash 替代 maphash，只需等值语义）。`pixelHash` 只哈希可见像素行（stride 填充不是观测）。
 - 依赖：所有 C++ 模块。
+
+### cpp-ocr-hudtext（对局顶部账号文字认边）
+| Go | 目标 |
+|---|---|
+| internal/ocr/local_rows.go（recognizeRow、decodeCharacters、sessionCharacters）+ x/image/draw BiLinear/NearestNeighbor | src/ocr/recognizer.cpp |
+| ONNX Runtime 执行 `internal/ocr/neuraldata/recognizer.onnx` | src/ocr/net.cpp（ONNX 解析 + 25 种算子）、src/ocr/gemm.cpp（矩阵乘、逐通道卷积） |
+| internal/hudtext/images.go（nameRegions、lettering、buildSheet） | src/hudtext/images.cpp |
+| internal/hudtext/text_words.go、parse.go（compact、validAccount、consensus 的账号部分） | src/hudtext/text.cpp |
+| internal/hudtext/glyph_evidence.go、bound_value.go | src/hudtext/evidence.cpp |
+| internal/hudtext/engine.go、pause.go | src/hudtext/engine.cpp |
+
+- 头文件：`nt/ocr.h`（`ocr::Recognizer`）、`nt/ocr_net.h`（私有）、`nt/hudtext.h`（`hudtext::Engine`、`Worker`、纯函数）。
+- 同一个模型文件（APK `assets/ocr/recognizer.onnx`，不压缩）。行预处理、CTC 解码、分词、三取二、字形证据逐行对应 Go；
+  网络结果与 ONNX Runtime 1.27.0 只差浮点累加顺序（随机输入最大差 7e-6；两段视频 166 帧的全部 996 个原文与
+  Go/ORT 逐字相同，`tools/ocrhost` 对 `tools/ocrcheck`）。arm64 的矩阵乘允许 FMLA，x86_64 的 SSE/AVX 路径逐位相同。
+- 只取账号，不认忍者名（安卓忍者名仍走模板/头像）；与 Go 的差别（卡片挡住行尾、头像挡住账号末尾、装饰字、
+  不用排除法、保持期间留读法、时限 4 s）见 nt/hudtext.h 开头。
+- 线程：`hudtext::Worker` 一个常驻线程，一次一个任务（每个任务另起 1 个线程分行）；模型第一次需要时从 AssetManager
+  读，空闲 20 s 释放（`nativeReleaseTextModel` 立即释放）。分析线程只做裁条、像素签名和字形核验，从不等待识别。
+- Kotlin 每帧 `nativeSetTextRecognition(session.wantsTextRecognition())`：只在「自动认边」且我方未知时读。
 
 ### kt-tracker
 | Go | 目标 |
@@ -251,6 +274,10 @@ Go → C++ 翻译规则：
 | `nativeTakeOppCrop()` | `()[I` | `[w, h, argb...]` 或 null |
 | `nativeLastGeometry()` | `()[F` | 最近一次分析（含去重复用）帧的每帧几何（docs/区域校准.md），布局见下；还没有分析过帧或引擎刚重建（`nativeInit/nativeFinishAssets/nativeSetCalibration/nativeRelease`）时为 null。Kotlin：`NativeCore.lastGeometry(): FrameGeometry?` |
 | `nativeResetDelivery()` / `nativeRelease()` / `nativeResultHeaderBytes()` | | |
+| `nativeSetTextModel(assets, path)` | `(AssetManager,String)Z` | 文字认边模型位置（进程内设一次，`nativeFinishAssets` 前）；有它 `nativeFinishAssets` 才建 `Pipeline(cfg, text = true)` |
+| `nativeSetTextRecognition(on)` | `(Z)V` | 文字认边开关（原子量，下一帧生效） |
+| `nativeTextStatus()` | `()String` | `"<状态>\n<原因>\n<模型已加载 0/1>"`（最近一帧之后的快照，`g_cfgMu`）；没有模型 = null |
+| `nativeReleaseTextModel()` | `()V` | 立即释放识别模型 |
 
 `method`：0 = `android-media-projection`，1 = `android-accessibility-screenshot`，2 = `android-buffer`（进入帧指纹）。
 `capturedAtNanos` ≤ 0 时 native 用 `NowNs()`；它同时作为 Go 的 `started` 与 `capturedAt`。
@@ -308,6 +335,7 @@ Gradle 任务 `syncRecognitionAssets`（app/build.gradle.kts）把仓库资源�
 | `assets/avatars/*.png`, `assets/avatars/index.json` | `avatars/…` |
 | `assets/game/*.json` | `game/…`（打包在 APK 里，识别链不读，AssetLoader 不加载） |
 | `internal/ninja/templates/*.png`（排除 `*.source.png`） | `ninja_templates/…` |
+| `internal/ocr/neuraldata/{recognizer.onnx,OCR-MODEL-LICENSE.md}` | `ocr/…`（native 用 AAssetManager 读，AssetLoader 不读） |
 | 用户：`filesDir/identity/**/*.{png,jpg,jpeg}` | `identity/<相对路径>` |
 
 `AssetLoader.loadAll`（后台线程，TimerApp.onCreate 触发）：

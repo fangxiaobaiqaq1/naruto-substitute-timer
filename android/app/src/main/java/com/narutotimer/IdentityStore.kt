@@ -17,8 +17,9 @@ import kotlin.math.min
  *   「清除自动收集」).
  * - Images must pass [rejectReason] (audit AND-06): a name strip is about 300×40 px, while a
  *   48 MP photo needs about 200 MB to decode and used to leave the engine FAILED at every start.
- * - The phone has no text recognition: a name typed in 「我的名字」 only works through an image
- *   labelled with it ([labelFromFile], Go identity.LoadBook). [importedLabels] tells the UI which
+ * - Images are optional: a name typed in 「我的名字」 is read in the battle HUD title by the native
+ *   text reader (nt/hudtext.h). An image labelled with a typed name ([labelFromFile], Go
+ *   identity.LoadBook) also matches on the VS loading screen; [importedLabels] tells the UI which
  *   names have one. The engine reads an image at the 1920×1080 HUD scale, so a crop of this phone's
  *   own screenshot is brought to it on import ([importScale]).
  */

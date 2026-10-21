@@ -76,6 +76,8 @@ object FrameLoop {
     @Volatile private var lastWidth = 0
     @Volatile private var lastHeight = 0
     @Volatile private var lastResult: AnalysisResult? = null
+    /** Analysis thread only: the session side last logged (a change is logged once). */
+    private var loggedSide = ""
 
     /**
      * Per analysis thread: staging copies for [analyzeViaBitmap] (dropped by a hardware-buffer
@@ -164,6 +166,13 @@ object FrameLoop {
                     // Heartbeats are only valid after a freshly captured frame was analyzed.
                     app.session.onFrame(result)
                     app.session.onHeartbeat(System.nanoTime())
+                    // Account-text side detection runs only while the session still needs a side.
+                    NativeCore.nativeSetTextRecognition(app.session.wantsTextRecognition())
+                    val side = app.session.side
+                    if (side != loggedSide) {
+                        Log.i(TAG, "side: ${side.ifEmpty { "unknown" }} (${result.scene.ifEmpty { "-" }}, player ${result.playerSide.ifEmpty { "-" }})")
+                        loggedSide = side
+                    }
                     AssetLoader.drainOppCrop(app)
                 }
                 totalNs.addAndGet(elapsed)

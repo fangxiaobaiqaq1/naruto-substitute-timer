@@ -9,6 +9,9 @@ Windows x64/cgo 发布版将下列两份文件以及 `vcruntime/` 中的四个 V
 
 两份文件均直接取自官方 PyPI 分发包，未修改、未重新训练。归档 URL、归档 SHA-256 和成员路径见 [provenance.json](provenance.json)。记录中的归档哈希已与 PyPI 元数据核对，归档内成员也已与此目录文件逐字节核对。名字库另在 `assets/game/` 与 `internal/hudtext/data/`，不属于神经网络权重。
 
+安卓 APK 带同一个 `recognizer.onnx`（`assets/ocr/`，与许可文件一起；Gradle 构建时从本目录同步，不另存副本），
+由安卓自己的 C++ 代码执行（`android/app/src/main/cpp/src/ocr`），不带 ONNX Runtime；只用于读对局顶部的账号认边。
+
 模型在内存中加载。原生运行库首次使用时释放至当前用户缓存目录 `naruto-timer/ocr/` 下的版本目录，同版本复用；加载前校验内容哈希。模型缓存不保存用户画面。
 
 Windows 10/11 x64 发布版额外内置 Microsoft Visual C++ v14 x64 运行库 14.51.36247.0 的 `vcruntime140.dll`、`vcruntime140_1.dll`、`msvcp140.dll`、`msvcp140_1.dll`，无需用户安装 VC 安装程序。四个文件取自官方 Visual Studio Community 2026 稳定版的 VC 开发者组件，并与独立 Redistributable 安装包中的对应文件逐字节一致，保留原始字节及微软数字签名；完整下载 URL、归档位置、哈希与许可见 [vcruntime/provenance.json](vcruntime/provenance.json) 和 [vcruntime/README.md](vcruntime/README.md)。递归依赖检查的其余项为 Windows 10/11 自带的系统 DLL 与 UCRT。

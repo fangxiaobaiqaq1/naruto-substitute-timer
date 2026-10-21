@@ -28,7 +28,8 @@ import java.util.Locale
  * - 用户账号名图鉴：filesDir/identity/（含 seen/、fight/）下 png/jpg/jpeg，key 为 "identity/<相对路径>"。
  *   seen/ 先裁到最新 [IdentityStore.SEEN_CAP] 张；过大的图片跳过并记入 errors，单个文件（含 OOM）
  *   失败不影响其余资源和引擎构建（[IdentityStore]，AND-05/AND-06）。
- * - 最后设置我方账号名（读当时的设置，[applyPlayerNames]）与区域校准，并 nativeFinishAssets() 构建引擎。
+ * - 最后设置我方账号名（读当时的设置，[applyPlayerNames]）、区域校准与文字识别模型的位置
+ *   （assets/ocr/recognizer.onnx，native 用到时才读），并 nativeFinishAssets() 构建引擎。
  *
  * 读文件、去色彩块和像素拷贝都用复用的暂存缓冲，加载结束即释放（docs/性能优化-android-app.md）。
  */
@@ -113,6 +114,8 @@ object AssetLoader {
         val decoded = System.nanoTime()
         if (settings != null) applyPlayerNames(settings) else NativeCore.setPlayerNames(playerNames)
         if (settings != null && !NativeCore.setCalibration(settings)) errors += "calibration: ${NativeCore.lastError()}"
+        // 对局顶部账号文字认边的识别模型：native 只记下位置，第一次要读账号时才加载（nt/hudtext.h）。
+        if (!NativeCore.nativeSetTextModel(am, NativeCore.TEXT_MODEL_ASSET)) errors += "text model: ${NativeCore.lastError()}"
         val ready = NativeCore.nativeFinishAssets()
         val nativeError = if (ready) "" else NativeCore.lastError()
         val now = System.nanoTime()

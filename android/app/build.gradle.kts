@@ -101,7 +101,9 @@ android {
 
     androidResources {
         // PNG 已经压缩；json 很小。避免 aapt 对识别模板做任何再处理。
-        noCompress += listOf("png")
+        // 识别模型（ocr/recognizer.onnx，10.9 MB，压缩只省 8%）不压缩：native 直接映射 APK 里的字节，
+        // 加载时不必先解压出一份副本。
+        noCompress += listOf("png", "onnx")
     }
 
     packaging {
@@ -120,6 +122,8 @@ kotlin {
 //   ../assets/avatars/{*.png,index.json}      -> avatars/
 //   ../assets/game/*.json                     -> game/
 //   ../internal/ninja/templates/*.png         -> ninja_templates/   (排除 *.source.png 原图)
+//   ../internal/ocr/neuraldata/{recognizer.onnx,OCR-MODEL-LICENSE.md} -> ocr/
+//                                             (与 Windows 内置的同一个 PP-OCRv4 识别模型，Apache-2.0)
 // 注意：这里不能用 /** */ 块注释——Kotlin 块注释可嵌套，路径里的 "/*" 会吞掉后面整个脚本。
 abstract class SyncRecognitionAssets : DefaultTask() {
     @get:InputDirectory
@@ -129,6 +133,10 @@ abstract class SyncRecognitionAssets : DefaultTask() {
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val ninjaTemplates: DirectoryProperty
+
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val ocrModel: DirectoryProperty
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -159,6 +167,10 @@ abstract class SyncRecognitionAssets : DefaultTask() {
                 exclude("*.source.png")
                 into("ninja_templates")
             }
+            from(ocrModel.get().asFile) {
+                include("recognizer.onnx", "OCR-MODEL-LICENSE.md")
+                into("ocr")
+            }
         }
     }
 }
@@ -182,6 +194,7 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(checkR
 val syncRecognitionAssets = tasks.register<SyncRecognitionAssets>("syncRecognitionAssets") {
     repoAssets.set(rootProject.layout.projectDirectory.dir("../assets"))
     ninjaTemplates.set(rootProject.layout.projectDirectory.dir("../internal/ninja/templates"))
+    ocrModel.set(rootProject.layout.projectDirectory.dir("../internal/ocr/neuraldata"))
 }
 
 extensions.getByType(ApplicationAndroidComponentsExtension::class.java).onVariants { variant ->

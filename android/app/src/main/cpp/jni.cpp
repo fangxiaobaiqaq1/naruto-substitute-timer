@@ -15,12 +15,15 @@
 // 进程级状态一律 *new、永不析构：exit() 跑静态析构时分析线程和线程池可能还在一帧里（audit NC-06）。
 // 方法通过 RegisterNatives 注册，库本身 -fvisibility=hidden，只导出 JNI_OnLoad。
 
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
 #include <android/hardware_buffer.h>
 #include <android/hardware_buffer_jni.h>
 #include <android/log.h>
 #include <jni.h>
 
 #include <array>
+#include <atomic>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -35,6 +38,7 @@
 #include "nt/assets.h"
 #include "nt/config.h"
 #include "nt/frame.h"
+#include "nt/hudtext.h"
 #include "nt/identity.h"
 #include "nt/image.h"
 #include "nt/result.h"
@@ -188,6 +192,10 @@ std::vector<std::string>& g_playerNames = *new std::vector<std::string>;
 // 区域校准（docs/区域校准.md）：nullopt = 全部自动。与 g_playerNames 一样跨 nativeInit 保留。
 std::optional<nt::config::RegionCalibration>& g_calibration = *new std::optional<nt::config::RegionCalibration>;
 std::string& g_lastError = *new std::string;
+// 对局顶部账号文字认边（nt/hudtext.h）：Kotlin 在自动认边时打开；分析线程每帧取用。
+std::atomic<bool>& g_textEnabled = *new std::atomic<bool>(true);
+// 文字认边状态快照（nativeTextStatus），每帧分析后在 g_cfgMu 内更新；空 = 没有文字认边。
+std::string& g_textStatus = *new std::string;
 
 // 最近一次分析的帧的几何（docs/区域校准.md 每帧几何），整帧一起替换；换引擎时清空。
 struct FrameGeometry {
@@ -303,7 +311,13 @@ jint analyzeLocked(const nt::RGBA& img, jlong capturedAtNanos, jint method, uint
         return kNotReady;
     }
     nt::TimeNs at = capturedAtNanos > 0 ? static_cast<nt::TimeNs>(capturedAtNanos) : nt::NowNs();
+    g_pipeline->SetTextEnabled(g_textEnabled.load(std::memory_order_relaxed));
     nt::frame::Frame f = g_pipeline->Analyze(&img, at, at, methodName(method));
+    if (nt::hudtext::Engine* text = g_pipeline->Text()) {
+        std::string status = text->Status() + "\n" + text->LastError();
+        std::lock_guard<std::mutex> lock(g_cfgMu);
+        g_textStatus = std::move(status);
+    }
     if (!f.HasErr) {
         FrameGeometry g;
         g.valid = true;
@@ -344,6 +358,7 @@ jboolean nativeInit(JNIEnv*, jclass) {
             std::lock_guard<std::mutex> cfg(g_cfgMu);
             g_lastGeometry = FrameGeometry{};
             g_lastError.clear();
+            g_textStatus.clear();
         }
         nt::AssetStore::Instance().Clear();
         return JNI_TRUE;
@@ -428,7 +443,9 @@ jboolean nativeFinishAssets(JNIEnv*, jclass) {
         std::lock_guard<std::mutex> lock(g_analysisMu);
         const nt::config::Config cfg = currentConfig();
         nt::identity::SetMineNames(cfg.UI.PlayerNames);
-        auto p = std::make_unique<nt::frame::Pipeline>(cfg);
+        // 有识别模型（nativeSetTextModel）才包文字认边：Go factory.NewLive。
+        auto p = std::make_unique<nt::frame::Pipeline>(cfg, nt::hudtext::Worker::Instance().HasLoader());
+        p->SetTextEnabled(g_textEnabled.load());
         keepNewestNames(cfg);
         if (!p->Ok()) {
             setError("engine build failed: " + p->Error());
@@ -707,6 +724,8 @@ void nativeRelease(JNIEnv*, jclass) {
         std::lock_guard<std::mutex> lock(g_analysisMu);
         g_pipeline.reset();
         clearGeometry();
+        std::lock_guard<std::mutex> cfg(g_cfgMu);
+        g_textStatus.clear();
     } catch (...) {
     }
 }
@@ -752,6 +771,86 @@ jfloatArray nativeLastGeometry(JNIEnv* env, jclass) {
     return nullptr;
 }
 
+// 本机文字识别模型（APK assets 里的 PP-OCRv4 识别模型，见 nt/ocr.h）：只记下 AssetManager 与路径，
+// 后台识别线程第一次需要时才读（AASSET_MODE_BUFFER，未压缩的 asset 直接映射），空闲后释放。
+// 进程内只设一次（Application 的 AssetManager 与进程同寿）。nativeFinishAssets 之前调用。
+jboolean nativeSetTextModel(JNIEnv* env, jclass, jobject assetManager, jstring jpath) {
+    try {
+        if (assetManager == nullptr || jpath == nullptr) return JNI_FALSE;
+        nt::hudtext::Worker& worker = nt::hudtext::Worker::Instance();
+        if (worker.HasLoader()) return JNI_TRUE;
+        jobject ref = env->NewGlobalRef(assetManager);  // never released: the loader lives as long as the process
+        AAssetManager* mgr = AAssetManager_fromJava(env, ref);
+        if (mgr == nullptr) {
+            env->DeleteGlobalRef(ref);
+            setError("nativeSetTextModel: no AAssetManager");
+            return JNI_FALSE;
+        }
+        const std::string path = jstr(env, jpath);
+        AAsset* probe = AAssetManager_open(mgr, path.c_str(), AASSET_MODE_UNKNOWN);
+        if (probe == nullptr) {
+            env->DeleteGlobalRef(ref);
+            setError("nativeSetTextModel: missing asset " + path);
+            return JNI_FALSE;
+        }
+        AAsset_close(probe);
+        worker.SetLoader([mgr, path](std::vector<uint8_t>& out, std::string* err) {
+            AAsset* a = AAssetManager_open(mgr, path.c_str(), AASSET_MODE_BUFFER);
+            if (a == nullptr) {
+                if (err != nullptr) *err = "读不到识别模型 " + path;
+                return false;
+            }
+            const void* buf = AAsset_getBuffer(a);
+            const off64_t n = AAsset_getLength64(a);
+            bool ok = buf != nullptr && n > 0;
+            if (ok) out.assign(static_cast<const uint8_t*>(buf), static_cast<const uint8_t*>(buf) + n);
+            AAsset_close(a);
+            if (!ok && err != nullptr) *err = "识别模型读取失败 " + path;
+            return ok;
+        });
+        worker.SetLog([](const std::string& line) { NT_LOGI("%s", line.c_str()); });
+        NT_LOGI("text model: %s", path.c_str());
+        return JNI_TRUE;
+    } catch (const std::exception& e) {
+        setError(std::string("nativeSetTextModel: ") + e.what());
+    } catch (...) {
+        setError("nativeSetTextModel: unknown exception");
+    }
+    return JNI_FALSE;
+}
+
+// 自动认边时打开（Kotlin：「我方」为自动）。下一帧生效，不等正在分析的一帧。
+void nativeSetTextRecognition(JNIEnv*, jclass, jboolean on) { g_textEnabled.store(on == JNI_TRUE); }
+
+// 文字认边状态："<状态>\n<原因>\n<模型已加载 0/1>"；没有识别模型 = null。最近一帧分析后的快照
+// （g_cfgMu），不等正在分析的一帧。状态：off / waiting / reading / pending / ready / template /
+// unavailable（Go hudtext 的 TextStatus）。
+jstring nativeTextStatus(JNIEnv* env, jclass) {
+    try {
+        std::string status;
+        {
+            std::lock_guard<std::mutex> lock(g_cfgMu);
+            status = g_textStatus;
+        }
+        if (status.empty()) {
+            if (!nt::hudtext::Worker::Instance().HasLoader()) return nullptr;
+            status = "waiting\n";
+        }
+        const bool loaded = nt::hudtext::Worker::Instance().Loaded();
+        return newJString(env, status + "\n" + (loaded ? "1" : "0"));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+// 立即释放识别模型（内存紧张时）；下次需要再读。
+void nativeReleaseTextModel(JNIEnv*, jclass) {
+    try {
+        nt::hudtext::Worker::Instance().Release();
+    } catch (...) {
+    }
+}
+
 jint nativeResultHeaderBytes(JNIEnv*, jclass) { return kHeaderBytes; }
 
 const JNINativeMethod kMethods[] = {
@@ -780,6 +879,14 @@ const JNINativeMethod kMethods[] = {
     {const_cast<char*>("nativeLastGeometry"), const_cast<char*>("()[F"), reinterpret_cast<void*>(nativeLastGeometry)},
     {const_cast<char*>("nativeResultHeaderBytes"), const_cast<char*>("()I"),
      reinterpret_cast<void*>(nativeResultHeaderBytes)},
+    {const_cast<char*>("nativeSetTextModel"), const_cast<char*>("(Landroid/content/res/AssetManager;Ljava/lang/String;)Z"),
+     reinterpret_cast<void*>(nativeSetTextModel)},
+    {const_cast<char*>("nativeSetTextRecognition"), const_cast<char*>("(Z)V"),
+     reinterpret_cast<void*>(nativeSetTextRecognition)},
+    {const_cast<char*>("nativeTextStatus"), const_cast<char*>("()Ljava/lang/String;"),
+     reinterpret_cast<void*>(nativeTextStatus)},
+    {const_cast<char*>("nativeReleaseTextModel"), const_cast<char*>("()V"),
+     reinterpret_cast<void*>(nativeReleaseTextModel)},
 };
 
 }  // namespace
