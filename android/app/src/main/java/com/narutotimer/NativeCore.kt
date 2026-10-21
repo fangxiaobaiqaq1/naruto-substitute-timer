@@ -58,6 +58,12 @@ object NativeCore {
     @JvmStatic external fun nativeAnalyzeBuffer(
         pixels: ByteBuffer, width: Int, height: Int, rowStride: Int, capturedAtNanos: Long, method: Int, out: ByteBuffer,
     ): Int
+    /**
+     * The result of this thread's last [nativeAnalyzeHardwareBuffer]/[nativeAnalyzeBuffer] that
+     * returned -need (its buffer was too small), copied into [out]: bytes written, -need if [out]
+     * is still too small, 0 if there is none. The same analysis, not a second one.
+     */
+    @JvmStatic external fun nativeCopyLastResult(out: ByteBuffer): Int
     @JvmStatic external fun nativeTakeOppCrop(): IntArray?
     @JvmStatic external fun nativeResetDelivery()
     @JvmStatic external fun nativeRelease()
@@ -123,8 +129,10 @@ object NativeCore {
         val d = decoder.get()!!
         var n = nativeAnalyzeHardwareBuffer(hb, capturedAtNanos, method, d.out)
         if (n < 0) {
+            // Too small: take the same result (analysing again would cost a sequence number
+            // and come back as a duplicate of itself).
             d.grow(-n)
-            n = nativeAnalyzeHardwareBuffer(hb, capturedAtNanos, method, d.out)
+            n = nativeCopyLastResult(d.out)
         }
         return if (n > 0) d.decode(n) else null
     }
@@ -135,7 +143,7 @@ object NativeCore {
         var n = nativeAnalyzeBuffer(pixels, width, height, rowStride, capturedAtNanos, method, d.out)
         if (n < 0) {
             d.grow(-n)
-            n = nativeAnalyzeBuffer(pixels, width, height, rowStride, capturedAtNanos, method, d.out)
+            n = nativeCopyLastResult(d.out)
         }
         return if (n > 0) d.decode(n) else null
     }
