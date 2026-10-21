@@ -26,6 +26,8 @@ import java.util.Locale
  *   templates/ 只加载 manifest.json 引用的 PNG（native scene 目录只按清单读模板）。
  * - 每个 .json 以 UTF-8 文本注册。game/ 下的 .json 仍在 APK 里，但 native 从不读取，不加载。
  * - 用户账号名图鉴：filesDir/identity/（含 seen/、fight/）下 png/jpg/jpeg，key 为 "identity/<相对路径>"。
+ *   seen/ 先裁到最新 [IdentityStore.SEEN_CAP] 张；过大的图片跳过并记入 errors，单个文件（含 OOM）
+ *   失败不影响其余资源和引擎构建（[IdentityStore]，AND-05/AND-06）。
  * - 最后设置我方账号名（读当时的设置，[applyPlayerNames]）与区域校准，并 nativeFinishAssets() 构建引擎。
  *
  * 读文件、去色彩块和像素拷贝都用复用的暂存缓冲，加载结束即释放（docs/性能优化-android-app.md）。
@@ -99,6 +101,8 @@ object AssetLoader {
                         }
                     } catch (e: Exception) {
                         errors += "$path: ${e.message}"
+                    } catch (e: OutOfMemoryError) {
+                        errors += "$path: out of memory"
                     }
                 }
             }
@@ -132,24 +136,62 @@ object AssetLoader {
         }
 
     private fun registerUserIdentityLocked(context: Context, errors: MutableList<String>): Int {
-        val dir = File(context.filesDir, IDENTITY_DIR)
+        val dir = IdentityStore.root(context.filesDir)
         if (!dir.isDirectory) return 0
+        val pruned = runCatching { IdentityStore.pruneSeen(context.filesDir) }.getOrDefault(0)
+        if (pruned > 0) Log.i(TAG, "identity: deleted $pruned old collected crop(s)")
         var n = 0
         dir.walkTopDown().filter { it.isFile && isImageName(it.name) }.sortedBy { it.path }.forEach { f ->
             val key = IDENTITY_DIR + "/" + f.relativeTo(dir).invariantSeparatorsPath
             try {
-                val len = f.inputStream().use { readFully(it, f.length().coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()) }
-                if (registerImage(key, raw, len) >= 0) n++ else errors += "decode $key"
+                // A file imported before the size check existed must not take the engine down (AND-06).
+                val size = f.length()
+                val tooBig = IdentityStore.fileSizeReason(size)
+                if (tooBig != null) {
+                    errors += "$key: $tooBig"
+                    return@forEach
+                }
+                val len = f.inputStream().use { readFully(it, size.toInt()) }
+                val problem = boundsProblem(raw, len, size)
+                if (problem != null) {
+                    errors += "$key: $problem"
+                } else if (registerImage(key, raw, len) >= 0) {
+                    n++
+                } else {
+                    errors += "decode $key"
+                }
             } catch (e: Exception) {
                 errors += "$key: ${e.message}"
+            } catch (e: OutOfMemoryError) {
+                errors += "$key: out of memory"
             }
         }
         return n
     }
 
+    /** [IdentityStore.rejectReason] for the image in the first [len] bytes of [data]; header only, no pixels decoded. */
+    private fun boundsProblem(data: ByteArray, len: Int, size: Long): String? {
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(data, 0, len, o)
+        return IdentityStore.rejectReason(o.outWidth, o.outHeight, size)
+    }
+
+    /**
+     * Why the identity image [file] cannot be used (too big, not an image), as a short Chinese
+     * reason; null = fine. Reads only the header. Used when importing (AND-06).
+     */
+    fun identityImageProblem(file: File): String? {
+        val size = file.length()
+        IdentityStore.fileSizeReason(size)?.let { return it }
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, o)
+        return IdentityStore.rejectReason(o.outWidth, o.outHeight, size)
+    }
+
     /**
      * 取走 native 待保存的对面账号裁剪（Go identity.saveOppCrop），写成
-     * filesDir/identity/seen/opp-<yyyyMMdd-HHmmss>.png 并注册回 AssetStore。
+     * filesDir/identity/seen/opp-<yyyyMMdd-HHmmss>.png（先写 .tmp 再改名，不留半个文件）并注册回
+     * AssetStore；seen/ 只保留最新 [IdentityStore.SEEN_CAP] 张（AND-05）。
      * 由 FrameLoop 在分析线程空闲时调用。返回写入的文件或 null。
      */
     fun drainOppCrop(context: Context): File? {
@@ -159,11 +201,14 @@ object AssetLoader {
         val h = data[1]
         if (w <= 0 || h <= 0 || data.size < 2 + w * h) return null
         val bmp = Bitmap.createBitmap(data, 2, w, w, h, Bitmap.Config.ARGB_8888)
-        val dir = File(context.filesDir, "$IDENTITY_DIR/seen").apply { mkdirs() }
+        val dir = IdentityStore.seenDir(context.filesDir).apply { mkdirs() }
         val name = "opp-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".png"
         val file = File(dir, name)
+        val tmp = File(dir, name + IdentityStore.TMP_SUFFIX)
         return try {
-            FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            FileOutputStream(tmp).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            if (!tmp.renameTo(file)) throw java.io.IOException("rename ${tmp.name} failed")
+            IdentityStore.pruneSeen(context.filesDir)
             val png = file.readBytes()
             synchronized(this) {
                 try {
@@ -175,16 +220,14 @@ object AssetLoader {
             file
         } catch (e: Exception) {
             Log.w(TAG, "save opp crop failed", e)
+            tmp.delete()
             null
         } finally {
             bmp.recycle()
         }
     }
 
-    private fun isImageName(name: String): Boolean {
-        val low = name.lowercase(Locale.ROOT)
-        return low.endsWith(".png") || low.endsWith(".jpg") || low.endsWith(".jpeg")
-    }
+    private fun isImageName(name: String): Boolean = IdentityStore.isImageName(name)
 
     /**
      * Files under [root], sorted per directory. A child with a file extension we load is a file;

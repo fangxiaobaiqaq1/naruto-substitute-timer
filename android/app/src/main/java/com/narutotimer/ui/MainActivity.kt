@@ -43,7 +43,10 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import com.narutotimer.AssetLoader
 import com.narutotimer.BuildConfig
+import com.narutotimer.Housekeeping
+import com.narutotimer.IdentityStore
 import com.narutotimer.NativeCore
 import com.narutotimer.R
 import com.narutotimer.Settings
@@ -127,7 +130,12 @@ class MainActivity : Activity() {
         }
     }
 
-    private val nativeListener: () -> Unit = { if (resumed) refreshStatus() }
+    private val nativeListener: () -> Unit = {
+        if (resumed) {
+            refreshStatus()
+            refreshIdentityCount() // A load prunes identity/seen to its cap.
+        }
+    }
 
     /** 悬浮窗按钮（换边/两边计时/迷你）或其它入口修改设置时同步控件（Go syncSettingsSide）。 */
     private val settingsListener: (String) -> Unit = { key ->
@@ -384,7 +392,7 @@ class MainActivity : Activity() {
         Ui.add(advancedPanel, command(accessibilityCommand()), 6f)
 
         section(advancedPanel, "账号名图片（可选）", 18f)
-        Ui.add(advancedPanel, Ui.note(this, "导入 PNG/JPG 裁剪图可帮助自动认边；对面的图片会自动收集。"), 2f)
+        Ui.add(advancedPanel, Ui.note(this, "导入 PNG/JPG 裁剪图可帮助自动认边；对面的账号名图片会自动收集（只保留最近 ${IdentityStore.SEEN_CAP} 张，可随时清除）。"), 2f)
         identityLabelEdit = EditText(this).apply {
             hint = "图片对应的账号名"
             inputType = InputType.TYPE_CLASS_TEXT
@@ -397,6 +405,7 @@ class MainActivity : Activity() {
             Ui.button(this, "导入图片") { pickIdentityImages() },
             Ui.button(this, "删除已导入", Ui.Kind.DANGER) { confirmDeleteIdentity() },
         ), 6f)
+        Ui.add(advancedPanel, Ui.button(this, "清除自动收集", Ui.Kind.DANGER) { confirmClearSeen() }, 6f)
         Ui.add(content, advanced, 12f)
 
         return ScrollView(this).apply {
@@ -823,6 +832,7 @@ class MainActivity : Activity() {
         Thread({
             var ok = 0
             var skipped = 0
+            var reason = "只支持 PNG/JPG"
             val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
             dir.mkdirs()
             uris.forEachIndexed { i, uri ->
@@ -839,8 +849,17 @@ class MainActivity : Activity() {
                 // Go labelFromFile：第一个 '_' 之前是账号名。
                 val out = File(dir, "${label}_$stamp-$i.$ext")
                 try {
-                    resolver.openInputStream(uri)?.use { input -> out.outputStream().use { input.copyTo(it) } }
-                        ?: throw java.io.IOException("open failed")
+                    // 大小上限：一张超大照片会让引擎每次启动都加载失败（AND-06）。
+                    val fits = resolver.openInputStream(uri)?.use { input ->
+                        Housekeeping.copyLimited(input, out, IdentityStore.MAX_FILE_BYTES)
+                    } ?: throw java.io.IOException("open failed")
+                    val problem = if (fits) AssetLoader.identityImageProblem(out) else IdentityStore.FILE_TOO_BIG
+                    if (problem != null) {
+                        out.delete()
+                        skipped++
+                        reason = problem
+                        return@forEachIndexed
+                    }
                     ok++
                 } catch (e: Exception) {
                     Log.e(TAG, "import $uri failed", e)
@@ -853,7 +872,7 @@ class MainActivity : Activity() {
                 if (isDestroyed) return@post
                 refreshIdentityCount()
                 refreshStatus()
-                toast("已导入 $ok 张" + (if (skipped > 0) "，跳过 $skipped 张（只支持 PNG/JPG）" else "") +
+                toast("已导入 $ok 张" + (if (skipped > 0) "，跳过 $skipped 张：$reason" else "") +
                     (if (ok > 0) "，正在重新加载识别资源" else ""))
             }
         }, "nt-import").start()
@@ -873,6 +892,32 @@ class MainActivity : Activity() {
                 app.reloadNative()
                 refreshIdentityCount()
                 refreshStatus()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 对面账号名的自动收集（identity/seen）全部删除，并重建引擎让内存里的也不再用（AND-05）。 */
+    private fun confirmClearSeen() {
+        val count = countImages(IdentityStore.seenDir(filesDir))
+        if (count == 0) {
+            toast("没有自动收集的图片")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("清除自动收集")
+            .setMessage("删除自动收集的 $count 张对面账号名图片（不影响手动导入的图片）？之后对局中仍会重新收集。")
+            .setPositiveButton("清除") { _, _ ->
+                Thread({
+                    val n = IdentityStore.clearSeen(filesDir)
+                    main.post {
+                        app.reloadNative()
+                        if (isDestroyed) return@post
+                        refreshIdentityCount()
+                        refreshStatus()
+                        toast("已清除 $n 张，正在重新加载识别资源")
+                    }
+                }, "nt-clear-seen").start()
             }
             .setNegativeButton("取消", null)
             .show()
