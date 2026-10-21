@@ -3,13 +3,13 @@ package rgb
 import (
 	"image"
 	"math"
-	"sync"
 	"time"
 
 	"narutotimer/internal/config"
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
 	"narutotimer/internal/ninja"
+	"narutotimer/internal/safego"
 )
 
 // parallelSides lets tests compare concurrent side/profile sampling against
@@ -111,9 +111,9 @@ func (e *Engine) specialRowsAt(profile string, img *image.RGBA, positions []dete
 		rows[index] = row
 	}
 	if parallelSides {
-		var wg sync.WaitGroup
+		var wg safego.Group
 		wg.Go(func() { side(1, "right") })
-		side(0, "left")
+		wg.Run(func() { side(0, "left") })
 		wg.Wait()
 	} else {
 		side(0, "left")

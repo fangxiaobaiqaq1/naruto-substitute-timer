@@ -13,6 +13,7 @@ import (
 	"narutotimer/internal/engine"
 	"narutotimer/internal/match"
 	"narutotimer/internal/ocr"
+	"narutotimer/internal/safego"
 )
 
 const requestInterval = 400 * time.Millisecond
@@ -137,20 +138,7 @@ func (e *Engine) work() {
 			if e.ctx.Err() != nil {
 				return
 			}
-			sheet := buildSheet(request.strips)
-			ctx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
-			lines, err := sheet.read(ctx, e.reader)
-			cancel()
-			out := completion{job: request, err: err}
-			if err == nil {
-				for i, raw := range sheet.texts(lines) {
-					out.titles[i] = e.dict.consensus(raw)
-					out.proofs[i][0] = sheet.evidence(lines, request, i, out.titles[i].Ninja)
-					if out.titles[i].Account != "" {
-						out.proofs[i][1] = sheet.evidence(lines, request, i, "("+out.titles[i].Account+")")
-					}
-				}
-			}
+			out := e.read(request)
 			select {
 			case e.results <- out:
 			case <-e.ctx.Done():
@@ -158,6 +146,34 @@ func (e *Engine) work() {
 			}
 		}
 	}
+}
+
+// read runs one OCR job. A panic in the OCR backend or the text matching fails
+// this job like a backend error (status "unavailable", retried later) instead
+// of ending the process from this background goroutine.
+func (e *Engine) read(request job) (out completion) {
+	defer func() {
+		if p := safego.Recovered(recover()); p != nil {
+			safego.Report("text recognition", p)
+			out = completion{job: request, err: p}
+		}
+	}()
+	sheet := buildSheet(request.strips)
+	ctx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
+	defer cancel()
+	lines, err := sheet.read(ctx, e.reader)
+	cancel()
+	out = completion{job: request, err: err}
+	if err == nil {
+		for i, raw := range sheet.texts(lines) {
+			out.titles[i] = e.dict.consensus(raw)
+			out.proofs[i][0] = sheet.evidence(lines, request, i, out.titles[i].Ninja)
+			if out.titles[i].Account != "" {
+				out.proofs[i][1] = sheet.evidence(lines, request, i, "("+out.titles[i].Account+")")
+			}
+		}
+	}
+	return out
 }
 
 func (e *Engine) invalidate() {
