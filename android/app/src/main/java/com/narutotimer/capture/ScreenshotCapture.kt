@@ -41,8 +41,9 @@ class ScreenshotCapture(private val service: AccessibilityService) {
                             hb = result.hardwareBuffer
                             if (hb != null && runningState.get() && runGeneration.get() == run) {
                                 val owned = hb
+                                val takenAt = CaptureMeta.screenshotNanos(requestedAt, result.timestamp, System.nanoTime())
                                 FrameLoop.offer(
-                                    CapturedFrame(owned, System.nanoTime(), NativeCore.METHOD_SCREENSHOT, requestedAtNanos = requestedAt) {
+                                    CapturedFrame(owned, takenAt, NativeCore.METHOD_SCREENSHOT, requestedAtNanos = requestedAt) {
                                         runCatching { owned.close() }
                                     },
                                 )
