@@ -117,7 +117,14 @@ class Session(
             lastFrame = f
             scene = f.scene
 
-            val sourceChanged = updateSourceLocked(f)
+            // Before the hold/error branch: the first frame of a new source may be a
+            // hold frame. Failure frames (no size) keep the known source.
+            if (updateObservationSpaceLocked(f.width, f.height, f.captureMethod)) {
+                // Only the visual baseline is invalid; confirmed cooldowns continue.
+                leftClock.resyncObservation()
+                rightClock.resyncObservation()
+            }
+            updateLayoutProfileLocked(f)
             updateIdentityLocked(f)
             updateTopologyLocked(f)
 
@@ -136,14 +143,6 @@ class Session(
 
             observeRoundOpeningLocked(f)
             applySceneLocked(f)
-            if (sourceChanged) {
-                // Geometry/source changes invalidate only the visual baseline. Any
-                // already-confirmed cooldown continues from its acquisition time.
-                leftClock.resyncObservation()
-                rightClock.resyncObservation()
-                syncLeft = false
-                syncRight = false
-            }
 
             if (!isFighting || !f.fighting) {
                 invalidateLocked(f.capturedAtNanos)
@@ -342,15 +341,25 @@ class Session(
         }
     }
 
-    private fun updateSourceLocked(f: AnalysisResult): Boolean {
-        val changed = sourceWidth != 0 && (
-            sourceWidth != f.width || sourceHeight != f.height || sourceMethod != f.captureMethod
-        )
-        if (sourceWidth == 0 || sourceChangedMeaningful(f)) {
-            sourceWidth = f.width
-            sourceHeight = f.height
-            sourceMethod = f.captureMethod
+    /**
+     * Go app.ObservationSpace.Update: a change only when a known field changes.
+     * Missing sizes or method (failure frames) neither count nor erase the source.
+     */
+    private fun updateObservationSpaceLocked(width: Int, height: Int, method: String): Boolean {
+        var changed = false
+        if (width > 0 && height > 0) {
+            changed = sourceWidth > 0 && sourceHeight > 0 && (sourceWidth != width || sourceHeight != height)
+            sourceWidth = width
+            sourceHeight = height
         }
+        if (method.isNotEmpty()) {
+            changed = changed || (sourceMethod.isNotEmpty() && sourceMethod != method)
+            sourceMethod = method
+        }
+        return changed
+    }
+
+    private fun updateLayoutProfileLocked(f: AnalysisResult) {
         // A layout profile is a different HUD/match, not a bead drop.
         if (f.layoutProfile.isNotEmpty() && layoutProfile.isNotEmpty() && f.layoutProfile != layoutProfile) {
             leftClock.reset()
@@ -365,11 +374,7 @@ class Session(
             syncRight = false
         }
         if (f.layoutProfile.isNotEmpty()) layoutProfile = f.layoutProfile
-        return changed
     }
-
-    private fun sourceChangedMeaningful(f: AnalysisResult): Boolean =
-        sourceWidth != f.width || sourceHeight != f.height || sourceMethod != f.captureMethod
 
     private fun updateIdentityLocked(f: AnalysisResult) {
         // Candidate labels are display-only. They never enter the confirmed ninja

@@ -142,7 +142,7 @@ object FrameLoop {
                     analyzed.incrementAndGet()
                     lastMethod = frame.method
                 } catch (t: Throwable) {
-                    app.session.onFrame(AnalysisResult.failure(t.message ?: "analysis failed", frame.capturedAtNanos, "native"))
+                    app.session.onFrame(AnalysisResult.failure(t.message ?: "analysis failed", frame.capturedAtNanos, CaptureMeta.methodName(frame.method)))
                 } finally {
                     // Without a pending request this is one volatile read per frame.
                     val shot = snapshot
@@ -260,7 +260,7 @@ object FrameLoop {
 
     fun offerFailure(message: String, method: Int) {
         val app = runCatching { TimerApp.instance }.getOrNull() ?: return
-        app.session.onFrame(AnalysisResult.failure(message, System.nanoTime(), method.toString()))
+        app.session.onFrame(AnalysisResult.failure(message, System.nanoTime(), CaptureMeta.methodName(method)))
     }
 
     fun stats(): Stats {
