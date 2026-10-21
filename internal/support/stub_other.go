@@ -16,3 +16,6 @@ func ProbeSDK(context.Context, string, mumu.Options) (mumu.ProbeResult, error) {
 }
 
 func ExportBundle(context.Context, BundleOptions) (string, error) { return "", errUnsupported }
+
+// The ZIP writer itself is platform-neutral and tested on every platform.
+var _ = exportBundle
