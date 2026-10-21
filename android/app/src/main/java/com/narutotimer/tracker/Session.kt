@@ -71,7 +71,6 @@ class Session(
         if (!settings.rememberSide && settings.playerSide != "auto") settings.playerSide = "auto"
     }
     private var autoSide = ""
-    private var opponentName = ""
     private var leftNinja = ""
     private var rightNinja = ""
     private var leftNinjaCandidate = ""
@@ -83,7 +82,7 @@ class Session(
     private val ninjaDisplaySeenAt = LongArray(2)
     private var ninjaDisplayAt = 0L
 
-    private var lastCaptured = 0L
+    private var sceneObservedAt = 0L
     private var scene = ""
     private var holdFreeze = false
     private var inheritOnReturn = false
@@ -116,15 +115,15 @@ class Session(
     val fighting: Boolean get() = synchronized(lock) { isFighting }
     val side: String get() = synchronized(lock) { effectiveSideLocked() }
 
+    /** Go session.captureOnce (internal/ui/run.go), step for step. */
     fun onFrame(f: AnalysisResult) {
         synchronized(lock) {
             // capturedAt is acquisition time, not analysis completion time. It is
-            // the only timestamp allowed to establish event ordering or a clock.
-            if (f.capturedAtNanos > 0 && lastCaptured > 0 && f.capturedAtNanos <= lastCaptured) return
-            if (f.capturedAtNanos > 0) lastCaptured = f.capturedAtNanos
+            // the only timestamp allowed to establish event ordering or a clock. A
+            // repeated/older one is still processed: SideClock refuses it a vote and
+            // applyScene refuses it exit evidence.
             lastFrame = f
             scene = f.scene
-
             // Before the hold/error branch: the first frame of a new source may be a
             // hold frame. Failure frames (no size) keep the known source.
             if (updateObservationSpaceLocked(f.width, f.height, f.captureMethod)) {
@@ -133,6 +132,8 @@ class Session(
                 rightClock.resyncObservation()
                 clearNinjaDisplaysLocked()
             }
+            // A verified round-opening marker counts even while the beads are obscured.
+            observeRoundOpeningLocked(f)
             // Topology, confirmed ninjas and the bead display come only from fight
             // frames without an error; VS/result/failure frames carry none of them.
             if (f.fighting && f.err == null) {
@@ -142,22 +143,25 @@ class Session(
                 updateNinjaDisplayLocked(f)
                 displayBeads = emptyList()
             }
-            updateIdentityLocked(f)
 
             // Hold/error frames retain the display but never supply exit evidence,
             // bead votes, or a replacement for a missing fresh pixel frame.
             if (f.hold || f.err != null) {
+                if (f.err != null && (holdFreeze || syncLeft || syncRight)) {
+                    leftClock.resyncObservation()
+                    rightClock.resyncObservation()
+                }
                 leaveHits = 0
                 invalidateLocked(f.capturedAtNanos)
                 if (isHoldScene(f.scene)) {
                     inheritOnReturn = f.scene == "vs" && isFighting
                     holdFreeze = true
                 }
+                maybeAutoSideLocked(f)
                 bump()
                 return
             }
 
-            observeRoundOpeningLocked(f)
             if (f.fighting && f.layoutProfile.isNotEmpty()) {
                 if (layoutProfile.isNotEmpty() && layoutProfile != f.layoutProfile) {
                     // A different HUD belongs to a different match, never a bead drop.
@@ -174,16 +178,12 @@ class Session(
                 layoutProfile = f.layoutProfile
             }
             applySceneLocked(f)
+            maybeAutoSideLocked(f)
 
             if (!isFighting || !f.fighting) {
                 invalidateLocked(f.capturedAtNanos)
                 bump()
                 return
-            }
-
-            if (roundOpeningActive) {
-                roundBaselineLeft = true
-                roundBaselineRight = true
             }
             observeBeadsLocked(f)
             bump()
@@ -239,15 +239,17 @@ class Session(
         } else if (opponentSide.isNotEmpty()) {
             "对面·$opponentSide"
         } else "对面·待认边"
-        val dual = NinjaRules.dualCooldown(opponentNinja)
-        val alt = if (!dual) "" else {
-            val d = opponentClockLocked()?.latestRemainingFor(nowNanos, NinjaRules.ALTERNATE_COOLDOWN_NANOS)
-            when {
-                d == null -> "—"
-                d <= 0.0 -> "就绪"
-                else -> SideClock.formatCD(listOf(d))
-            }
+        // Go dualClockText: no 10 s clock while the opponent side is unknown.
+        val opponentClock = opponentClockLocked()
+        val dual = opponentClock != null && NinjaRules.dualCooldown(opponentNinja)
+        val altRemaining = if (dual) opponentClock?.latestRemainingFor(nowNanos, NinjaRules.ALTERNATE_COOLDOWN_NANOS) else null
+        val alt = when {
+            !dual -> ""
+            altRemaining == null -> "—"
+            altRemaining <= 0.0 -> "就绪"
+            else -> SideClock.formatCD(listOf(altRemaining))
         }
+        val altColor = if (altRemaining != null && altRemaining > 0.0) clockColor(listOf(altRemaining)) else TimerColors.CLOCK_IDLE
         val event = when (player) {
             "left" -> "第 ${rightClock.eventCount()} 次"
             "right" -> "第 ${leftClock.eventCount()} 次"
@@ -276,8 +278,7 @@ class Session(
         }
         OverlayState(
             revision, tag, if (shownConfirmed.isEmpty()) TimerColors.TAG_IDLE else TimerColors.TAG_MINE,
-            modeText, primary, clockColor(opp), event, dual, alt,
-            if (alt == "—" || alt == "就绪" || alt.isEmpty()) TimerColors.CLOCK_IDLE else TimerColors.CLOCK_LIVE,
+            modeText, primary, clockColor(opp), event, dual, alt, altColor,
             SideClock.formatCD(left), clockColor(left), SideClock.formatCD(right), clockColor(right),
             "${sceneName(scene, layoutProfile)} · ${when {
                 fHoldLocked() -> "待识别"
@@ -365,18 +366,6 @@ class Session(
         }
     }
 
-    fun resyncObservation() {
-        synchronized(lock) {
-            leftClock.resyncObservation()
-            rightClock.resyncObservation()
-            syncLeft = false
-            syncRight = false
-            roundBaselineLeft = false
-            roundBaselineRight = false
-            bump()
-        }
-    }
-
     /**
      * Go app.ObservationSpace.Update: a change only when a known field changes.
      * Missing sizes or method (failure frames) neither count nor erase the source.
@@ -413,6 +402,25 @@ class Session(
         rightNinja = f.rightNinja
         leftNinjaCandidate = f.leftNinjaCandidate
         rightNinjaCandidate = f.rightNinjaCandidate
+    }
+
+    /** Go maybeAutoSide. */
+    private fun maybeAutoSideLocked(f: AnalysisResult) {
+        if (f.err != null) return
+        if (f.scene.isNotEmpty() && f.scene != "fight" && f.scene != "vs") {
+            autoSide = ""
+            if (!manualSideLocked()) playerSideState = ""
+            return
+        }
+        if (f.playerSide != "left" && f.playerSide != "right") return
+        // A read name must be one of mine (none configured: not mine). A frame in
+        // flight when the account changed is not current evidence.
+        if (f.playerName.isNotEmpty() && settings.playerNames.none {
+                GoText.normalizeName(it) == GoText.normalizeName(f.playerName)
+            }) return
+        // Remembered under a manual lock so switching back to auto applies at once.
+        autoSide = f.playerSide
+        if (!manualSideLocked()) playerSideState = f.playerSide
     }
 
     private fun clearNinjaDisplaysLocked() {
@@ -463,30 +471,8 @@ class Session(
     /** Go frameTime: a frame without an acquisition time is observed now. */
     private fun frameTime(at: Long): Long = if (at != 0L) at else System.nanoTime()
 
-    private fun updateIdentityLocked(f: AnalysisResult) {
-        if (f.oppName.isNotEmpty()) opponentName = f.oppName
-
-        if (f.err != null) return
-        if (f.scene.isNotEmpty() && f.scene != "fight" && f.scene != "vs") {
-            autoSide = ""
-            if (!manualSideLocked()) playerSideState = ""
-            opponentName = ""
-            return
-        }
-        if (f.playerSide != "left" && f.playerSide != "right") return
-        val mine = f.playerName.isEmpty() || settings.playerNames.isEmpty() || settings.playerNames.any {
-            GoText.normalizeName(it) == GoText.normalizeName(f.playerName)
-        }
-        if (!mine) return
-        autoSide = f.playerSide
-        if (settings.playerSide != "left" && settings.playerSide != "right") {
-            playerSideState = f.playerSide
-            if (f.playerName.isNotEmpty()) opponentName = f.oppName
-        }
-    }
-
     private fun observeRoundOpeningLocked(f: AnalysisResult) {
-        val at = f.capturedAtNanos.takeIf { it > 0 } ?: return
+        val at = frameTime(f.capturedAtNanos)
         if (f.fighting && f.roundOpening) {
             if (!roundOpeningActive) beginVerifiedRoundLocked()
             roundOpeningActive = true
@@ -502,12 +488,22 @@ class Session(
         roundBaselineRight = true
     }
 
+    /** Go applyScene: exit evidence must be consecutive, fresh end-scene frames. */
     private fun applySceneLocked(f: AnalysisResult) {
+        if (f.capturedAtNanos != 0L) {
+            if (sceneObservedAt != 0L && f.capturedAtNanos <= sceneObservedAt) {
+                leaveHits = 0
+                return
+            }
+            sceneObservedAt = f.capturedAtNanos
+        }
+        if (f.hold || f.err != null || !isEndScene(f.scene)) leaveHits = 0
         if (isHoldScene(f.scene)) {
             inheritOnReturn = f.scene == "vs" && isFighting
             holdFreeze = true
             return
         }
+        if (f.hold || f.err != null) return
         if (f.fighting) {
             if (holdFreeze) {
                 syncLeft = true
@@ -536,8 +532,6 @@ class Session(
                     leftClock.reset()
                     rightClock.reset()
                     clearRoundOpeningLocked()
-                    holdFreeze = false
-                    inheritOnReturn = false
                     syncLeft = false
                     syncRight = false
                 }
