@@ -1,0 +1,16 @@
+{
+  "name": "naruto-timer-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "wrangler dev",
+    "deploy": "vitepress build && wrangler deploy",
+    "test": "node worker.test.js"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4",
+    "wrangler": "^4.151.3"
+  }
+}
