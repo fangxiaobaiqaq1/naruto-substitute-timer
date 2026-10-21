@@ -549,10 +549,22 @@ fun main(args: Array<String>) {
     equal(ownDrop.overlay.sideModeText, "我方·右", "never silently swap player side")
     verify(ownDrop.overlay.tagText.startsWith("对面·左"), "primary still monitors left")
 
+    // GE-02 (Go app.ObservationCadence, Session.kt): a frame's observation gap is 3x the cadence
+    // measured BEFORE it. A session's first interval has no cadence yet and meets the 150 ms floor,
+    // so a drop inside the very first 333 ms interval resyncs the baseline (Go captureOnce agrees,
+    // android/tools/sessioncheck). Once one interval is known, a slow cadence still confirms drops.
+    val first = Run("333ms acquisition cadence, first interval of a session (GE-02 floor)")
+    fight(first.feed(before, 0, "baseline").frame, 2, 4)
+    fight(first.feed(original, 333, "drop in the first interval").frame, 1, 4)
+    val firstConfirm = first.feed(confirm, 666, "same count again")
+    fight(firstConfirm.frame, 1, 4)
+    display(firstConfirm.overlay, 0, "待替身")
+
     val slow = Run("333ms acquisition cadence (no FrameLoop/OS scheduling claim)")
     fight(slow.feed(before, 0, "baseline").frame, 2, 4)
-    fight(slow.feed(original, 333, "first drop").frame, 1, 4)
-    val slowConfirm = slow.feed(confirm, 666, "independent confirmation")
+    fight(slow.feed(before.fresh(1), 333, "baseline again: cadence 333 ms").frame, 2, 4)
+    fight(slow.feed(original, 666, "first drop").frame, 1, 4)
+    val slowConfirm = slow.feed(confirm, 999, "independent confirmation")
     fight(slowConfirm.frame, 1, 4)
     display(slowConfirm.overlay, 1, "14.6") // 15 - .333 = 14.667, production format floors tenths.
 
