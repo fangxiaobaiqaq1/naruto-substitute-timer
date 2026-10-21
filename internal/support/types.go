@@ -22,6 +22,9 @@ type BundleOptions struct {
 	Inventory     mumu.Inventory
 	Probe         *mumu.ProbeResult
 	IncludeImages bool
+	// IncludeAccountNames keeps own and opponents' account names; by default
+	// they are replaced by per-bundle pseudonyms (privacy.go).
+	IncludeAccountNames bool
 }
 
 type Manifest struct {
@@ -31,4 +34,6 @@ type Manifest struct {
 	Files         []string  `json:"files"`
 	SessionDir    string    `json:"session_dir,omitempty"`
 	Images        bool      `json:"includes_images"`
+	AccountNames  string    `json:"account_names"` // "pseudonymized" or "included"
+	UserPaths     string    `json:"user_paths"`    // always "redacted"
 }

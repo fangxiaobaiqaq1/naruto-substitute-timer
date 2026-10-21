@@ -222,7 +222,7 @@ func (s *session) traceDrawn(started, completed time.Time) {
 	}
 }
 
-func (s *session) exportSupportBundle(ctx context.Context, sessionDir string, probe *mumu.ProbeResult, includeImages bool) (string, error) {
+func (s *session) exportSupportBundle(ctx context.Context, sessionDir string, probe *mumu.ProbeResult, includeImages, includeNames bool) (string, error) {
 	s.mu.Lock()
 	cfg := s.cfg
 	root := s.supportRoot
@@ -244,7 +244,15 @@ func (s *session) exportSupportBundle(ctx context.Context, sessionDir string, pr
 		Inventory:     inventory,
 		Probe:         probe,
 		IncludeImages: includeImages,
+
+		IncludeAccountNames: includeNames,
 	})
+}
+
+// supportBundleContents is the "what will be exported" text shown next to the
+// export button; summary.md inside the ZIP repeats the same lines (GE-04).
+func supportBundleContents(c support.BundleContents) string {
+	return "支持诊断包将包含：\n• " + strings.Join(support.DescribeBundle(c), "\n• ")
 }
 
 func (s *session) diagnosticText() string {
@@ -343,6 +351,18 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 	record := widget.NewCheck("录制原始对局帧（无损 PNG，可能快速占用约 1GiB）", nil)
 	replay := widget.NewCheck("保留停止前 3 分钟回放（独立 1fps JPEG，最多 64MiB）", nil)
 	includeImages := widget.NewCheck("导出 ZIP 时包含原帧/回放图像（隐私选项）", nil)
+	includeNames := widget.NewCheck("导出 ZIP 时包含账号名（我方与对手；默认替换为代号，隐私选项）", nil)
+	bundleContents := widget.NewLabel("")
+	bundleContents.Wrapping = fyne.TextWrapWord
+	refreshBundleContents := func() {
+		s.diagnosticMu.Lock()
+		hasSession := s.diagnosticLast != nil
+		s.diagnosticMu.Unlock()
+		bundleContents.SetText(supportBundleContents(support.BundleContents{HasSession: hasSession, IncludeImages: includeImages.Checked, IncludeAccountNames: includeNames.Checked}))
+	}
+	includeImages.OnChanged = func(bool) { refreshBundleContents() }
+	includeNames.OnChanged = func(bool) { refreshBundleContents() }
+	refreshBundleContents()
 	s.diagnosticMu.Lock()
 	record.SetChecked(s.diagnosticRecord)
 	replay.SetChecked(s.diagnosticReplay)
@@ -368,6 +388,7 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 			replay.Disable()
 		}
 		s.refreshDiagnosticLabel()
+		refreshBundleContents()
 	})
 	if s.currentDiagnostics() != nil {
 		start.SetText("停止并生成报告")
@@ -476,7 +497,7 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 		s.diagnosticMu.Lock()
 		r := s.diagnosticLast
 		probeResult := s.diagnosticProbe
-		include := includeImages.Checked
+		include, names := includeImages.Checked, includeNames.Checked
 		if probeResult != nil {
 			copy := *probeResult
 			probeResult = &copy
@@ -495,8 +516,8 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 				defer s.diagnosticWriters.Done()
 				_, _ = r.ExportReport()
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-			defer cancel()
+			// GE-06: the SDK probe has its own 15 s budget and the export a deadline
+			// sized to the files it copies, instead of one shared 25 s.
 			if probeResult == nil {
 				s.mu.Lock()
 				target := s.cfg.Capture.MuMu
@@ -505,7 +526,7 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 				if executable == "" {
 					executable, _ = os.Executable()
 				}
-				probeCtx, stopProbe := context.WithTimeout(ctx, 15*time.Second)
+				probeCtx, stopProbe := context.WithTimeout(context.Background(), 15*time.Second)
 				result, probeErr := support.ProbeSDK(probeCtx, executable, mumu.Options{
 					InstallDir: target.InstallDir, DLLPath: target.DLLPath, Instance: target.Instance,
 					DisplayID: target.DisplayID, Package: target.Package,
@@ -516,7 +537,9 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 				}
 				probeResult = &result
 			}
-			path, err := s.exportSupportBundle(ctx, sessionDir, probeResult, include)
+			ctx, cancel := context.WithTimeout(context.Background(), support.ExportTimeout(sessionDir, include))
+			defer cancel()
+			path, err := s.exportSupportBundle(ctx, sessionDir, probeResult, include, names)
 			fyne.Do(func() {
 				if s.stopped() || s.diagnosticWindow != w {
 					return
@@ -563,8 +586,8 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 	})
 	hint := widget.NewLabel("无损 PNG 原帧与回放是两项独立开关：回放每秒最多一帧，保存原始游戏 JPEG 和同帧的 annotated JPEG（720px/质量75，两者共用64MiB上限）。标注图固定记录对应 frame_id 的识别、豆位、计时器显示和绘制时刻；没有同帧 UI 状态会明确写不可用，不会借用新帧。导出后可直接打开所在文件夹；支持包默认不含图像。")
 	hint.Wrapping = fyne.TextWrapWord
-	return container.NewVBox(widget.NewLabel("采集与延迟诊断"), record, replay, includeImages, start,
+	return container.NewVBox(widget.NewLabel("采集与延迟诊断"), record, replay, includeImages, includeNames, start,
 		container.NewGridWithColumns(2, export, exportReplay),
 		container.NewGridWithColumns(2, exportBundle, probe),
-		container.NewGridWithColumns(2, open, openOCR), s.diagnosticLabel, hint)
+		container.NewGridWithColumns(2, open, openOCR), bundleContents, s.diagnosticLabel, hint)
 }
