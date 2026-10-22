@@ -14,6 +14,10 @@ enum CaptureProtocol {
     clock_gettime(CLOCK_MONOTONIC, &value)
     return Double(value.tv_sec) + Double(value.tv_nsec) / 1_000_000_000
   }
+  static func captureInterval(fps: Double, inMatch: Bool) -> Double {
+    let interval = 1 / min(10, max(1, fps.isFinite ? fps : 8))
+    return inMatch ? interval : max(0.4, interval)
+  }
   static func encode(_ packet: [String: Any]) -> Data? {
     guard JSONSerialization.isValidJSONObject(packet),
           var data = try? JSONSerialization.data(withJSONObject: packet), data.count < limit else { return nil }

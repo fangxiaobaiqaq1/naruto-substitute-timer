@@ -487,7 +487,7 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
     guard pip === pictureInPictureController else { return }
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
-                                  skipByInterval skipInterval: CMTime, completionHandler: @escaping () -> Void) {
+                                  skipByInterval skipInterval: CMTime, completion completionHandler: @escaping @Sendable () -> Void) {
     defer { completionHandler() } // Complete even obsolete/non-seekable requests.
     guard pip === pictureInPictureController else { return }
   }
