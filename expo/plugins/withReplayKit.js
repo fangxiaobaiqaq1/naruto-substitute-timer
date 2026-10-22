@@ -28,7 +28,6 @@ function stageSources(projectRoot, iosRoot, identifier, version, buildNumber) {
     path.join(core, 'include/nt/engine.h'),
     path.join(repo, 'assets/templates/manifest.json'),
     path.join(repo, 'assets/avatars/index.json'),
-    path.join(repo, 'internal/ocr/neuraldata/recognizer.onnx'),
   ];
   for (const file of required) if (!fs.existsSync(file)) throw new Error(`[withReplayKit] Required source/asset missing: ${file}`);
   // This is a generated, plugin-owned directory. Always refresh, including
@@ -46,7 +45,6 @@ function stageSources(projectRoot, iosRoot, identifier, version, buildNumber) {
   const assetSources = {
     templates: path.join(repo, 'assets/templates'), avatars: path.join(repo, 'assets/avatars'),
     game: path.join(repo, 'assets/game'), ninja_templates: path.join(repo, 'internal/ninja/templates'),
-    ocr: path.join(repo, 'internal/ocr/neuraldata'),
   };
   for (const [name, root] of Object.entries(assetSources)) {
     fs.mkdirSync(path.join(assets, name), { recursive: true });
