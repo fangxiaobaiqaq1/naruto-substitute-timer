@@ -17,11 +17,10 @@ struct TimerSettings {
     int enterFightFrames = 1;
     int leaveFightFrames = 10;
     int beadsPerSide = 4;
-    std::string playerSide = "auto";
+    std::string playerSide = "left"; // Manual selection only.
     bool showBothSides = false;
     bool rememberSide = false; // Persistence policy; current manual choices still work.
     bool dual = false; // Explicit manual estimate, never identity evidence.
-    std::vector<std::string> playerNames;
     std::string ninjaQuery; // Explicit opponent override, never visual identity.
 };
 
@@ -41,10 +40,6 @@ struct TimerSnapshot {
     int rightCount = -1;
     ClockSnapshot left;
     ClockSnapshot right;
-    // Only a verified recognition result may populate this, not a manual choice.
-    std::string detectedPlayerSide;
-    std::string playerName;
-    std::string opponentName;
     std::string leftNinja;
     std::string rightNinja;
     std::string scene;
@@ -98,7 +93,6 @@ public:
     void pauseObservations();
     void reset();
     bool fighting() const { return fighting_; }
-    bool wantsTextRecognition() const;
 
 private:
     bool updateSource(const frame::Frame& frame);
@@ -106,7 +100,6 @@ private:
     void observeRoundOpening(const frame::Frame& frame);
     void clearRoundOpening();
     void applyScene(const frame::Frame& frame);
-    void updateIdentity(const frame::Frame& frame);
     void observeBeads(const frame::Frame& frame, double captureWallMs);
     void invalidate(TimeNs at, bool resync);
     DurationNs observationGap() const;
@@ -128,7 +121,6 @@ private:
     int leftSlots_ = 0, rightSlots_ = 0;
     TimeNs lastBeadAt_ = 0;
     DurationNs cadenceEma_ = 0;
-    std::string autoSide_;
 };
 
 } // namespace nt::ios

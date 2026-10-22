@@ -101,6 +101,7 @@ function configureProject(project, sources, identifier, team, version, buildNumb
       SWIFT_OBJC_BRIDGING_HEADER: quote(`$(SRCROOT)/${TARGET}/${TARGET}-Bridging-Header.h`),
       IPHONEOS_DEPLOYMENT_TARGET: '16.4', TARGETED_DEVICE_FAMILY: quote('1,2'),
       APPLICATION_EXTENSION_API_ONLY: 'YES', SKIP_INSTALL: 'YES',
+      COMPRESS_PNG_FILES: 'NO',
       SWIFT_VERSION: '5.0', CLANG_ENABLE_MODULES: 'YES', CLANG_ENABLE_OBJC_ARC: 'YES',
       CLANG_CXX_LANGUAGE_STANDARD: quote('c++17'), CLANG_CXX_LIBRARY: quote('libc++'),
       GCC_ENABLE_CPP_EXCEPTIONS: 'YES', GCC_ENABLE_CPP_RTTI: 'YES',
@@ -143,7 +144,7 @@ function configureProject(project, sources, identifier, team, version, buildNumb
   sourcePhase.files = sources.map((file) => buildFile(fileRef(file, file.endsWith('.swift') ? 'sourcecode.swift' : file.endsWith('.mm') ? 'sourcecode.cpp.objcpp' : 'sourcecode.cpp.cpp'), path.basename(file)));
   const resourcePhase = phase('PBXResourcesBuildPhase', 'Resources');
   resourcePhase.files = [buildFile(fileRef(`${TARGET}/RecognitionAssets`, 'folder'), 'RecognitionAssets')];
-  const frameworks = ['Foundation', 'ReplayKit', 'Network', 'CoreMedia', 'CoreVideo', 'CoreImage', 'ImageIO', 'CoreGraphics', 'Vision'];
+  const frameworks = ['Foundation', 'ReplayKit', 'Network', 'CoreMedia', 'CoreVideo', 'CoreImage', 'ImageIO', 'CoreGraphics'];
   phase('PBXFrameworksBuildPhase', 'Frameworks').files = frameworks.map((name) =>
     buildFile(fileRef(`System/Library/Frameworks/${name}.framework`, 'wrapper.framework', 'SDKROOT'), `${name}.framework`));
 

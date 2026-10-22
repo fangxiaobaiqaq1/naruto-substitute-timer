@@ -3,13 +3,11 @@ import { AppState, Platform, type ViewProps } from 'react-native';
 import type { ComponentType } from 'react';
 import { normalizeCalibration, type Calibration } from './calibration';
 
-export type PlayerSide = 'auto' | 'left' | 'right';
+export type PlayerSide = 'left' | 'right';
 export type CaptureSettings = {
   playerSide: PlayerSide;
   showBothSides: boolean;
   dual: boolean;
-  playerName: string;
-  playerNames: string[];
   fontScale: number;
   roiScale: number;
   roiOffsetX: number;
@@ -26,6 +24,8 @@ export type CaptureState = {
   broadcastActive: boolean;
   pipSupported: boolean;
   pipActive: boolean;
+  pipPossible: boolean;
+  pipPending: boolean;
   connected: boolean;
   message: string;
   leftDeadlineMs: number;
@@ -34,7 +34,6 @@ export type CaptureState = {
   rightAlternateDeadlineMs: number;
   leftCount: number;
   rightCount: number;
-  detectedPlayerSide: 'left' | 'right' | '';
   match: boolean;
   frames: number;
   lastFrameAtMs: number;
@@ -44,10 +43,9 @@ export type CaptureState = {
   rightSubstitutions: number;
   scene: string;
   latencyMs: number;
+  deliveryLatencyMs: number;
   frameWidth: number;
   frameHeight: number;
-  ocrStatus: string;
-  ocrError: string;
   recognitionError: string;
 };
 
@@ -66,11 +64,9 @@ type NarutoCaptureModule = {
 };
 
 export const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
-  playerSide: 'auto',
+  playerSide: 'left',
   showBothSides: false,
   dual: false,
-  playerName: '',
-  playerNames: [],
   fontScale: 0.75,
   roiScale: 1,
   roiOffsetX: 0,
@@ -96,16 +92,11 @@ function clamp(value: unknown, minimum: number, maximum: number, fallback: numbe
 /** Only these validated fields cross the native boundary; UI opacity is not a PiP setting. */
 export function normalizeCaptureSettings(value: unknown): CaptureSettings {
   const source = record(value);
-  const names = Array.isArray(source.playerNames) && source.playerNames.length
-    ? source.playerNames : typeof source.playerName === 'string' ? source.playerName.split(/[\r\n,，;；]+/) : [];
-  const playerNames = [...new Set(names.filter((name): name is string => typeof name === 'string')
-    .map((name) => Array.from(name.trim()).slice(0, 40).join('')).filter(Boolean))].slice(0, 20);
   return {
-    playerSide: source.playerSide === 'left' || source.playerSide === 'right' ? source.playerSide : 'auto',
+    // iOS intentionally has no automatic account/side recognition.
+    playerSide: source.playerSide === 'right' ? 'right' : 'left',
     showBothSides: source.showBothSides === true,
     dual: source.dual === true,
-    playerName: playerNames[0] || '',
-    playerNames,
     rememberSide: source.rememberSide !== false,
     ninjaQuery: typeof source.ninjaQuery === 'string' ? Array.from(source.ninjaQuery.trim()).slice(0, 80).join('') : '',
     calibration: normalizeCalibration(source.calibration),
@@ -156,6 +147,8 @@ export const INITIAL_CAPTURE_STATE: CaptureState = {
   broadcastActive: false,
   pipSupported: false,
   pipActive: false,
+  pipPossible: false,
+  pipPending: false,
   connected: false,
   message: unavailableReason || '正在读取原生采集状态…',
   leftDeadlineMs: 0,
@@ -164,7 +157,6 @@ export const INITIAL_CAPTURE_STATE: CaptureState = {
   rightAlternateDeadlineMs: 0,
   leftCount: -1,
   rightCount: -1,
-  detectedPlayerSide: '',
   match: false,
   frames: 0,
   lastFrameAtMs: 0,
@@ -174,10 +166,9 @@ export const INITIAL_CAPTURE_STATE: CaptureState = {
   rightSubstitutions: 0,
   scene: '',
   latencyMs: 0,
+  deliveryLatencyMs: 0,
   frameWidth: 0,
   frameHeight: 0,
-  ocrStatus: '',
-  ocrError: '',
   recognitionError: '',
 };
 
@@ -200,6 +191,8 @@ export function normalizeCaptureState(value: unknown): CaptureState {
     broadcastActive: available && source.broadcastActive === true,
     pipSupported,
     pipActive: pipSupported && source.pipActive === true,
+    pipPossible: pipSupported && source.pipPossible === true,
+    pipPending: pipSupported && source.pipPending === true,
     connected: available && source.connected === true,
     message: typeof source.message === 'string' ? source.message.slice(0, 500) : '原生未返回有效状态说明。',
     leftDeadlineMs: timestamp(source.leftDeadlineMs),
@@ -208,7 +201,6 @@ export function normalizeCaptureState(value: unknown): CaptureState {
     rightAlternateDeadlineMs: timestamp(source.rightAlternateDeadlineMs),
     leftCount: beanCount(source.leftCount),
     rightCount: beanCount(source.rightCount),
-    detectedPlayerSide: source.detectedPlayerSide === 'left' || source.detectedPlayerSide === 'right' ? source.detectedPlayerSide : '',
     match: available && source.match === true,
     frames: Number.isSafeInteger(source.frames) ? timestamp(source.frames) : 0,
     lastFrameAtMs: timestamp(source.lastFrameAtMs),
@@ -218,10 +210,9 @@ export function normalizeCaptureState(value: unknown): CaptureState {
     rightSubstitutions: Math.floor(clamp(source.rightSubstitutions, 0, 100000, 0)),
     scene: typeof source.scene === 'string' ? source.scene.slice(0, 40) : '',
     latencyMs: clamp(source.latencyMs, 0, 60000, 0),
+    deliveryLatencyMs: clamp(source.deliveryLatencyMs, 0, 60000, 0),
     frameWidth: Math.floor(clamp(source.frameWidth, 0, 16384, 0)),
     frameHeight: Math.floor(clamp(source.frameHeight, 0, 16384, 0)),
-    ocrStatus: typeof source.ocrStatus === 'string' ? source.ocrStatus.slice(0, 100) : '',
-    ocrError: typeof source.ocrError === 'string' ? source.ocrError.slice(0, 500) : '',
     recognitionError: typeof source.recognitionError === 'string' ? source.recognitionError.slice(0, 500) : '',
   };
 }

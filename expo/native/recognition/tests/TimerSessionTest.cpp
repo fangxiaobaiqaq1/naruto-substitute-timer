@@ -1,6 +1,5 @@
 #include "TimerSession.hpp"
 #include "nt/ninja.h"
-#include "nt/hudtext.h"
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -106,22 +105,33 @@ void topologyAndScenes() {
     f.CapturedAt += 100 * Millisecond; feed(s, f);
     assert(!s.fighting() && s.snapshot().left.eventCount == 0);
 }
-void namesAndRules() {
-    TimerSettings settings; settings.playerNames = {"白方小"};
-    TimerSession s(settings);
-    assert(s.wantsTextRecognition());
-    auto f = fight(0); f.Res.PlayerSide = "left"; f.Res.PlayerName = "别人"; feed(s, f);
-    assert(s.snapshot().detectedPlayerSide.empty());
-    f = fight(1); f.Res.PlayerSide = "right"; f.Res.PlayerName = "白 方小"; feed(s, f);
-    assert(s.snapshot().detectedPlayerSide == "right" && !s.wantsTextRecognition());
-    f = fight(2); f.Hold = true; f.Res.Fighting = false; f.Res.Scene = "vs"; feed(s, f);
-    assert(s.snapshot().detectedPlayerSide == "right");
-    f = fight(3); f.Res.Scene = "queue"; f.Res.Fighting = false; feed(s, f);
-    assert(s.snapshot().detectedPlayerSide.empty());
-    f = fight(4); f.Res.PlayerSide = "left"; f.Res.OppName = "其他账号"; feed(s, f);
-    assert(s.snapshot().detectedPlayerSide == "left"); // verified opponent exclusion
-    settings.playerNames = {"新名字"}; s.configure(settings);
-    assert(s.snapshot().detectedPlayerSide.empty());
+void manualSideAndRules() {
+    TimerSettings settings;
+    assert(settings.playerSide == "left");
+    settings.dual = true;
+    TimerSession manual(settings);
+    feed(manual, fight(0)); feed(manual, fight(1, 3, 3)); feed(manual, fight(2, 3, 3));
+    const auto original = manual.snapshot();
+    assert(original.left.alternateDeadlineMs == 0 && original.right.alternateDeadlineMs == epoch + 11100);
+    settings.playerSide = "right"; manual.configure(settings);
+    auto switched = manual.snapshot();
+    assert(switched.left.alternateDeadlineMs == epoch + 11100 && switched.right.alternateDeadlineMs == 0);
+    assert(switched.left.deadlineMs == original.left.deadlineMs && switched.right.deadlineMs == original.right.deadlineMs);
+    assert(switched.left.eventCount == 1 && switched.right.eventCount == 1);
+    // Even a shared result carrying a side hint cannot change manual selection.
+    auto f = fight(3, 3, 3); f.Res.PlayerSide = "left"; feed(manual, f);
+    assert(manual.snapshot().left.alternateDeadlineMs > 0 && manual.snapshot().right.alternateDeadlineMs == 0);
+    settings.dual = false; settings.ninjaQuery = ninja::HanzoEdo; manual.configure(settings);
+    assert(manual.snapshot().left.alternateDeadlineMs > 0 && manual.snapshot().right.alternateDeadlineMs == 0);
+    settings.playerSide = "left"; manual.configure(settings);
+    assert(manual.snapshot().left.alternateDeadlineMs == 0 && manual.snapshot().right.alternateDeadlineMs > 0);
+    settings.ninjaQuery = "普通忍者"; manual.configure(settings);
+    assert(manual.snapshot().left.alternateDeadlineMs == 0 && manual.snapshot().right.alternateDeadlineMs == 0);
+    // Direct C++ callers get the safe left default for unsupported side modes.
+    settings.playerSide = "auto"; settings.dual = true; manual.configure(settings);
+    assert(manual.snapshot().left.alternateDeadlineMs == 0 && manual.snapshot().right.alternateDeadlineMs > 0);
+    manual.pauseObservations();
+    assert(manual.snapshot().right.deadlineMs == original.right.deadlineMs);
     for (const auto& name : {ninja::FifthMizukage, ninja::HanzoEdo}) {
         TimerSession t;
         feed(t, fight(0));
@@ -130,22 +140,9 @@ void namesAndRules() {
         assert(t.snapshot().left.alternateDeadlineMs == epoch + 11100);
     }
     assert(!ninja::DualCooldown("半藏") && !ninja::DualCooldown("照美冥"));
-    settings.dual = true; settings.playerNames.clear(); settings.ninjaQuery = ninja::HanzoEdo;
-    TimerSession manual(settings);
-    feed(manual, fight(0)); feed(manual, fight(1, 3, 3)); feed(manual, fight(2, 3, 3));
-    assert(manual.snapshot().left.alternateDeadlineMs == 0 && manual.snapshot().right.alternateDeadlineMs == 0);
-    settings.playerSide = "left"; manual.configure(settings);
-    assert(manual.snapshot().left.alternateDeadlineMs == 0 && manual.snapshot().right.alternateDeadlineMs > 0);
-    settings.dual = false; settings.ninjaQuery = "普通忍者"; manual.configure(settings);
-    assert(manual.snapshot().right.alternateDeadlineMs == 0);
-    const auto known = [](char32_t) { return true; };
-    auto decision = hudtext::DecideSide({"", "(其他账号)"}, {"白方小"}, known);
-    assert(decision.side == 0 && decision.player.empty());
-    decision = hudtext::DecideSide({"(白方小)", "(白方小)"}, {"白方小"}, known);
-    assert(decision.side == -1);
 }
 }
 int main() {
-    clocks(); ambiguity(); recoverAndReuse(); topologyAndScenes(); namesAndRules();
-    std::cout << "TimerSession: clocks/recovery/duplicates/blackout/topology/scenes/names/special rules PASS\n";
+    clocks(); ambiguity(); recoverAndReuse(); topologyAndScenes(); manualSideAndRules();
+    std::cout << "TimerSession: clocks/recovery/duplicates/blackout/topology/scenes/manual side/special rules PASS\n";
 }

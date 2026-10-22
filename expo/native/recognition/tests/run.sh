@@ -17,4 +17,9 @@ if [[ "$(uname -s)" == Darwin ]]; then
     -framework Foundation -framework CoreImage -framework CoreVideo -framework CoreGraphics \
     -o "$build/pixel_orientation_test"
   "$build/pixel_orientation_test"
+  xcrun clang++ -std=c++17 -fobjc-arc -UNDEBUG -I "$recognition/../../../android/app/src/main/cpp/include" \
+    "$recognition/tests/PNGAssetTest.mm" "$build/libnt_recognition.a" \
+    -framework Foundation -framework CoreImage -framework CoreVideo -framework CoreGraphics -framework ImageIO \
+    -o "$build/png_asset_test"
+  "$build/png_asset_test"
 fi

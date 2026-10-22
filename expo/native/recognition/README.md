@@ -1,59 +1,57 @@
-# iOS recognition adapter (v0.3.0)
+# iOS recognition adapter — manual side selection
 
-## Source/build contract
+The user chooses **left or right** (default left). iOS does not recognize account names or infer the player's side. There is no Vision backend, account-template import, learned-opponent catalogue, or OCR model loading. Ninja/avatar, bean, scene and cooldown recognition remain automatic.
 
-Compile in the **broadcast extension**, not the React Native bridge target:
+## Native build
 
-- `RecognitionBridge.mm`, `VisionAccounts.mm`, `TimerSession.cpp` in this directory.
-- Every `android/app/src/main/cpp/src/**/*.cpp` (currently 45 files); **exclude `jni.cpp`**.
-- Header search: this directory and `android/app/src/main/cpp/include`, including its vendored `third_party/nlohmann/json.hpp`.
-- C++17, exceptions/RTTI enabled, `-O3 -fno-fast-math -ffp-contract=off`.
-- Objective-C++ files use ARC. Link libc++, Foundation, CoreVideo, CoreImage, CoreGraphics, ImageIO, **Vision**. CommonCrypto SHA-256 is provided by the system SDK.
-- Swift bridging header imports `RecognitionBridge.h`. Existing Swift selectors are unchanged.
-- Recommended deployment target: iOS 16+ (public accurate Simplified Chinese Vision OCR; the adapter checks language availability and reports failures).
+Compile in the broadcast extension:
 
-The supplied CMake file also builds the portable core/tests on Linux/macOS without Apple recognition frameworks. An iOS CMake invocation must set `CMAKE_SYSTEM_NAME=iOS`; the Expo plugin can instead register the above sources directly with Xcode.
+- `RecognitionBridge.mm` and `TimerSession.cpp` from this directory.
+- All `android/app/src/main/cpp/src/**/*.cpp`; exclude `jni.cpp` and test files.
+- Header search paths: this directory and `android/app/src/main/cpp/include`, including its vendored `third_party/` headers.
+- C++17, exceptions/RTTI, `-O3 -fno-fast-math -ffp-contract=off`; ARC for Objective-C++.
+- Link libc++, Foundation, CoreVideo, CoreImage, CoreGraphics and ImageIO. CommonCrypto SHA-256 is provided by the system SDK. **No Vision framework is required.**
+- Swift bridging header imports `RecognitionBridge.h`. The current `analyze(_:orientation:capturedAtMs:capturedUptime:)` selector is preserved.
 
-## Resource root
+The complete portable shared source set is retained for linkage dependencies. This does not enable its OCR runtime: the pipeline's text wrapper is disabled, no account names/templates are supplied, and no model loader is registered. Do not remove individual shared OCR/identity translation units without resolving their shared linkage dependencies.
 
-Use original files under a plain directory/folder resource, **not an asset catalog**. Disable PNG recompression (`COMPRESS_PNG_FILES=NO`); avatar integrity checks hash the original encoded bytes.
+The CMake file builds the portable core/tests on Linux/macOS. Set `CMAKE_SYSTEM_NAME=iOS` to include the Apple bridge. The host/plugin must remove references to the deleted `VisionAccounts` and `IdentityTemplates` sources; those host files are outside this directory's ownership.
 
-| Repository source | Extension resource path |
+## Bundled assets
+
+Copy original files as plain folder resources, not asset catalogs. Set `COMPRESS_PNG_FILES=NO`: avatar checksums verify original encoded bytes.
+
+| Repository source | Resource path |
 |---|---|
 | `assets/templates/manifest.json` and `*.png` | `templates/` |
 | `assets/avatars/index.json` and `*.png` | `avatars/` |
 | `internal/ninja/templates/*.png`, excluding `*.source.png` | `ninja_templates/` |
 
-`game/` is not read by native code. **Do not bundle the ONNX model in the extension:** iOS uses Vision for account text. The Android OCR C++ files remain in the build because shared preprocessing/evidence code references their portable helpers; no model is registered or loaded.
+Neither `game/`, account glyph images nor `ocr/recognizer.onnx` is needed. The loader decodes only manifest-referenced scene images, indexed avatars and non-source ninja templates. It validates image dimensions/budgets and original avatar hashes, strips colour-management chunks as Android does, and converts ImageIO/Quartz pixels to straight RGBA before registration. AssetStore retains grayscale and alpha masks, not RGBA copies. The generic PNG decoder now lives directly in `RecognitionBridge.mm`; no template-import API is involved.
 
-The loader reads only manifest-referenced scene PNGs, avatar-index entries, and non-source ninja PNGs. ImageIO decodes one image at a time into temporary RGBA; AssetStore retains only grayscale and alpha bits. Current assets: 32 scene images (0.8035 MiB luma), 242 avatars (1.3084 MiB), 18 ninja templates (0.0544 MiB), plus small masks/catalogue/prepared-template caches. It strips ICC/gamma chunks as Android does, verifies original avatar SHA-256, checks dimensions/budgets before allocating, and never resizes reference templates. Quartz's premultiply/unpremultiply can round semi-transparent edge RGB; opaque interiors are unaffected. Apple pixel/score validation remains necessary.
+Current luma footprint: approximately 0.80 MiB scene templates, 1.31 MiB avatars and 0.05 MiB ninja templates, plus masks and prepared caches. Frames are uniformly downsampled to <=1280 pixels wide; 1280×720 RGBA is 3.52 MiB. Intermediate CI caching and the shared parallel worker pool are disabled; scratch is reused and released on pause. Physical-device peak memory still requires measurement against the extension's actual Jetsam limit. Quartz alpha-edge rounding and NV12 colour parity also need device validation.
 
-One live engine per extension process is enforced because the shared core has process-global account names and an immutable avatar catalogue. Another instance may reuse the same root after deallocation; changing roots requires a new process.
+## Settings and output
 
-## Settings / state
+`configure` accepts partial updates:
 
-`configure` is a partial update. Settings:
+- `playerSide: left|right`, default left. The ObjC bridge rejects unsupported modes without changing settings. The standalone C++ session normalizes invalid modes to left.
+- `showBothSides`, `dual` (manual alternate estimate for the opposite side only), `backgroundFPS: 1..10`.
+- `ninjaQuery`: full opponent variant override, applied only opposite the manually selected player side.
+- `rememberSide`: host persistence policy; live manual selection works independently of it.
+- `layoutPreset: auto|camp|duel`: automatic **layout** selection is unrelated to player-side selection.
+- `calibration: null | {profile: camp|duel, leftBeads?, rightBeads?, leftAvatar?, rightAvatar?}`. Boxes are `{x,y,width,height}` fractions of the whole oriented frame. Missing regions remain automatic; shared size/shape limits are enforced. Structural comparison avoids rebuilding on identical settings snapshots.
+- Legacy `roiScale` and `roiOffsetX/Y` transform shared calibrated bead geometry. Explicit boxes take precedence. Default slider values preserve automatic HUD anchoring.
 
-- `playerSide: auto|left|right`, `showBothSides`, `dual` (legacy manual estimate, only a resolved opponent), `backgroundFPS: 1..10`.
-- `playerNames: string[]`, deduplicated, at most 20 names of 40 Unicode code points. If absent, legacy `playerName` supplies one name.
-- `ninjaQuery`: explicit full opponent variant. It affects a resolved opponent only, never player-side inference.
-- `rememberSide`: persistence policy belongs to the host. Explicit live manual choices remain valid even when false; host must not restore them in a new run when false.
-- `layoutPreset: auto|camp|duel`.
-- `calibration: null | {profile: camp|duel, leftBeads?, rightBeads?, leftAvatar?, rightAvatar?}`. Each region is `{x,y,width,height}` normalized to the entire oriented frame. Missing boxes stay automatic. Shared calibration size/shape validation rejects invalid updates atomically.
-- `roiScale`, `roiOffsetX/Y`: legacy sliders translate/scale the shared default bead-box geometry, not a cropped toy detector. Explicit boxes take precedence. At identity slider values, automatic HUD anchoring stays enabled.
+State contains four pinned deadlines, match/counts, ninja names, substitution totals, scene, latency, frame dimensions, frame count/time, message/error and normalized geometry. It does **not** expose detected player side, account names, OCR status or template counters. Selecting/switching sides changes only opponent interpretation; neither side's confirmed events/deadlines is reset.
 
-Results retain four pinned absolute deadlines, match/counts, detectedPlayerSide, message, frames/lastFrameAtMs. Additions: `leftNinja/rightNinja`, `leftSubstitutions/rightSubstitutions`, `scene`, `latencyMs`, `frameWidth/frameHeight` (also width/height), `playerName/opponentName`, `ocrStatus/ocrError`, and normalized `geometry.sides.left/right.beadBox/avatarBox` plus pixel bead centres. No frame pixels cross this API. Screenshot-based calibration is a separate host concern.
+## Capture and timing guarantees
 
-## Recognition and timing
+The host must use a serial recognition worker and drop arrivals while busy rather than accumulate a backlog. `capturedUptime` is acquisition-time **CLOCK_MONOTONIC** seconds, paired with `capturedAtMs` epoch milliseconds. The bridge checks age using that same clock, rejects invalid/replayed/older-than-two-second deliveries, and maps acquisition time into the core epoch; worker delay never becomes the event timestamp. The existing Apple clock/sysctl fixes are unaffected.
 
-- The shared `frame::Pipeline` performs scene gating, configured layout, 4/6-slot topology, special ninja/palette/avatar rules and image-template identity. No Android/JNI dependency or substitute pixel heuristic exists in the adapter.
-- `VisionAccounts` replaces **only the account OCR backend**, using public on-device accurate Chinese/English Vision requests on title crops. It reuses shared `NameLayout`, `BuildRows`, `AccountSegment`, `Consensus`, `Evidence`, `ObserveBound`, `ValueState` and `DecideSide`.
-- OCR requires two agreeing image treatments, then two distinct acquisition timestamps; glyph proofs/signatures are rechecked on subsequent pixels. Same-name accounts on both sides remain unresolved; exactly one verified other account can identify the opposite player side. Failed/stale readings never guess a side. Vision has no public character dictionary, so matching is conservative/strict instead of Android's unsupported-symbol wildcard rule.
-- Vision is synchronous on the dedicated recognition worker, **not ReplayKit's delivery queue**. The host must keep at most one latest pending sample (never queue a backlog), retain its pixel buffer, and preserve capture time. OCR is skipped after side resolution, for manual side, and on duplicate acquisitions; failed OCR backs off five seconds.
-- TimerSession preserves the WIP deadline contract, adds Android's 250 ms recovery/immediate-reuse evidence, source/topology resync, cadence EMA, verified round-opening reset, VS inherited baseline, consecutive end-scene evidence, confirmed identity, and opponent overrides. Candidates never enable special rules. Only confirmed one-bead drops start a timer; multi-drops/wipes never invent events. Two observations minimum; first candidate time pins deadlines. Both normal 15 s and exact Mei/Hanzo 10 s projections derive from one confirmed event.
-- Unknown frames clear pending votes but retain a recent baseline only inside the cadence limit. Capture failure/pause/geometry change breaks the baseline, not existing deadlines. Duplicate pixels maintain continuity but never add votes. A heartbeat cannot create an observation.
+TimerSession retains confirmed single-bead-drop detection, two-frame confirmation, first-candidate deadline pinning, 250 ms recovery/immediate-reuse handling, dynamic 4/6-slot geometry, exact Mei/Hanzo 15/10-second rules, scene/round transitions and calibration resync. Multi-bead drops do not invent substitutes. Unknown frames interrupt pending votes; duplicates can maintain continuity but never vote. Capture pause/failure/source changes discard visual baselines without stopping confirmed clocks.
 
-## Tests and memory findings
+## Runnable checks
 
 From `expo/`:
 
@@ -61,26 +59,6 @@ From `expo/`:
 bash native/recognition/tests/run.sh
 ```
 
-This compiles all portable shared sources and runs TimerSession assertions. On Darwin it additionally builds/runs `PixelOrientationTest.mm`: asymmetric top-down BGRA colours through Core Image, all eight EXIF orientations. Production uses the same `PixelConversion.hpp` helper and probes actual bitmap row order once, rather than guessing an unconditional Y flip. **The Apple test has not run on the Linux development host.**
+This builds all portable shared sources and runs TimerSession and matching-kernel regressions. Manual-selection tests cover default left, switching both directions, opposite-side dual/variant overrides, unchanged event deadlines/counts and ignored shared side hints. Existing cooldown/scene/recovery tests remain.
 
-Optional Linux probes:
-
-```sh
-cmake -S expo/native/recognition -B /tmp/nt-ios-core -DCMAKE_BUILD_TYPE=Release
-cmake --build /tmp/nt-ios-core --target ocr_memory_probe pipeline_memory_probe -j4
-/tmp/nt-ios-core/ocr_memory_probe internal/ocr/neuraldata/recognizer.onnx 1600
-/tmp/nt-ios-core/pipeline_memory_probe "$PWD" 图片_002_01.png
-```
-
-Measured Linux max RSS, serial core pool (not an iOS footprint guarantee):
-
-- Shared model weights: 10.2633 MiB; encoded model: 10.355 MiB.
-- Actual two concurrent OCR rows, widths 320/640/1280/1600: 25.2/25.9/35.9/40.8 MiB max RSS.
-- Full shared pipeline + assets + real 1280×720 image + `ReadAccounts`: **57.4 MiB RSS**. Scene was fight/duel and real account text was read. This ruled out simply enabling the Android model inside a 50 MiB ReplayKit extension.
-- iOS therefore does not load ONNX. Frames are downsampled uniformly to <=1280 width (<=3.52 MiB RGBA at 16:9), CI intermediate caching is disabled, large frame scratch is reused, the shared worker pool is disabled, and Vision sees only small title crops sequentially. Pause clears CI/scratch.
-
-**Not yet proven:** Vision/framework/IOSurface peak process footprint, Chinese OCR speed/accuracy, NV12 colour parity and orientation on physical iPhones, and transparent PNG edge score parity. Vision is a public offline backend, not a promise that allocations run out-of-process or fit the extension. Measure `phys_footprint`/Instruments on oldest supported devices during cold startup, first OCR, repeated uncertain names, all scene transitions, 4/6-bead characters, pauses and calibration rebuild. Ship only after the extension stays below its real Jetsam limit. Never describe Linux host tests as a device-recognition validation.
-
-## Remaining feature boundary
-
-Imported glyph templates and persistent learned-opponent images are **not yet exposed** by this adapter. The shared identity matcher already supports them, but AssetStore has no per-key/prefix deletion, so clearing/replacing a user catalogue without disturbing globally cached base assets needs a small shared API addition (parent approval required). No Android shared source was modified. The single shared pending opponent crop is bounded but is not persisted by iOS. Account-name changes reset delivery/OCR evidence immediately and update the shared name catalogue.
+On Darwin the same script also compiles and runs `PixelOrientationTest.mm`, checking an asymmetric BGRA image under all eight EXIF orientations. Production retains the same `PixelConversion.hpp` helper and one-time row-order probe. This Apple-framework test cannot execute on the Linux development host; CI/device validation remains required.
