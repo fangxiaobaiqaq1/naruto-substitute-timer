@@ -5,6 +5,11 @@ import Foundation
 // /tmp/naruto-wire-check
 func near(_ a: Double, _ b: Double) { precondition(abs(a - b) < 0.00001, "\(a) != \(b)") }
 
+near(CaptureProtocol.captureInterval(fps: 8, inMatch: true), 0.125)
+near(CaptureProtocol.captureInterval(fps: 8, inMatch: false), 0.4)
+near(CaptureProtocol.captureInterval(fps: 1, inMatch: false), 1)
+near(CaptureProtocol.captureInterval(fps: .nan, inMatch: true), 0.125)
+
 var clock = CaptureDeadline()
 clock.update(1_040_000, sentAtMs: 1_000_000, sentAtMonotonic: 500)
 near(clock.remaining(at: 502), 38)

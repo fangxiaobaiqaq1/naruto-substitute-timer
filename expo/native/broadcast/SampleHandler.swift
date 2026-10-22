@@ -15,10 +15,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
     let orientation: Int
     let capturedAtMs: Double
     let monotonic: Double
-    let uptime: Double
     let generation: Int
   }
-  // Protected by lock. Deliberately drop captures while Vision is busy: one
+  // Protected by lock. Deliberately drop captures while recognition is busy: one
   // retained in-flight surface, no pending surface or queued frame backlog.
   // A second full-resolution IOSurface costs too much of ReplayKit's 50 MiB.
   private var recognitionBusy = false
@@ -43,6 +42,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
   private var paused = false
   private var lastAcquisition = 0.0
   private var fps = 8.0
+  private var inMatch = false
   // Only recognitionQueue accesses the engine and analysis history.
   private var engine: NTRecognitionEngine?
   private var analyzedGeneration = -1
@@ -79,19 +79,18 @@ final class SampleHandler: RPBroadcastSampleHandler {
   override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
     guard sampleBufferType == .video else { return }
     let monotonic = CaptureProtocol.now()
-    let uptime = ProcessInfo.processInfo.systemUptime
     let pixels = CMSampleBufferGetImageBuffer(sampleBuffer)
     let rawOrientation = (CMGetAttachment(sampleBuffer, key: RPVideoSampleOrientationKey as CFString,
                                         attachmentModeOut: nil) as? NSNumber)?.intValue ?? 1
     lock.lock(); defer { lock.unlock() }
     guard !finished, !paused, configured, !recognitionBusy else { return }
     guard let pixels else { generation += 1; return }
-    // Throttle at acquisition, not when a slow Vision worker finally runs.
-    guard monotonic - lastAcquisition >= 1.0 / fps else { return }
+    // Throttle at acquisition; outside a match poll at most every 400 ms.
+    guard monotonic - lastAcquisition >= CaptureProtocol.captureInterval(fps: fps, inMatch: inMatch) else { return }
     lastAcquisition = monotonic
     let frame = CapturedFrame(pixels: pixels, orientation: (1...8).contains(rawOrientation) ? rawOrientation : 1,
                               capturedAtMs: wallOffsetMs + monotonic * 1000,
-                              monotonic: monotonic, uptime: uptime, generation: generation)
+                              monotonic: monotonic, generation: generation)
     recognitionBusy = true
     // The closure strongly owns frame.pixels until synchronous analysis ends,
     // even after ReplayKit returns/recycles its CMSampleBuffer wrapper.
@@ -118,7 +117,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
       analyzedGeneration = frame.generation
       lastAnalyzedAt = frame.monotonic
       var result = engine.analyze(frame.pixels, orientation: frame.orientation, capturedAtMs: frame.capturedAtMs,
-                                  capturedUptime: frame.uptime) as? [String: Any] ?? [:]
+                                  capturedUptime: frame.monotonic) as? [String: Any] ?? [:]
+      lock.lock()
+      if frame.generation == generation { inMatch = result["match"] as? Bool ?? false }
+      lock.unlock()
       frames += 1
       result["type"] = "state"
       result["capturedAtMs"] = frame.capturedAtMs
