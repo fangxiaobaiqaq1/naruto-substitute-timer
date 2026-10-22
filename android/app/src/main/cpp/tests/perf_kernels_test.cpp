@@ -18,8 +18,10 @@
 #include <string>
 #include <vector>
 
+#if !defined(__aarch64__)
 #define NT_DOT_NEON_EMULATED 1
 #include "neon_emu.h"
+#endif
 #include "../src/match/ncc_dot.h"
 
 #include "nt/assets.h"
@@ -55,8 +57,15 @@ std::vector<namedDot> dotKernels() {
     if (__builtin_cpu_supports("avx2")) out.push_back({"avx2", nt::match::dot::AVX2});
     else std::printf("note: CPU has no AVX2; the avx2 kernel is not executed here\n");
 #endif
+#if defined(NT_DOT_NEON_EMULATED)
     out.push_back({"neon(emulated)", nt::match::dot::NEON});
     out.push_back({"dotprod(emulated)", nt::match::dot::DotProd});
+#else
+    out.push_back({"neon", nt::match::dot::NEON});
+    const auto available = nt::match::NCCKernels();
+    if (std::find(available.begin(), available.end(), "dotprod") != available.end())
+        out.push_back({"dotprod", nt::match::dot::DotProd});
+#endif
     return out;
 }
 
