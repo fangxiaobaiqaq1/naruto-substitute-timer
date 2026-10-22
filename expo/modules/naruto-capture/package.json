@@ -1,0 +1,17 @@
+{
+  "name": "naruto-capture",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local ReplayKit state transport and sample-buffer countdown Picture in Picture",
+  "license": "MIT",
+  "author": "Naruto Timer contributors",
+  "homepage": "https://github.com/expo/expo",
+  "main": "index.ts",
+  "scripts": {
+    "check": "node checks/check.cjs"
+  },
+  "peerDependencies": {
+    "expo": "^58.0.0",
+    "react-native": "^0.88.0"
+  }
+}

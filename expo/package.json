@@ -1,15 +1,15 @@
 {
   "name": "naruto-substitute-timer-mobile",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test": "node ios-compat/check.cjs",
+    "test": "node --test ios-compat/*check.cjs && node modules/naruto-capture/checks/check.cjs",
     "build:ios:simulator": "eas build --platform ios --profile simulator",
     "build:ios:device": "eas build --platform ios --profile preview"
   },
