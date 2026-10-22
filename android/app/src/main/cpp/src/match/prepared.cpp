@@ -19,7 +19,10 @@
 #include "nt/parallel.h"
 #include "ncc_dot.h"
 
-#if defined(__aarch64__)
+#if defined(__aarch64__) && defined(__APPLE__)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#elif defined(__aarch64__)
 #include <sys/auxv.h>
 #ifndef HWCAP_ASIMDDP
 #define HWCAP_ASIMDDP (1 << 20)
@@ -236,7 +239,15 @@ NT_TARGET_DOTPROD __attribute__((flatten)) void sumsDotProd(const PreparedNCC& p
                                                             const grayPrefix& pre, int ox, int oy, nccSums& s) {
     runSums<dot::DotProd>(p, img, pre, ox, oy, s);
 }
-bool hasDotProd() { return (getauxval(AT_HWCAP) & HWCAP_ASIMDDP) != 0; }
+bool hasDotProd() {
+#if defined(__APPLE__)
+    int supported = 0;
+    size_t size = sizeof(supported);
+    return sysctlbyname("hw.optional.arm.FEAT_DotProd", &supported, &size, nullptr, 0) == 0 && supported != 0;
+#else
+    return (getauxval(AT_HWCAP) & HWCAP_ASIMDDP) != 0;
+#endif
+}
 #endif
 
 struct kernel {

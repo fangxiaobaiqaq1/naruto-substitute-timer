@@ -50,7 +50,8 @@ try {
   const repo = path.dirname(root);
   const avatar = fs.readdirSync(path.join(repo, 'assets/avatars')).find((name) => name.endsWith('.png'));
   assert.equal(hash(path.join(temp, 'NarutoBroadcast/RecognitionAssets/avatars', avatar)), hash(path.join(repo, 'assets/avatars', avatar)));
-  assert(fs.statSync(path.join(temp, 'NarutoBroadcast/RecognitionAssets/ocr/recognizer.onnx')).size > 0);
+  assert(!fs.existsSync(path.join(temp, 'NarutoBroadcast/RecognitionAssets/ocr/recognizer.onnx')), 'iOS uses native Vision, not the heavyweight ONNX model');
+  assert(sources.some((s) => s.endsWith('VisionAccounts.mm')));
   const info = require(path.join(root, 'node_modules/@expo/plist')).default.parse(fs.readFileSync(path.join(temp, 'NarutoBroadcast/NarutoBroadcast-Info.plist'), 'utf8'));
   assert.equal(info.NSExtension.NSExtensionPointIdentifier, 'com.apple.broadcast-services-upload');
   assert.equal(info.NSExtension.NSExtensionAttributes.RPBroadcastProcessMode, 'RPBroadcastProcessModeSampleBuffer');
