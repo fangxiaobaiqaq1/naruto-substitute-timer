@@ -2,12 +2,13 @@
   "expo": {
     "name": "替身计时器",
     "slug": "naruto-substitute-timer",
-    "version": "0.1.0",
-    "orientation": "portrait",
+    "version": "0.3.0",
+    "orientation": "default",
     "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": false,
-      "bundleIdentifier": "com.narutotimer.mobile"
+      "supportsTablet": true,
+      "bundleIdentifier": "com.narutotimer.mobile",
+      "buildNumber": "1"
     },
     "android": {
       "package": "com.narutotimer.mobile"
@@ -30,7 +31,7 @@
           }
         }
       ],
-      "./plugins/withReplayKitPlaceholder"
+      "./plugins/withReplayKit"
     ]
   }
 }

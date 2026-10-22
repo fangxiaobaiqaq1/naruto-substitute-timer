@@ -3,6 +3,13 @@ name: iOS unsigned IPA
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "ios/**"
+    paths:
+      - "expo/**"
+      - "android/app/src/main/cpp/**"
+      - "assets/**"
+      - ".github/workflows/ios-unsigned.yml"
     tags:
       - "ios-unsigned-*"
 
@@ -24,8 +31,6 @@ jobs:
     env:
       CI: "1"
       EXPO_NO_TELEMETRY: "1"
-      # Stable toolchain for current iOS; do not follow the Xcode 27 preview.
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -35,22 +40,27 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: expo/package-lock.json
+      - name: Select newest installed stable Xcode
+        run: python3 ios-compat/select-xcode.py
       - name: Check current iOS toolchain
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           xcrun simctl list runtimes
-      - name: Install dependencies and check TypeScript
+      - name: Install dependencies and check TypeScript and native rules
         run: |
           npm ci --include=dev
           npm run typecheck
           npm test
+          bash native/recognition/tests/run.sh
       - name: Generate iOS project and install pods
         run: |
           npx --no-install expo prebuild --platform ios --no-install
           pod install --project-directory=ios
+          node ios-compat/validate-project.cjs
       - name: Build unsigned device app
         run: |
+          set -o pipefail
           shopt -s nullglob
           workspaces=(ios/*.xcworkspace)
           [[ ${#workspaces[@]} -eq 1 ]] || { echo "::error::Expected one iOS workspace"; exit 1; }
@@ -65,7 +75,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build
+            build 2>&1 | tee "$RUNNER_TEMP/ios-xcodebuild.log"
       - name: Validate device app and package IPA
         run: |
           shopt -s nullglob
@@ -77,6 +87,7 @@ jobs:
           [[ "$platform" == iPhoneOS ]] || { echo "::error::Not a device build"; exit 1; }
           executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")"
           xcrun lipo "$app/$executable" -verify_arch arm64
+          python3 ios-compat/validate-app.py "$app"
           python3 - "$app" <<'PY'
           import json, pathlib, plistlib, sys
           app = pathlib.Path(sys.argv[1])
@@ -86,7 +97,8 @@ jobs:
           def version(value):
               parts = tuple(map(int, value.split('.')))
               return parts + (0,) * (3 - len(parts))
-          for path in [app / 'Info.plist', *app.glob('Frameworks/*.framework/Info.plist')]:
+          for path in [app / 'Info.plist', *app.glob('Frameworks/*.framework/Info.plist'),
+                       *app.glob('PlugIns/*.appex/Info.plist'), *app.glob('PlugIns/*.appex/Frameworks/*.framework/Info.plist') ]:
               info = plistlib.loads(path.read_bytes())
               minimum = info.get('MinimumOSVersion')
               assert minimum or path.parent != app, 'App MinimumOSVersion is missing'
@@ -98,10 +110,25 @@ jobs:
           ditto "$app" "$RUNNER_TEMP/unsigned-ipa/Payload/$(basename "$app")"
           ditto -c -k --keepParent "$RUNNER_TEMP/unsigned-ipa/Payload" "$RUNNER_TEMP/naruto-timer-unsigned.ipa"
           unzip -t "$RUNNER_TEMP/naruto-timer-unsigned.ipa"
+          cd "$RUNNER_TEMP"
+          shasum -a 256 naruto-timer-unsigned.ipa > naruto-timer-unsigned.ipa.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: naruto-timer-ios-unsigned-${{ github.run_number }}
-          path: ${{ runner.temp }}/naruto-timer-unsigned.ipa
+          path: |
+            ${{ runner.temp }}/naruto-timer-unsigned.ipa
+            ${{ runner.temp }}/naruto-timer-unsigned.ipa.sha256
           if-no-files-found: error
           compression-level: 0
+          retention-days: 14
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-build-diagnostics-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/ios-xcodebuild.log
+            expo/ios/Podfile.lock
+            expo/ios/*/Info.plist
+            expo/ios/*.xcodeproj/project.pbxproj
           retention-days: 7

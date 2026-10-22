@@ -39,6 +39,10 @@ Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 
 详见 [使用说明](docs/使用说明.md)、[诊断说明](docs/诊断说明.md) 和 [Android 原生开发](docs/安卓原生开发.md)。
 
+## iOS 原生版（独立分支）
+
+`ios/v0.3.0-native` 基于 v0.3.0，接入 ReplayKit 广播扩展、共享 C++ 识别核心与系统画中画，GitHub Actions 生成用户自行签名的 arm64 IPA。iPhone / iPad 最低 iOS 16.4，重点适配最新 iOS 27 系列；具体功能、平台限制、自签步骤及尚待真机验收项目见 [iOS 开发与下载](expo/README.md)。
+
 ## 开发
 
 Windows 原生构建的验收路径需要 Go 1.26.10（`go.mod` 的 `toolchain`；旧的 Go 1.26.x 会自动下载它）、PowerShell 和 Fyne 所需的 Windows x64 C/C++ 工具链（cgo）。在 Developer PowerShell 中：
