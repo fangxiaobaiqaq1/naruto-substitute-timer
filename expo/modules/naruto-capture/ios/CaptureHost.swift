@@ -43,7 +43,6 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   private var lastRender = 0.0
   private var pendingUntil = 0.0
   private var startIssued = false
-  private var stopInProgress = false
   private var deadlines = Array(repeating: CaptureDeadline(), count: 4)
   private var settings = CaptureProtocol.settings([:])
   private var state: [String: Any] = [
@@ -52,7 +51,7 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
     "connected": false, "message": "请先准备，再开启画中画与系统录屏。",
     "leftDeadlineMs": 0, "rightDeadlineMs": 0,
     "leftAlternateDeadlineMs": 0, "rightAlternateDeadlineMs": 0,
-    "leftCount": -1, "rightCount": -1, "detectedPlayerSide": "", "match": false,
+    "leftCount": -1, "rightCount": -1, "match": false,
     "frames": 0, "lastFrameAtMs": 0, "leftNinja": "", "rightNinja": "",
     "leftSubstitutions": 0, "rightSubstitutions": 0, "scene": "", "latencyMs": 0,
     "frameWidth": 0, "frameHeight": 0, "stale": true, "renderedFrames": 0
@@ -72,8 +71,19 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
     NotificationCenter.default.addObserver(self, selector: #selector(mediaReset), name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
   }
 
-  func snapshot() -> [String: Any] { state }
-  private func emit() { onState?(state) }
+  func snapshot() -> [String: Any] {
+    var output = state
+    let monotonic = CaptureProtocol.now()
+    let wall = Date().timeIntervalSince1970 * 1000
+    // JS formats wall-clock deadlines. Rebase only the exported view after a
+    // clock correction; native event timestamps and PiP clocks remain pinned.
+    for (index, key) in Self.deadlineKeys.enumerated() {
+      output[key] = deadlines[index].epochMs == 0 ? 0 : wall + deadlines[index].remaining(at: monotonic) * 1000
+    }
+    if lastFrame > 0 { output["lastFrameAtMs"] = wall - max(0, monotonic - lastFrame) * 1000 }
+    return output
+  }
+  private func emit() { onState?(snapshot()) }
   private func message(_ value: String) { state["message"] = value; emit() }
 
   func prepare() throws -> [String: Any] {
@@ -81,9 +91,6 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       state["available"] = false
       message("安装包缺少有效的系统录屏扩展，请安装完整 IPA。")
       throw NSError(domain: "NarutoCapture", code: 3, userInfo: [NSLocalizedDescriptionKey: state["message"] as? String ?? "录屏扩展缺失"])
-    }
-    guard !stopInProgress else {
-      throw NSError(domain: "NarutoCapture", code: 2, userInfo: [NSLocalizedDescriptionKey: "画中画正在关闭，请稍后再试。"])
     }
     guard AVPictureInPictureController.isPictureInPictureSupported() else {
       message("此设备不支持画中画；不能保证切到游戏后继续计时。")
@@ -119,7 +126,10 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       default: break
       }
     }
-    server.newConnectionHandler = { [weak self] in self?.accept($0) }
+    server.newConnectionHandler = { [weak self, weak server] connection in
+      guard let self, let server, self.listener === server else { connection.cancel(); return }
+      self.accept(connection)
+    }
     server.start(queue: .main)
     if pip == nil {
       let source = AVPictureInPictureController.ContentSource(sampleBufferDisplayLayer: renderer.layer, playbackDelegate: self)
@@ -128,8 +138,13 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       controller.canStartPictureInPictureAutomaticallyFromInline = false
       controller.requiresLinearPlayback = true
       pip = controller
-      possibleObservation = controller.observe(\.isPictureInPicturePossible, options: [.initial, .new]) { [weak self] _, _ in
-        DispatchQueue.main.async { self?.updatePossible() }
+      // AVKit may query playback during initialization, before identity is set.
+      controller.invalidatePlaybackState()
+      possibleObservation = controller.observe(\.isPictureInPicturePossible, options: [.initial, .new]) { [weak self, weak controller] _, _ in
+        DispatchQueue.main.async {
+          guard let self, let controller, self.pip === controller else { return }
+          self.updatePossible()
+        }
       }
     }
     if timer == nil {
@@ -185,21 +200,34 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { old?.cancel() }
     listener?.cancel(); listener = nil
     timer?.cancel(); timer = nil
-    pendingUntil = 0
-    startIssued = false
+    invalidatePictureInPicture()
     state["prepared"] = false
-    state["pipPending"] = false
     invalidateEvidence()
     state["broadcastActive"] = false
     state["connected"] = false
     state["message"] = reason
-    if pip?.isPictureInPictureActive == true {
-      stopInProgress = true
-      pip?.stopPictureInPicture()
-    }
     render()
     try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     emit()
+  }
+
+  private func invalidatePictureInPicture() {
+    // Identity is the generation gate. Retire BEFORE calling AVKit, whose
+    // callbacks may reenter or arrive after a new preparation. Never wait for
+    // didStop from a discarded controller (especially after a media reset).
+    let old = pip
+    pip = nil
+    possibleObservation?.invalidate()
+    possibleObservation = nil
+    pendingUntil = 0
+    startIssued = false
+    state["pipPending"] = false
+    state["pipActive"] = false
+    state["pipPossible"] = false
+    // stop alone need not cancel a start in flight: detach its source too, and
+    // the identity guard stops it again if a late didStart still arrives.
+    old?.stopPictureInPicture()
+    old?.contentSource = nil // Release the reusable renderer layer immediately.
   }
 
   @objc private func background() {
@@ -217,12 +245,7 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   }
   @objc private func mediaReset() {
     stop(reason: "系统媒体服务已重置，请重新准备画中画。")
-    possibleObservation = nil
-    pip = nil
-    stopInProgress = false
-    state["pipActive"] = false
-    state["pipPossible"] = false
-    emit()
+    renderer.layer.flush()
   }
 
   private func accept(_ connection: NWConnection) {
@@ -245,14 +268,13 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   }
 
   private func receive(_ connection: NWConnection) {
-    connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self, weak connection] data, _, complete, error in
+    connection.receive(minimumIncompleteLength: 1, maximumLength: CaptureProtocol.receiveLimit) { [weak self, weak connection] data, _, complete, error in
       guard let self, let connection, self.client === connection else { return }
       if let data {
-        self.input.append(data)
-        guard self.input.count <= CaptureProtocol.limit else { self.disconnect("采集消息超出限制。"); return }
-        while let newline = self.input.firstIndex(of: 10) {
-          let line = self.input.prefix(upTo: newline)
-          self.input.removeSubrange(...newline)
+        let lines: [Data]
+        do { lines = try CaptureProtocol.receiveLines(data, buffering: &self.input) }
+        catch { self.disconnect("采集消息超出限制。"); return }
+        for line in lines {
           guard let packet = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             self.disconnect("采集消息格式错误。"); return
           }
@@ -332,11 +354,9 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       let value = CaptureProtocol.number(packet[key] ?? packet[aliases[key] ?? key], -1)
       if value >= 0, value <= 9_007_199_254_740_991, value.rounded() == value { state[key] = value }
     }
-    for key in ["leftNinja", "rightNinja", "scene", "message", "ocrStatus", "ocrError", "recognitionError", "playerName", "opponentName"] {
+    for key in ["leftNinja", "rightNinja", "scene", "message", "recognitionError"] {
       if let text = packet[key] as? String { state[key] = String(text.prefix(key == "message" ? 500 : 100)) }
     }
-    let side = packet["detectedPlayerSide"] as? String ?? ""
-    state["detectedPlayerSide"] = ["left", "right"].contains(side) ? side : ""
     state["match"] = CaptureProtocol.bool(packet["match"])
     state["lastFrameAtMs"] = wall
     state["latencyMs"] = min(60_000, max(0, CaptureProtocol.number(packet["latencyMs"])))
@@ -371,7 +391,6 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   private func invalidateEvidence() {
     state["stale"] = true; state["match"] = false
     state["leftCount"] = -1; state["rightCount"] = -1
-    state["detectedPlayerSide"] = ""
   }
   private func tick() {
     let now = CaptureProtocol.now()
@@ -385,8 +404,10 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       return
     }
     if pendingUntil > 0, now > pendingUntil {
-      pendingUntil = 0; startIssued = false; state["pipPending"] = false
-      message("系统尚未允许画中画。请保持预览可见并重新点击，勿直接切换游戏。")
+      // A timeout must retire the outstanding request, not reopen the gate on
+      // the same controller and later accept its stale didStart/didStop.
+      stop(reason: "画中画启动超时，采集已停止。请保持预览可见，重新准备并开启画中画。")
+      return
     }
     render()
   }
@@ -401,9 +422,8 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       }
       return text
     }
-    let chosen = settings["playerSide"] as? String ?? "auto"
-    let side = chosen == "auto" ? (state["detectedPlayerSide"] as? String ?? "") : chosen
-    let both = settings["showBothSides"] as? Bool == true || side.isEmpty
+    let side = settings["playerSide"] as? String == "right" ? "right" : "left"
+    let both = settings["showBothSides"] as? Bool == true
     let lines = both ? [label(0, "左侧"), label(1, "右侧")] : [side == "left" ? label(1, "对手") : label(0, "对手")]
     let stale = state["stale"] as? Bool ?? true
     let visible = both ? [0, 1] : [side == "left" ? 1 : 0]
@@ -421,9 +441,8 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
     }
     let status: String
     if stale { status = "画面未确认 · 已有计时继续" }
-    else if side.isEmpty { status = "阵营待确认 · 显示双侧" }
     else if state["match"] as? Bool != true { status = "等待对局 · 已有计时继续" }
-    else { status = (warning ? "即将恢复 · " : "") + visible.map(identity).joined(separator: " / ") }
+    else { status = "我方\(side == "left" ? "左" : "右") · " + (warning ? "即将恢复 · " : "") + visible.map(identity).joined(separator: " / ") }
     if renderer.render(lines: lines, status: status,
                        scale: CaptureProtocol.number(settings["fontScale"], 0.75), stale: stale, warning: warning) {
       lastRender = now
@@ -432,33 +451,44 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   }
 
   func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-    guard listener != nil else { pictureInPictureController.stopPictureInPicture(); return }
+    guard pip === pictureInPictureController, listener != nil else {
+      pictureInPictureController.stopPictureInPicture()
+      return
+    }
     pendingUntil = 0; startIssued = false; state["pipPending"] = false; state["pipActive"] = true
     message("画中画已开启；系统录屏连接后即可切到游戏。")
   }
   func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-    stopInProgress = false
-    state["pipActive"] = false; state["pipPending"] = false
+    guard pip === pictureInPictureController else { return }
     stop(reason: "画中画已关闭，采集已停止。")
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
                                   failedToStartPictureInPictureWithError error: Error) {
-    pendingUntil = 0; startIssued = false; state["pipPending"] = false; state["pipActive"] = false
-    message("画中画启动失败：\(error.localizedDescription)")
+    guard pip === pictureInPictureController else { return }
+    stop(reason: "画中画启动失败：\(error.localizedDescription)")
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
                                   restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
-    completionHandler(true)
+    completionHandler(pip === pictureInPictureController)
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, setPlaying playing: Bool) {
+    guard pip === pictureInPictureController else { return }
     if !playing { stop(reason: "系统暂停了画中画，采集已停止。") }
   }
   func pictureInPictureControllerTimeRangeForPlayback(_ pictureInPictureController: AVPictureInPictureController) -> CMTimeRange {
-    CMTimeRange(start: .zero, duration: .positiveInfinity)
+    guard pip === pictureInPictureController else { return CMTimeRange(start: .zero, duration: .zero) }
+    return CMTimeRange(start: .zero, duration: .positiveInfinity)
   }
-  func pictureInPictureControllerIsPlaybackPaused(_ pictureInPictureController: AVPictureInPictureController) -> Bool { listener == nil }
+  func pictureInPictureControllerIsPlaybackPaused(_ pictureInPictureController: AVPictureInPictureController) -> Bool {
+    pip !== pictureInPictureController || listener == nil
+  }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
-                                  didTransitionToRenderSize newRenderSize: CMVideoDimensions) {}
+                                  didTransitionToRenderSize newRenderSize: CMVideoDimensions) {
+    guard pip === pictureInPictureController else { return }
+  }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
-                                  skipByInterval skipInterval: CMTime, completionHandler: @escaping () -> Void) { completionHandler() }
+                                  skipByInterval skipInterval: CMTime, completionHandler: @escaping () -> Void) {
+    defer { completionHandler() } // Complete even obsolete/non-seekable requests.
+    guard pip === pictureInPictureController else { return }
+  }
 }

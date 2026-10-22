@@ -4,7 +4,6 @@
 #include <cmath>
 
 #include "nt/ninja.h"
-#include "nt/identity.h"
 
 namespace nt::ios {
 namespace {
@@ -167,19 +166,13 @@ TimerSession::TimerSession(const TimerSettings& s) { configure(s); }
 
 void TimerSession::configure(const TimerSettings& s) {
     const bool cadenceChanged = settings_.pollIntervalMs != s.pollIntervalMs;
-    if (settings_.playerNames != s.playerNames) {
-        autoSide_.clear();
-        visible_.detectedPlayerSide.clear();
-        visible_.playerName.clear();
-        visible_.opponentName.clear();
-    }
     settings_ = s;
     settings_.pollIntervalMs = std::clamp(s.pollIntervalMs, 100, 1000);
     settings_.minimumConfirmFrames = std::max(2, s.minimumConfirmFrames);
     settings_.enterFightFrames = std::max(1, s.enterFightFrames);
     settings_.leaveFightFrames = std::max(10, s.leaveFightFrames);
     settings_.beadsPerSide = slots(s.beadsPerSide, 4);
-    if (s.playerSide != "left" && s.playerSide != "right") settings_.playerSide = "auto";
+    if (s.playerSide != "left" && s.playerSide != "right") settings_.playerSide = "left";
     if (cadenceChanged) pauseObservations();
 }
 
@@ -200,8 +193,6 @@ void TimerSession::pauseObservations() {
     holdFreeze_ = inheritOnReturn_ = false;
     visible_.match = false;
     visible_.leftCount = visible_.rightCount = -1;
-    visible_.detectedPlayerSide.clear();
-    autoSide_.clear();
     clearRoundOpening();
     visible_.message = "采集已暂停，已确认计时继续";
 }
@@ -210,7 +201,6 @@ void TimerSession::reset() {
     leftClock_.reset();
     rightClock_.reset();
     visible_ = {};
-    autoSide_.clear();
     fighting_ = false;
     fightHits_ = leaveHits_ = 0;
     lastCaptured_ = 0;
@@ -407,7 +397,6 @@ TimerSnapshot TimerSession::onFrame(const frame::Frame& f, double wallMs) {
         lastBeadAt_ = f.CapturedAt;
     }
     const bool sourceChanged = updateSource(f);
-    updateIdentity(f);
     if (sourceChanged) {
         leftClock_.resyncObservation();
         rightClock_.resyncObservation();
@@ -436,42 +425,14 @@ TimerSnapshot TimerSession::onFrame(const frame::Frame& f, double wallMs) {
     visible_.match = true;
     observeBeads(f, wallMs);
     if (visible_.leftCount < 0 || visible_.rightCount < 0) visible_.message = "对局中，替身豆暂不可辨";
-    else if (settings_.playerSide == "auto" && autoSide_.empty()) visible_.message = "对局中，等待账号认边或手动选边";
     else visible_.message = "对局中，等待确认替身";
     return snapshot();
 }
 
-bool TimerSession::wantsTextRecognition() const {
-    return settings_.playerSide == "auto" && autoSide_.empty() && !settings_.playerNames.empty();
-}
-
-void TimerSession::updateIdentity(const frame::Frame& f) {
-    const auto& r = f.Res;
-    if (f.HasErr) return;
-    if (!r.Scene.empty() && r.Scene != "fight" && r.Scene != "vs") {
-        autoSide_.clear();
-        visible_.playerName.clear();
-        visible_.opponentName.clear();
-    } else if (r.PlayerSide == "left" || r.PlayerSide == "right") {
-        // Empty PlayerName is the core's verified OTHER-account inference,
-        // not permission to invent a side when no account is configured.
-        const auto name = identity::NormalizeName(r.PlayerName);
-        const bool mine = std::any_of(settings_.playerNames.begin(), settings_.playerNames.end(),
-            [&](const std::string& s) { return !identity::NormalizeName(s).empty() &&
-                (name.empty() || identity::NormalizeName(s) == name); });
-        if (mine) {
-            autoSide_ = r.PlayerSide;
-            visible_.playerName = r.PlayerName;
-            visible_.opponentName = r.OppName;
-        }
-    }
-    visible_.detectedPlayerSide = autoSide_;
-}
-
 TimerSnapshot TimerSession::snapshot() const {
     auto out = visible_;
-    // A manual opponent estimate is never evidence of WHICH side is mine.
-    const std::string side = settings_.playerSide == "auto" ? autoSide_ : settings_.playerSide;
+    // Manual overrides affect only the side opposite the user's selection.
+    const std::string& side = settings_.playerSide;
     const bool leftDual = settings_.dual && side == "right";
     const bool rightDual = settings_.dual && side == "left";
     const auto leftName = side == "right" && !settings_.ninjaQuery.empty() ? settings_.ninjaQuery : out.leftNinja;

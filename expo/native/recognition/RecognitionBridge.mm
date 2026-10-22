@@ -3,13 +3,15 @@
 #import <ImageIO/ImageIO.h>
 #import <CommonCrypto/CommonDigest.h>
 
+// Objective-C defines Nil as a Class null pointer; the portable image API
+// legitimately has Nil() methods. Keep that macro out of this C++ adapter.
+#ifdef Nil
+#undef Nil
+#endif
 #include "TimerSession.hpp"
-#include "VisionAccounts.hpp"
 #include "PixelConversion.hpp"
 #include "nt/assets.h"
 #include "nt/config.h"
-#include "nt/hudtext.h"
-#include "nt/identity.h"
 #include "nt/ninja.h"
 #include "nt/parallel.h"
 #include "nt/utf8.h"
@@ -17,14 +19,14 @@
 #include <cmath>
 #include <memory>
 #include <mutex>
-#include <set>
 #include <stdexcept>
+#include <time.h>
 
 NSString *const NTRecognitionErrorDomain = @"NTRecognitionErrorDomain";
 
 namespace {
 // The shared avatar catalogue is immutable/process-global. Do not clear it or
-// replace roots underneath live engines. Only one engine can own global names.
+// replace roots underneath live engines.
 std::recursive_mutex& coreMutex() { static auto *m = new std::recursive_mutex; return *m; }
 std::string& loadedRoot() { static auto *s = new std::string; return *s; }
 bool engineAlive = false;
@@ -76,6 +78,42 @@ NSData *stripColour(NSData *data) {
     }
     return out;
 }
+// Bundled PNG decoding only; straight RGBA is required by AssetStore.
+void decodePNGAsset(const std::string& path, NSData *png, int w, int h) {
+    if (w < 1 || h < 1 || w > 2048 || h > 2048 || size_t(w) * h > 512 * 1024)
+        fail("invalid PNG asset dimensions");
+    NSDictionary *options = @{(__bridge NSString *)kCGImageSourceShouldCache:@NO};
+    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)png, (__bridge CFDictionaryRef)options);
+    if (!source) fail("invalid PNG asset");
+    NSDictionary *properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, nullptr));
+    if (CGImageSourceGetCount(source) != 1 || CGImageSourceGetStatus(source) != kCGImageStatusComplete ||
+        [properties[(__bridge NSString *)kCGImagePropertyPixelWidth] integerValue] != w ||
+        [properties[(__bridge NSString *)kCGImagePropertyPixelHeight] integerValue] != h) {
+        CFRelease(source); fail("invalid PNG asset dimensions");
+    }
+    CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, (__bridge CFDictionaryRef)options);
+    const bool complete = CGImageSourceGetStatusAtIndex(source, 0) == kCGImageStatusComplete;
+    CFRelease(source);
+    if (!image) fail("PNG decode failed");
+    if (!complete || CGImageGetWidth(image) != size_t(w) || CGImageGetHeight(image) != size_t(h)) {
+        CGImageRelease(image); fail("incomplete PNG asset");
+    }
+    std::vector<uint8_t> rgba(size_t(w) * h * 4);
+    CGColorSpaceRef color = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(rgba.data(), w, h, 8, size_t(w) * 4, color,
+                                            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(color);
+    if (!ctx) { CGImageRelease(image); fail("PNG bitmap allocation failed"); }
+    CGContextSetBlendMode(ctx, kCGBlendModeCopy);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), image);
+    CGContextRelease(ctx); CGImageRelease(image);
+    for (size_t i = 0; i < rgba.size(); i += 4) {
+        const unsigned a = rgba[i + 3];
+        if (a && a < 255) for (int c = 0; c < 3; ++c)
+            rgba[i + c] = uint8_t(std::min(255u, (unsigned(rgba[i + c]) * 255 + a / 2) / a));
+    }
+    nt::AssetStore::Instance().AddImage(path, w, h, rgba.data(), size_t(w) * 4);
+}
 void loadImage(NSString *root, NSString *key, size_t& resident) {
     @autoreleasepool {
         NSData *raw = readAsset(root, key);
@@ -96,28 +134,8 @@ void loadImage(NSString *root, NSString *key, size_t& resident) {
         if (!w || !h || w > 2048 || h > 2048 || w * h > 512 * 1024 || resident + w * h * 2 > 8 * MiB) {
             CFRelease(source); fail("recognition asset exceeds memory budget: " + str(key));
         }
-        CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, (__bridge CFDictionaryRef)@{(__bridge NSString *)kCGImageSourceShouldCache:@NO});
         CFRelease(source);
-        if (!image) fail("ImageIO decode failed: " + str(key));
-        std::vector<uint8_t> rgba(w * h * 4);
-        CGColorSpaceRef color = CGColorSpaceCreateDeviceRGB();
-        CGContextRef ctx = CGBitmapContextCreate(rgba.data(), w, h, 8, w * 4, color,
-                                                kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-        CGColorSpaceRelease(color);
-        if (!ctx) { CGImageRelease(image); fail("asset bitmap allocation failed"); }
-        CGContextSetBlendMode(ctx, kCGBlendModeCopy);
-        CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), image);
-        CGContextRelease(ctx);
-        CGImageRelease(image);
-        // AssetStore's contract is straight RGBA, not Quartz premultiplied RGBA.
-        // Transparent-colour rounding is unavoidable with Quartz; validate the
-        // avatar alpha-edge scores on device (interior opaque pixels are exact).
-        for (size_t i = 0; i < rgba.size(); i += 4) {
-            const unsigned a = rgba[i + 3];
-            if (a && a < 255) for (int c = 0; c < 3; ++c)
-                rgba[i + c] = uint8_t(std::min(255u, (unsigned(rgba[i + c]) * 255 + a / 2) / a));
-        }
-        nt::AssetStore::Instance().AddImage(str(key), int(w), int(h), rgba.data(), w * 4);
+        decodePNGAsset(str(key), png, int(w), int(h));
         resident += nt::AssetStore::Instance().Image(str(key))->Bytes();
     }
 }
@@ -126,7 +144,7 @@ void loadAssets(NSString *root) {
         if (loadedRoot() != str(root)) fail("recognition assets cannot change within one process");
         return;
     }
-    nt::SetParallelEnabled(false); // No thread-pool scratch multiplication; Vision reads crops sequentially.
+    nt::SetParallelEnabled(false); // No thread-pool scratch multiplication in the extension.
     auto& store = nt::AssetStore::Instance();
     store.Clear();
     size_t resident = 0;
@@ -159,9 +177,6 @@ void loadAssets(NSString *root) {
         if (!nt::ninja::AvatarStats(stats, &error)) fail(error);
     }
     loadedRoot() = str(root);
-    // iOS account OCR uses VisionAccounts. Do NOT register the shared ONNX
-    // loader: full host pipeline + ReadAccounts measured 57.4 MiB before CI.
-
 }
 
 double number(id value, double fallback, double lo, double hi) {
@@ -187,6 +202,16 @@ std::optional<nt::config::NormalizedRect> box(id value, bool avatar) {
         nt::config::CalibrationRectIssue(avatar, r) != nt::config::CalibrationIssue::None)
         fail("calibration box outside shared core size/shape limits");
     return r;
+}
+bool sameCalibration(const std::optional<nt::config::RegionCalibration>& a,
+                     const std::optional<nt::config::RegionCalibration>& b) {
+    if (!a || !b) return bool(a) == bool(b);
+    auto sameBox = [](const auto& x, const auto& y) {
+        if (!x || !y) return bool(x) == bool(y);
+        return x->X == y->X && x->Y == y->Y && x->Width == y->Width && x->Height == y->Height;
+    };
+    return a->Profile == b->Profile && sameBox(a->LeftBeads, b->LeftBeads) && sameBox(a->RightBeads, b->RightBeads) &&
+           sameBox(a->LeftAvatar, b->LeftAvatar) && sameBox(a->RightAvatar, b->RightAvatar);
 }
 NSDictionary *rect(const nt::config::NormalizedRect& r) {
     return @{@"x":@(r.X), @"y":@(r.Y), @"width":@(r.Width), @"height":@(r.Height)};
@@ -231,7 +256,6 @@ void applySliders(nt::config::Config& cfg, double scale, double dx, double dy) {
 
 @implementation NTRecognitionEngine {
     std::unique_ptr<nt::frame::Pipeline> _pipeline;
-    std::unique_ptr<nt::ios::VisionAccounts> _vision;
     nt::ios::TimerSession _session;
     nt::ios::TimerSettings _settings;
     nt::config::Config _config;
@@ -254,8 +278,9 @@ void applySliders(nt::config::Config& cfg, double scale, double dx, double dy) {
         NSString *root = path.stringByStandardizingPath;
         loadAssets(root);
         _config = nt::config::Default();
+        _config.UI.PlayerSide = "left";
+        // No account names/templates are loaded; the OCR wrapper stays disabled.
         _pipeline = std::make_unique<nt::frame::Pipeline>(_config, false);
-        _vision = std::make_unique<nt::ios::VisionAccounts>(_config);
         if (!_pipeline->Ok()) fail(_pipeline->Error());
         _color = CGColorSpaceCreateDeviceRGB();
         _context = [CIContext contextWithOptions:@{kCIContextCacheIntermediates:@NO,
@@ -284,24 +309,14 @@ void applySliders(nt::config::Config& cfg, double scale, double dx, double dy) {
         auto s = _settings;
         auto cfg = _config;
         s.playerSide = stringSetting(values[@"playerSide"], s.playerSide);
+        if (s.playerSide != "left" && s.playerSide != "right") fail("playerSide must be left or right");
+        cfg.UI.PlayerSide = s.playerSide;
         if (values[@"showBothSides"]) s.showBothSides = [values[@"showBothSides"] isEqual:@YES];
         if (values[@"dual"]) s.dual = [values[@"dual"] isEqual:@YES];
         if (values[@"rememberSide"]) s.rememberSide = [values[@"rememberSide"] isEqual:@YES];
         s.ninjaQuery = stringSetting(values[@"ninjaQuery"], s.ninjaQuery, 80);
         const double fps = number(values[@"backgroundFPS"], 1000.0 / s.pollIntervalMs, 1, 10);
         s.pollIntervalMs = int(std::lround(1000 / fps));
-        if ([values[@"playerNames"] isKindOfClass:NSArray.class]) {
-            s.playerNames.clear();
-            for (id name in values[@"playerNames"]) {
-                auto n = nt::identity::NormalizeName(stringSetting(name, ""));
-                if (!n.empty() && s.playerNames.size() < 20 &&
-                    std::find(s.playerNames.begin(), s.playerNames.end(), n) == s.playerNames.end()) s.playerNames.push_back(n);
-            }
-        } else if ([values[@"playerName"] isKindOfClass:NSString.class]) {
-            auto name = nt::identity::NormalizeName(stringSetting(values[@"playerName"], ""));
-            s.playerNames = name.empty() ? std::vector<std::string>{} : std::vector<std::string>{name};
-        }
-        cfg.UI.PlayerNames = s.playerNames;
         auto preset = stringSetting(values[@"layoutPreset"], cfg.Layout.PreferredProfile);
         if (preset != "auto" && preset != "camp" && preset != "duel") fail("invalid layoutPreset");
         cfg.Layout.PreferredProfile = preset;
@@ -319,18 +334,16 @@ void applySliders(nt::config::Config& cfg, double scale, double dx, double dy) {
         double scale = number(values[@"roiScale"], _scale, .7, 1.4);
         double dx = number(values[@"roiOffsetX"], _dx, -.15, .15);
         double dy = number(values[@"roiOffsetY"], _dy, -.15, .15);
-        bool rebuild = cal || preset != _config.Layout.PreferredProfile || scale != _scale || dx != _dx || dy != _dy;
+        const bool calibrationChanged = !sameCalibration(cfg.Layout.Calibration, _config.Layout.Calibration);
+        bool rebuild = calibrationChanged || preset != _config.Layout.PreferredProfile || scale != _scale || dx != _dx || dy != _dy;
         if (rebuild) {
             auto effective = cfg;
             applySliders(effective, scale, dx, dy);
             std::string error;
             if (!_pipeline->Rebuild(effective, &error)) fail(error);
-            _vision = std::make_unique<nt::ios::VisionAccounts>(effective);
             _session.pauseObservations();
             _lastGeometry = @{};
         }
-        if (s.playerNames != _settings.playerNames) { _pipeline->ResetDelivery(); _vision->reset(); }
-        nt::identity::SetMineNames(s.playerNames);
         _config = cfg; _settings = s; _scale = scale; _dx = dx; _dy = dy;
         _session.configure(s);
         _configurationError.clear();
@@ -340,32 +353,39 @@ void applySliders(nt::config::Config& cfg, double scale, double dx, double dy) {
 
 - (NSDictionary<NSString *,id> *)state {
     const auto s = _session.snapshot();
-    auto *text = _vision.get();
     const auto& error = _configurationError.empty() ? _error : _configurationError;
     return @{@"match":@(s.match), @"leftCount":@(s.leftCount), @"rightCount":@(s.rightCount),
         @"leftDeadlineMs":@(s.left.deadlineMs), @"rightDeadlineMs":@(s.right.deadlineMs),
         @"leftAlternateDeadlineMs":@(s.left.alternateDeadlineMs), @"rightAlternateDeadlineMs":@(s.right.alternateDeadlineMs),
-        @"detectedPlayerSide":ns(s.detectedPlayerSide), @"playerName":ns(s.playerName), @"opponentName":ns(s.opponentName),
         @"leftNinja":ns(s.leftNinja), @"rightNinja":ns(s.rightNinja), @"scene":ns(s.scene),
         @"message":ns(error.empty() ? s.message : error), @"recognitionError":ns(error),
         @"width":@(s.width), @"height":@(s.height), @"frameWidth":@(s.width), @"frameHeight":@(s.height),
         @"frames":@(_frames), @"lastFrameAtMs":@(_lastWall), @"latencyMs":@(_latencyMs),
         @"leftSubstitutions":@(s.left.eventCount), @"rightSubstitutions":@(s.right.eventCount),
-        @"ocrStatus":ns(text ? text->status : "unavailable"), @"ocrError":ns(text ? text->error : ""),
         @"geometry":_lastGeometry ?: @{}};
 }
 
-- (NSDictionary<NSString *,id> *)analyzePixelBuffer:(CVPixelBufferRef)pixelBuffer orientation:(NSInteger)orientation capturedAtMs:(double)capturedAtMs {
-    const nt::TimeNs at = nt::NowNs(); // Before waiting for the process lock or CI.
+- (NSDictionary<NSString *,id> *)analyzePixelBuffer:(CVPixelBufferRef)pixelBuffer orientation:(NSInteger)orientation capturedAtMs:(double)capturedAtMs capturedUptime:(double)capturedUptime {
+    const nt::TimeNs started = nt::NowNs();
     std::lock_guard<std::recursive_mutex> lock(coreMutex());
     @autoreleasepool {
         try {
-            if (!pixelBuffer || !std::isfinite(capturedAtMs) || capturedAtMs <= 0 || capturedAtMs <= _lastWall) {
+            // CaptureProtocol.now() uses CLOCK_MONOTONIC, not systemUptime.
+            // Mixing those clocks can reject every frame after device sleep.
+            struct timespec acquiredClock{};
+            if (clock_gettime(CLOCK_MONOTONIC, &acquiredClock) != 0) fail("capture clock unavailable");
+            const double nowUptime = double(acquiredClock.tv_sec) + double(acquiredClock.tv_nsec) / 1e9;
+            const double age = nowUptime - capturedUptime;
+            if (!pixelBuffer || !std::isfinite(capturedAtMs) || capturedAtMs <= 0 || capturedAtMs <= _lastWall ||
+                !std::isfinite(capturedUptime) || capturedUptime <= 0 || age < 0 || age > 2) {
                 _session.pauseObservations();
                 _pipeline->ResetDelivery();
                 _error = "采集时间无效或重复，等待新画面";
                 return [self state];
             }
+            // Map acquisition uptime into the core's steady clock epoch. A
+            // worker scheduling delay must not move the first candidate event.
+            const nt::TimeNs at = nt::NowNs() - static_cast<nt::TimeNs>(age * nt::Second);
             _lastWall = capturedAtMs;
             ++_frames;
             const OSType format = CVPixelBufferGetPixelFormatType(pixelBuffer);
@@ -388,12 +408,10 @@ void applySliders(nt::config::Config& cfg, double scale, double dx, double dy) {
             nt::ios::RenderTopDown(_context, image, _pixels.data(), w, h, _color);
             nt::RGBA view(_pixels.data(), w * 4, nt::MakeRect(0, 0, w, h));
             auto f = _pipeline->Analyze(&view, at, at, "ios-replaykit-" + std::to_string(orientation));
-            if (!f.HasErr && !f.Duplicate)
-                _vision->analyze(view, f.Res, at, nt::identity::MineNames(), _session.wantsTextRecognition());
             _session.onFrame(f, capturedAtMs);
             _lastGeometry = @{@"profile":ns(f.Res.LayoutProfile), @"width":@(w), @"height":@(h), @"sides":geometry(f.Res)};
             _error = f.HasErr ? f.Err : "";
-            _latencyMs = double(nt::NowNs() - at) / nt::Millisecond;
+            _latencyMs = double(nt::NowNs() - started) / nt::Millisecond;
         } catch (const std::exception& e) {
             _session.pauseObservations(); _pipeline->ResetDelivery(); _error = e.what();
         } catch (...) {
@@ -406,7 +424,6 @@ void applySliders(nt::config::Config& cfg, double scale, double dx, double dy) {
 - (void)pauseObservations {
     std::lock_guard<std::recursive_mutex> lock(coreMutex());
     _session.pauseObservations();
-    _vision->reset();
     _pipeline->ResetDelivery();
     [_context clearCaches];
     std::vector<uint8_t>().swap(_pixels);
@@ -415,13 +432,12 @@ void applySliders(nt::config::Config& cfg, double scale, double dx, double dy) {
 - (void)reset {
     std::lock_guard<std::recursive_mutex> lock(coreMutex());
     _session.reset();
-    // Rebuilding also invalidates ninja/identity/scene/OCR history; resetting
+    // Rebuilding also invalidates ninja/scene history; resetting
     // just delivery would retain the previous match's gated-engine state.
     auto effective = _config;
     try {
         applySliders(effective, _scale, _dx, _dy);
         if (!_pipeline->Rebuild(effective, &_error)) _session.pauseObservations();
-        _vision = std::make_unique<nt::ios::VisionAccounts>(effective);
     } catch (const std::exception& e) { _error = e.what(); }
     _lastWall = 0; _frames = 0; _latencyMs = 0; _lastGeometry = @{};
 }

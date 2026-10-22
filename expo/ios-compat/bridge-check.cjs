@@ -50,9 +50,13 @@ test('untrusted native state and persisted settings are bounded', () => {
   const settings = api.normalizeCaptureSettings({ playerSide: 'guess', rememberSide: false,
     fontScale: Infinity, roiScale: 100, roiOffsetX: -8, backgroundFPS: 100,
     playerName: '🐈'.repeat(45), ninjaQuery: ' 半藏[秽土转生] ', calibration: { profile: 'bad' } });
-  assert.equal(settings.playerSide, 'auto'); assert.equal(settings.rememberSide, false);
+  assert.equal(settings.playerSide, 'left'); assert.equal(settings.rememberSide, false);
+  assert.equal(api.normalizeCaptureSettings({ playerSide: 'right' }).playerSide, 'right');
+  assert.equal(api.normalizeCaptureSettings({ playerSide: 'auto' }).playerSide, 'left');
+  assert.equal('playerName' in settings, false, 'legacy account data never reaches iOS native');
+  assert.equal('playerNames' in settings, false);
   assert.equal(settings.roiScale, 1.4); assert.equal(settings.roiOffsetX, -0.15);
-  assert.equal(settings.backgroundFPS, 10); assert.equal(Array.from(settings.playerName).length, 40);
+  assert.equal(settings.backgroundFPS, 10);
   assert.equal(settings.ninjaQuery, '半藏[秽土转生]'); assert.equal(settings.calibration.profile, 'duel');
   const good = api.normalizeCaptureState({ available: true, pipSupported: true, pipActive: true,
     leftCount: 6, rightCount: 0, leftDeadlineMs: 1, leftAlternateDeadlineMs: 2, leftNinja: '半藏[秽土转生]' });

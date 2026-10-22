@@ -50,8 +50,8 @@ try {
   const repo = path.dirname(root);
   const avatar = fs.readdirSync(path.join(repo, 'assets/avatars')).find((name) => name.endsWith('.png'));
   assert.equal(hash(path.join(temp, 'NarutoBroadcast/RecognitionAssets/avatars', avatar)), hash(path.join(repo, 'assets/avatars', avatar)));
-  assert(!fs.existsSync(path.join(temp, 'NarutoBroadcast/RecognitionAssets/ocr/recognizer.onnx')), 'iOS uses native Vision, not the heavyweight ONNX model');
-  assert(sources.some((s) => s.endsWith('VisionAccounts.mm')));
+  assert(!fs.existsSync(path.join(temp, 'NarutoBroadcast/RecognitionAssets/ocr/recognizer.onnx')), 'iOS manual side selection does not load account OCR');
+  assert(!sources.some((s) => /(?:VisionAccounts|IdentityTemplates)\.mm$/.test(s)), 'iOS must not compile automatic side recognition');
   const info = require(path.join(root, 'node_modules/@expo/plist')).default.parse(fs.readFileSync(path.join(temp, 'NarutoBroadcast/NarutoBroadcast-Info.plist'), 'utf8'));
   assert.equal(info.NSExtension.NSExtensionPointIdentifier, 'com.apple.broadcast-services-upload');
   assert.equal(info.NSExtension.NSExtensionAttributes.RPBroadcastProcessMode, 'RPBroadcastProcessModeSampleBuffer');

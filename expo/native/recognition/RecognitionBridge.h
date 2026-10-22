@@ -7,7 +7,7 @@ FOUNDATION_EXPORT NSString *const NTRecognitionErrorDomain;
 
 // Compile this header into the extension's Swift bridging header. No UIKit,
 // ReplayKit, React or Expo dependency. Call synchronously on ONE serial worker;
-// never on ReplayKit's delivery queue (Vision recognition may take time).
+// never on ReplayKit's delivery queue (frame recognition may take time).
 // The implementation also serializes instances because core assets are global.
 @interface NTRecognitionEngine : NSObject
 
@@ -24,18 +24,15 @@ FOUNDATION_EXPORT NSString *const NTRecognitionErrorDomain;
 // Partial settings update. Numeric settings are clamped to supported ranges.
 // backgroundFPS defaults to 8 (1...10); caller schedules/throttles acquisitions.
 // roiScale .7...1.4, roiOffsetX/Y -.15... .15 modify calibrated coordinates.
-// playerSide auto/left/right; showBothSides; dual (resolved opponent only).
-// playerNames: up to 20 distinct names, <=40 Unicode code points each; playerName
-// is the backwards-compatible single-account fallback. ninjaQuery is the full
-// opponent variant override. rememberSide is host persistence policy: a live
+// playerSide left/right only (default left); showBothSides; dual (opponent only).
+// The user chooses their own side; there is no account/automatic side recognition.
+// ninjaQuery is the full opponent variant override.
+// rememberSide is host persistence policy: a live
 // manual selection always works; the host must not restore it when disabled.
 // calibration: null (automatic), or {profile: camp|duel, leftBeads?,rightBeads?,
 // leftAvatar?,rightAvatar?}; boxes are {x,y,width,height} fractions of the full
 // oriented frame and must satisfy shared calibration size/shape limits.
 // layoutPreset: auto|camp|duel. Explicit boxes win over the legacy ROI sliders.
-// Account OCR uses public offline Apple Vision (Chinese support varies by OS),
-// shared HUD geometry, consensus/glyph evidence and opponent inference. An
-// unresolved automatic side stays empty; ocrStatus/ocrError report availability.
 // Invalid calibration is rejected atomically; recognitionError reports why.
 - (void)configure:(NSDictionary<NSString *, id> *)settings
     NS_SWIFT_NAME(configure(_:));
@@ -47,22 +44,25 @@ FOUNDATION_EXPORT NSString *const NTRecognitionErrorDomain;
 // processed image. The app selects screenshot calibration independently; no
 // captured frame pixels are sent through this dictionary/API.
 //
-// Invoke at capture delivery, not after queuing old frames. Monotonic acquisition
-// time is sampled at method ENTRY (before CI/recognition). capturedAtMs is the
-// paired epoch-ms capture time, used only to pin the JS deadline and reject
-// replayed/out-of-order deliveries. It must be finite, positive and increasing.
+// Keep only one in-flight sample on a serial worker, dropping arrivals while busy.
+// capturedUptime is CLOCK_MONOTONIC seconds at acquisition, NOT worker start
+// (CaptureProtocol.now()); do not substitute ProcessInfo.systemUptime.
+// capturedAtMs is its paired epoch-ms value, used to pin the JS deadline and
+// reject replayed/out-of-order deliveries. Both must be finite and increasing.
+// Queued samples older than 2 seconds are discarded instead of becoming votes.
 // Do not repeatedly analyze the same sample; pixel duplicates add no votes.
 //
 // All four deadline values are doubles: 0 means no confirmed event. A confirmed
 // absolute deadline stays fixed until another event/reset; it may be in the past.
 // Error/portrait/pause evidence never stops an already-confirmed clock.
 // Results also include leftNinja/rightNinja, leftSubstitutions/rightSubstitutions,
-// scene, latencyMs, playerName/opponentName, geometry, ocrStatus/ocrError.
+// scene, latencyMs, frameWidth/frameHeight, and geometry.
 // geometry.sides.{left,right}.{beadBox,avatarBox} are normalized; beads are pixels.
 - (NSDictionary<NSString *, id> *)analyzePixelBuffer:(CVPixelBufferRef)pixelBuffer
                                        orientation:(NSInteger)orientation
                                       capturedAtMs:(double)capturedAtMs
-    NS_SWIFT_NAME(analyze(_:orientation:capturedAtMs:));
+                                    capturedUptime:(double)capturedUptime
+    NS_SWIFT_NAME(analyze(_:orientation:capturedAtMs:capturedUptime:));
 
 // Clears visual continuity, NOT confirmed clocks. Call for ReplayKit pause,
 // capture failure/dropout, or source changes not visible in image dimensions.

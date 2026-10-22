@@ -12,7 +12,7 @@ Additional methods:
 - `importCalibration(): Promise<string>`: Files JSON picker; streamed UTF-8 input <=64 KiB.
 - `shareDocument(name,text): Promise<void>`: native share sheet for temporary file, <=1 MiB, sanitized filename. The temporary export is removed when sharing completes.
 
-Settings include the existing controls plus `ninjaQuery`, `rememberSide`, up to 20 `playerNames` (40 characters each), and normalized calibration rects. New diagnostics include `pipPossible`, `pipPending`, `stale`, `renderedFrames`, ninja names, substitution counts, scene, frame dimensions, OCR/errors, `latencyMs` (recognition only), and `deliveryLatencyMs` (capture-to-host).
+Settings include manual-only `playerSide: left|right`, `ninjaQuery`, `rememberSide`, and normalized calibration rects. Account names, OCR and automatic side recognition are intentionally excluded from iOS. Diagnostics include `pipPossible`, `pipPending`, `stale`, `renderedFrames`, ninja names, substitution counts, scene, frame dimensions, recognition errors, `latencyMs` (recognition only), and `deliveryLatencyMs` (capture-to-host).
 
 ## Lifecycle / security
 

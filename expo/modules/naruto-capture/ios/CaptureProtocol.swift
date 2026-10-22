@@ -1,12 +1,13 @@
 import Foundation
 import CoreFoundation
 
-// Shared by the app and upload extension. No App Groups, pixels, audio or remote
-// endpoints. This is local transport, not an authentication boundary against a
+// Shared by the app and upload extension. No App Groups, captured frames, audio
+// or remote endpoints. This is local transport, not an authentication boundary against a
 // malicious app on the same device. Session IDs prevent accidental stale replay.
 enum CaptureProtocol {
   static let port: UInt16 = 17861
-  static let limit = 16_384
+  static let limit = 16_384 // Per JSON line, including LF.
+  static let receiveLimit = 4096
   static let version = 1
   static func now() -> Double {
     var value = timespec()
@@ -19,6 +20,24 @@ enum CaptureProtocol {
     data.append(10)
     return data
   }
+  enum FramingError: Error { case oversized }
+
+  // One bounded receive may complete a near-limit line AND start another.
+  // Limit each line, not the combined stream; retain only an unfinished tail.
+  static func receiveLines(_ data: Data, buffering input: inout Data) throws -> [Data] {
+    guard data.count <= receiveLimit, input.count < limit else { throw FramingError.oversized }
+    input.append(data) // At most limit - 1 + receiveLimit bytes.
+    var lines: [Data] = []
+    while let newline = input.firstIndex(of: 10) {
+      let line = input.prefix(upTo: newline)
+      guard line.count < limit else { throw FramingError.oversized }
+      lines.append(line)
+      input.removeSubrange(...newline)
+    }
+    guard input.count < limit else { throw FramingError.oversized }
+    return lines
+  }
+
   static func number(_ value: Any?, _ fallback: Double = 0) -> Double {
     guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite else { return fallback }
     return n.doubleValue
@@ -36,7 +55,7 @@ enum CaptureProtocol {
     func bounded(_ key: String, _ low: Double, _ high: Double, _ fallback: Double) -> Double {
       min(high, max(low, number(source[key], fallback)))
     }
-    let side = source["playerSide"] as? String ?? "auto"
+    let side = source["playerSide"] as? String
     let supplied = source["calibration"] as? [String: Any] ?? [:]
     var calibration: [String: Any] = ["profile": supplied["profile"] as? String == "camp" ? "camp" : "duel"]
     for key in ["leftBeads", "rightBeads", "leftAvatar", "rightAvatar"] {
@@ -55,11 +74,9 @@ enum CaptureProtocol {
       calibration[key] = ["x": rx, "y": ry, "width": rw, "height": rh]
     }
     return [
-      "playerSide": ["left", "right"].contains(side) ? side : "auto",
+      "playerSide": side == "right" ? "right" : "left",
       "showBothSides": bool(source["showBothSides"]),
       "dual": bool(source["dual"]),
-      "playerName": String((source["playerName"] as? String ?? "").prefix(40)),
-      "playerNames": Array((source["playerNames"] as? [String] ?? []).prefix(20)).map { String($0.prefix(40)) },
       "ninjaQuery": String((source["ninjaQuery"] as? String ?? "").prefix(100)),
       "rememberSide": bool(source["rememberSide"], true),
       "calibration": calibration,

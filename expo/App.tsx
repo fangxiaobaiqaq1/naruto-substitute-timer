@@ -40,7 +40,7 @@ import { APP_VERSION, IOS_BUILDS_URL, RELEASES_URL, checkForUpdate, isDualNinja,
 type TimerSide = 'left' | 'right';
 type TimerMode = 'auto' | 'manual';
 type CaptureAction = 'prepare' | 'pip' | 'stop';
-type MobileSettings = Omit<CaptureSettings, 'dual' | 'ninjaQuery' | 'playerNames'> & {
+type MobileSettings = Omit<CaptureSettings, 'dual' | 'ninjaQuery'> & {
   rememberSide: boolean;
   opponentNinja: string;
   miniMode: boolean;
@@ -54,7 +54,6 @@ const SETTINGS_KEY = 'naruto-timer-ios-settings-v1';
 const DEFAULT_SETTINGS: MobileSettings = {
   playerSide: DEFAULT_CAPTURE_SETTINGS.playerSide,
   rememberSide: true,
-  playerName: '',
   opponentNinja: '',
   showBothSides: false,
   miniMode: false,
@@ -80,12 +79,11 @@ function formatDeadline(deadline: number, now: number): string {
 
 function normalizeSettings(value: unknown): MobileSettings {
   const source = value && typeof value === 'object' ? value as Partial<MobileSettings> : {};
-  const { dual: _dual, ninjaQuery: _ninjaQuery, playerNames, ...captureSettings } = normalizeCaptureSettings(source);
+  const { dual: _dual, ninjaQuery: _ninjaQuery, ...captureSettings } = normalizeCaptureSettings(source);
   const rememberSide = typeof source.rememberSide === 'boolean' ? source.rememberSide : DEFAULT_SETTINGS.rememberSide;
   return {
     ...captureSettings,
-    playerName: playerNames.join('\n'),
-    playerSide: rememberSide ? captureSettings.playerSide : 'auto',
+    playerSide: rememberSide ? captureSettings.playerSide : DEFAULT_CAPTURE_SETTINGS.playerSide,
     rememberSide,
     autoCheckUpdates: source.autoCheckUpdates !== false,
     updateSource: source.updateSource === 'github' ? 'github' : 'gitee',
@@ -188,7 +186,6 @@ function TimerScreen() {
   const [settingsError, setSettingsError] = useState('');
   const [storageError, setStorageError] = useState('');
   const [applyingSettings, setApplyingSettings] = useState(false);
-  const [manualDetectedSide, setManualDetectedSide] = useState<TimerSide | ''>('');
   const [deadlines, setDeadlines] = useState({ left: 0, right: 0, leftAlternate: 0, rightAlternate: 0 });
   const settingsQueue = useRef(Promise.resolve());
   const saveQueue = useRef(Promise.resolve());
@@ -256,12 +253,10 @@ function TimerScreen() {
   const freshFrame = capture.frames > 0 && capture.lastFrameAtMs > 0 && frameAge >= 0 && frameAge < 3000;
   const receivingMatch = capture.available && capture.broadcastActive && capture.connected && capture.match && freshFrame;
   const healthy = receivingMatch && capture.prepared && capture.pipSupported && capture.pipActive && !actionError && !settingsError && !storageError && !applyingSettings;
-  const detectedSide = automatic ? capture.detectedPlayerSide : manualDetectedSide;
-  const playerSide = settings.playerSide === 'auto' ? detectedSide : settings.playerSide;
-  const opponentSide = playerSide === 'left' ? 'right' : playerSide === 'right' ? 'left' : '';
-  const showBothClocks = settings.showBothSides || (automatic && !playerSide);
-  const sideText = settings.playerSide !== 'auto' ? `我方${playerSide === 'left' ? '左' : '右'}`
-    : playerSide ? `${automatic ? '原生认边' : '手动假定'}·我方${playerSide === 'left' ? '左' : '右'}` : '我方位置未确认';
+  const playerSide = settings.playerSide;
+  const opponentSide = playerSide === 'left' ? 'right' : 'left';
+  const showBothClocks = settings.showBothSides;
+  const sideText = `我方${playerSide === 'left' ? '左' : '右'}（手动选择）`;
   // A lost/obscured frame is not a cancellation of a confirmed substitution.
   const clock = (deadline: number) => formatDeadline(deadline, now);
   const leftText = clock(currentDeadlines.left);
@@ -278,7 +273,7 @@ function TimerScreen() {
   const statusText = !capture.available ? '自动采集不可用'
     : !capture.pipSupported ? '画中画不可用'
       : !capture.prepared ? '等待准备采集'
-        : !capture.pipActive ? '等待开启画中画'
+        : !capture.pipActive ? capture.pipPending ? '正在请求系统画中画' : '等待开启画中画'
           : !capture.broadcastActive ? '等待系统录屏授权'
             : !capture.connected ? '广播已开启 · 等待连接'
               : !freshFrame ? '等待新画面 · 尚未确认采集'
@@ -289,7 +284,6 @@ function TimerScreen() {
   const startCooldown = (side: TimerSide) => {
     if (automatic) return;
     // Manual convenience only: never write a guessed side or deadline to native state.
-    setManualDetectedSide(side === 'left' ? 'right' : 'left');
     const startedAt = Date.now();
     const primaryDeadline = startedAt + PRIMARY_SECONDS * 1000;
     const alternateDeadline = dual ? startedAt + ALTERNATE_SECONDS * 1000 : 0;
@@ -366,9 +360,10 @@ function TimerScreen() {
           broadcastActive: capture.broadcastActive, pipSupported: capture.pipSupported, pipActive: capture.pipActive,
           match: capture.match, scene: capture.scene, frames: capture.frames, lastFrameAtMs: capture.lastFrameAtMs,
           frameWidth: capture.frameWidth, frameHeight: capture.frameHeight, latencyMs: capture.latencyMs,
+          deliveryLatencyMs: capture.deliveryLatencyMs, pipPossible: capture.pipPossible, pipPending: capture.pipPending,
           leftCount: capture.leftCount, rightCount: capture.rightCount,
           leftSubstitutions: capture.leftSubstitutions, rightSubstitutions: capture.rightSubstitutions },
-        settings: { playerSide: settings.playerSide, hasPlayerName: !!settings.playerName,
+        settings: { playerSide: settings.playerSide,
           showBothSides: settings.showBothSides, backgroundFPS: settings.backgroundFPS,
           roiScale: settings.roiScale, roiOffsetX: settings.roiOffsetX, roiOffsetY: settings.roiOffsetY,
           calibration: settings.calibration },
@@ -395,6 +390,16 @@ function TimerScreen() {
           <Pressable accessibilityRole="button" accessibilityLabel="打开替身设置" disabled={!loaded} style={styles.closeButton} onPress={() => setSettingsVisible(true)}><Text style={styles.closeText}>设置</Text></Pressable>
         </View>
 
+        <View style={styles.infoCard}>
+          <Text style={styles.cardTitle}>我方位置 · 请手动选择</Text>
+          <View style={styles.actionRow}>{([['left', '我方左边'], ['right', '我方右边']] as const).map(([value, label]) => (
+            <Pressable key={value} accessibilityRole="button" accessibilityState={{ selected: settings.playerSide === value }}
+              onPress={() => setSettings((current) => ({ ...current, playerSide: value }))}
+              style={[styles.segment, settings.playerSide === value && styles.segmentSelected]}><Text style={styles.segmentText}>{label}</Text></Pressable>
+          ))}</View>
+          <Text style={styles.cardHint}>当前显示{settings.showBothSides ? '左右两边' : `对面（${settings.playerSide === 'left' ? '右' : '左'}侧）`}。换场或换人后如位置变化，点此切换；iOS 不读取账号、不自动认边。</Text>
+        </View>
+
         <View style={styles.statusCard}>
           <View style={styles.headerLine}>
             <Text style={styles.cardTitle}>自动采集状态</Text>
@@ -407,8 +412,7 @@ function TimerScreen() {
             ? `最近画面 ${Math.floor(frameAge / 1000)} 秒前 · 共 ${capture.frames} 帧`
             : '尚未收到有效画面'}{ '\n' }最近识别豆数：左 {capture.leftCount < 0 ? '未知' : capture.leftCount} / 右 {capture.rightCount < 0 ? '未知' : capture.rightCount}</Text>
           <Text style={styles.cardHint}>忍者：左 {capture.leftNinja || '未确认'} / 右 {capture.rightNinja || '未确认'}{'\n'}本局替身：左 {capture.leftSubstitutions} / 右 {capture.rightSubstitutions}{'\n'}分析尺寸 {capture.frameWidth}×{capture.frameHeight} · 单帧识别 {Math.round(capture.latencyMs)} ms（非端到端延迟）</Text>
-          <Text style={styles.cardHint}>账号文字识别：{capture.ocrStatus || '尚未启用'}</Text>
-          {capture.ocrError || capture.recognitionError ? <Text accessibilityRole="alert" style={styles.errorText}>{capture.recognitionError || capture.ocrError}</Text> : null}
+          {capture.recognitionError ? <Text accessibilityRole="alert" style={styles.errorText}>{capture.recognitionError}</Text> : null}
           {!receivingMatch && running ? <Text style={styles.cardHint}>当前画面未确认；已确认的倒计时继续，不凭旧帧新增替身。</Text> : null}
           {capture.available && !capture.pipSupported ? <Text accessibilityRole="alert" style={styles.errorText}>此设备或系统当前不支持画中画，无法在游戏上方显示计时。可切换手动备用模式，仅在本页使用。</Text> : null}
           {actionError || settingsError || storageError ? <Text accessibilityRole="alert" style={styles.errorText}>{actionError || settingsError || storageError}</Text> : null}
@@ -416,7 +420,7 @@ function TimerScreen() {
 
           <View style={styles.actionRow}>
             <ActionButton label={busy === 'prepare' ? '准备中…' : capture.prepared ? '1. 已准备' : '1. 准备采集'} disabled={!loaded || !capture.available || !!busy || capture.prepared} onPress={() => void runCaptureAction('prepare')} />
-            <ActionButton label={busy === 'pip' ? '等待画中画…' : capture.pipActive ? '2. 画中画已开启' : '2. 开启画中画'} disabled={!capture.prepared || !capture.pipSupported || capture.pipActive || !!busy || applyingSettings || !!settingsError} onPress={() => void runCaptureAction('pip')} />
+            <ActionButton label={busy === 'pip' || capture.pipPending ? '等待画中画…' : capture.pipActive ? '2. 画中画已开启' : '2. 开启画中画'} disabled={!capture.prepared || !capture.pipSupported || capture.pipActive || capture.pipPending || !!busy || applyingSettings || !!settingsError} onPress={() => void runCaptureAction('pip')} />
           </View>
           <Text style={styles.stepTitle}>3. 点击系统录屏按钮</Text>
           <Text style={styles.cardHint}>先准备并开启画中画，再点下方系统控件，选择本应用的广播扩展并确认开始直播。这是必需的系统授权；上方按钮不会启动录屏。</Text>
@@ -440,11 +444,6 @@ function TimerScreen() {
         <Text style={styles.cardHint}>{automatic
           ? `${sideText}。自动模式只显示原生识别结果。`
           : '手动备用仅在本页工作；按键只操作备用计时，不会改变自动识别、广播或画中画状态。'}</Text>
-        {automatic && settings.playerSide === 'auto' && !capture.detectedPlayerSide ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="设置我方位置或游戏名字" style={styles.outlineButton} onPress={() => setSettingsVisible(true)}>
-            <Text style={styles.outlineText}>我方位置未确认，显示双边；点此手动选边</Text>
-          </Pressable>
-        ) : null}
 
         {settings.miniMode ? (
           <MiniPill settings={settings} text={pillText} controlsVisible={controlsVisible}
@@ -482,7 +481,7 @@ function TimerScreen() {
           <View style={styles.actionRow}>
             <ActionButton label="手动：左侧掉豆" onPress={() => startCooldown('left')} />
             <ActionButton label="手动：右侧掉豆" onPress={() => startCooldown('right')} />
-            <ActionButton label="清空备用计时" onPress={() => { setManualDetectedSide(''); setDeadlines({ left: 0, right: 0, leftAlternate: 0, rightAlternate: 0 }); }} />
+            <ActionButton label="清空备用计时" onPress={() => setDeadlines({ left: 0, right: 0, leftAlternate: 0, rightAlternate: 0 })} />
           </View>
         ) : null}
 
@@ -503,26 +502,22 @@ function TimerScreen() {
               </View>
               <SettingRow label="我方位置">
                 <View style={styles.segmented}>
-                  {([['auto', '自动/双边'], ['left', '左边'], ['right', '右边']] as const).map(([value, label]) => (
-                    <Pressable key={value} accessibilityRole="button" accessibilityLabel={`我方位置：${label}`} accessibilityState={{ selected: settings.playerSide === value }} onPress={() => { if (value === 'auto') setManualDetectedSide(''); setSettings((current) => ({ ...current, playerSide: value })); }} style={[styles.segment, settings.playerSide === value && styles.segmentSelected]}>
+                  {([['left', '左边'], ['right', '右边']] as const).map(([value, label]) => (
+                    <Pressable key={value} accessibilityRole="button" accessibilityLabel={`我方位置：${label}`} accessibilityState={{ selected: settings.playerSide === value }} onPress={() => setSettings((current) => ({ ...current, playerSide: value }))} style={[styles.segment, settings.playerSide === value && styles.segmentSelected]}>
                       <Text style={styles.segmentText}>{label}</Text>
                     </Pressable>
                   ))}
                 </View>
-                <Text style={styles.cardHint}>手动选我方左／右最可靠。自动仅采用原生可靠证据，未确定时显示左右双边，不会根据首次掉豆猜测我方位置。</Text>
+                <Text style={styles.cardHint}>iOS 不做自动认边。请按当前对局选择我方左／右；只影响显示对象，不会清空已经确认的倒计时。也可以开启两边计时。</Text>
               </SettingRow>
               <SettingRow label="记住我方位置">
                 <Switch accessibilityLabel="记住我方位置" style={styles.switch} hitSlop={7} value={settings.rememberSide} onValueChange={(value) => setSettings((current) => ({ ...current, rememberSide: value }))} />
-              </SettingRow>
-              <SettingRow label="我的游戏名字（支持多个账号）">
-                <TextInput accessibilityLabel="我的游戏名字，每行一个" multiline maxLength={840} autoCorrect={false} value={settings.playerName} onChangeText={(value) => setSettings((current) => ({ ...current, playerName: value }))} placeholder="每行一个完整账号名，最多20个，每个40字" placeholderTextColor="#71819a" style={styles.input} />
-                <Text style={styles.cardHint}>在本机识别账号文字；精确确认我方名字或已知对手后自动认边。遮挡或证据不足时保持未知，不根据首次掉豆猜边；不会上传截图和名字。</Text>
               </SettingRow>
               <SettingRow label="对面忍者（留空自动识别）">
                 <TextInput accessibilityLabel="对面忍者" returnKeyType="done" maxLength={40} value={settings.opponentNinja} onChangeText={(value) => setSettings((current) => ({ ...current, opponentNinja: value }))} placeholder="照美冥[五代目水影]" placeholderTextColor="#71819a" style={styles.input} />
                 <MiniButton label={ninjaChoicesVisible ? '收起忍者选项' : '选择常用忍者 / 自动'} onPress={() => setNinjaChoicesVisible((value) => !value)} />
                 {ninjaChoicesVisible ? <View style={styles.actionRow}>{NINJA_CHOICES.map((name) => <MiniButton key={name || 'auto'} label={name || '自动识别'} onPress={() => { setSettings((current) => ({ ...current, opponentNinja: name })); setNinjaChoicesVisible(false); }} />)}</View> : null}
-                <Text style={styles.cardHint}>自动识别头像和忍者标题。填完整变体名可覆盖对面；照美冥[五代目水影]和半藏[秽土转生]使用15／10秒双计时。换边未确认时不把覆盖强加给某一边。</Text>
+                <Text style={styles.cardHint}>自动识别头像和忍者标题。填完整变体名可覆盖对面；照美冥[五代目水影]和半藏[秽土转生]使用15／10秒双计时。覆盖只作用于你手动选择的对面。</Text>
               </SettingRow>
               <SettingRow label="两边计时（含画中画）">
                 <Switch accessibilityLabel="两边计时" style={styles.switch} hitSlop={7} value={settings.showBothSides} onValueChange={(value) => setSettings((current) => ({ ...current, showBothSides: value }))} />

@@ -9,7 +9,20 @@ import Network
 // pixels or recordings, leave this extension, and only over IPv4 loopback.
 final class SampleHandler: RPBroadcastSampleHandler {
   private let lock = NSLock()
-  private let engineLock = NSRecursiveLock()
+  private let recognitionQueue = DispatchQueue(label: "com.narutotimer.broadcast.recognition")
+  private struct CapturedFrame {
+    let pixels: CVPixelBuffer // Strong reference; never retain the CMSampleBuffer.
+    let orientation: Int
+    let capturedAtMs: Double
+    let monotonic: Double
+    let uptime: Double
+    let generation: Int
+  }
+  // Protected by lock. Deliberately drop captures while Vision is busy: one
+  // retained in-flight surface, no pending surface or queued frame backlog.
+  // A second full-resolution IOSurface costs too much of ReplayKit's 50 MiB.
+  private var recognitionBusy = false
+  private var generation = 0
   private let broadcastID = UUID().uuidString
   // Keep a fixed epoch/monotonic pair across wall-clock corrections.
   private let wallOffsetMs = Date().timeIntervalSince1970 * 1000 - CaptureProtocol.now() * 1000
@@ -23,88 +36,114 @@ final class SampleHandler: RPBroadcastSampleHandler {
   private var lastPong = CaptureProtocol.now()
   private var connectionStarted = CaptureProtocol.now()
   private var sending = false
-  private var pendingState: [String: Any]?
+  private var pendingState: (generation: Int, packet: [String: Any])?
   private var pendingSettings: [String: Any]?
   private var configured = false
   private var finished = false
   private var paused = false
-  private var engine: NTRecognitionEngine?
-  private var lastAnalysis = 0.0
+  private var lastAcquisition = 0.0
   private var fps = 8.0
+  // Only recognitionQueue accesses the engine and analysis history.
+  private var engine: NTRecognitionEngine?
+  private var analyzedGeneration = -1
+  private var lastAnalyzedAt = 0.0
   private var frames = 0
 
   override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
-    engineLock.lock(); defer { engineLock.unlock() }
-    guard let path = Bundle.main.path(forResource: "RecognitionAssets", ofType: nil) else {
-      fail("识别资源缺失，请重新安装完整 IPA（含采集扩展）。")
-      return
-    }
-    do {
-      engine = try NTRecognitionEngine(assetsPath: path)
-      guard engine != nil else { fail("识别引擎未能初始化。"); return }
-    } catch {
-      fail("识别引擎初始化失败：\(error.localizedDescription)")
-      return
-    }
-    networkQueue.async { [weak self] in
-      guard let self else { return }
-      self.connectionStarted = CaptureProtocol.now()
-      self.connect()
-      let timer = DispatchSource.makeTimerSource(queue: self.networkQueue)
-      timer.schedule(deadline: .now() + 1, repeating: 1)
-      timer.setEventHandler { [weak self] in self?.tick() }
-      self.heartbeat = timer
-      timer.resume()
+    recognitionQueue.async { [weak self] in
+      guard let self, !self.isFinished else { return }
+      guard let path = Bundle.main.path(forResource: "RecognitionAssets", ofType: nil) else {
+        self.fail("识别资源缺失，请重新安装完整 IPA（含采集扩展）。")
+        return
+      }
+      do {
+        self.engine = try NTRecognitionEngine(assetsPath: path)
+        guard self.engine != nil else { self.fail("识别引擎未能初始化。"); return }
+      } catch {
+        self.fail("识别引擎初始化失败：\(error.localizedDescription)")
+        return
+      }
+      self.networkQueue.async { [weak self] in
+        guard let self, !self.isFinished else { return }
+        self.connectionStarted = CaptureProtocol.now()
+        self.connect()
+        let timer = DispatchSource.makeTimerSource(queue: self.networkQueue)
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [weak self] in self?.tick() }
+        self.heartbeat = timer
+        timer.resume()
+      }
     }
   }
 
   override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
     guard sampleBufferType == .video else { return }
-    engineLock.lock(); defer { engineLock.unlock() }
+    let monotonic = CaptureProtocol.now()
+    let uptime = ProcessInfo.processInfo.systemUptime
+    let pixels = CMSampleBufferGetImageBuffer(sampleBuffer)
+    let rawOrientation = (CMGetAttachment(sampleBuffer, key: RPVideoSampleOrientationKey as CFString,
+                                        attachmentModeOut: nil) as? NSNumber)?.intValue ?? 1
+    lock.lock(); defer { lock.unlock() }
+    guard !finished, !paused, configured, !recognitionBusy else { return }
+    guard let pixels else { generation += 1; return }
+    // Throttle at acquisition, not when a slow Vision worker finally runs.
+    guard monotonic - lastAcquisition >= 1.0 / fps else { return }
+    lastAcquisition = monotonic
+    let frame = CapturedFrame(pixels: pixels, orientation: (1...8).contains(rawOrientation) ? rawOrientation : 1,
+                              capturedAtMs: wallOffsetMs + monotonic * 1000,
+                              monotonic: monotonic, uptime: uptime, generation: generation)
+    recognitionBusy = true
+    // The closure strongly owns frame.pixels until synchronous analysis ends,
+    // even after ReplayKit returns/recycles its CMSampleBuffer wrapper.
+    recognitionQueue.async { [weak self, frame] in self?.analyze(frame) }
+  }
+
+  private func analyze(_ frame: CapturedFrame) {
+    defer {
+      lock.lock()
+      recognitionBusy = false
+      lock.unlock()
+    }
     lock.lock()
-    let stopped = finished
-    let ready = configured
+    guard !finished, !paused, configured, frame.generation == generation else { lock.unlock(); return }
     let configuration = pendingSettings
     pendingSettings = nil
     lock.unlock()
-    guard !stopped, ready else { return }
-    if let configuration {
-      engine?.configure(configuration)
-      if let value = configuration["backgroundFPS"] as? NSNumber, value.doubleValue.isFinite {
-        fps = min(10, max(1, value.doubleValue))
-      }
-    }
-    guard !paused, let engine else { return }
-    let monotonic = CaptureProtocol.now()
-    guard monotonic - lastAnalysis >= 1.0 / fps else { return }
-    if lastAnalysis > 0, monotonic - lastAnalysis > 2 { engine.pauseObservations() }
-    lastAnalysis = monotonic
-    guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { engine.pauseObservations(); return }
-    let rawOrientation = (CMGetAttachment(sampleBuffer, key: RPVideoSampleOrientationKey as CFString,
-                                        attachmentModeOut: nil) as? NSNumber)?.intValue ?? 1
-    let orientation = (1...8).contains(rawOrientation) ? rawOrientation : 1
-    let capturedAt = wallOffsetMs + monotonic * 1000
-    // ReplayKit owns this sample. Finish reading its pixels before returning;
-    // do not retain a shallow CMSampleBuffer copy in an asynchronous queue.
+    guard let engine else { fail("识别引擎不可用。"); return }
     autoreleasepool {
-      var result = engine.analyze(pixels, orientation: orientation, capturedAtMs: capturedAt) as? [String: Any] ?? [:]
+      if let configuration { engine.configure(configuration) }
+      if analyzedGeneration != frame.generation || (lastAnalyzedAt > 0 && frame.monotonic - lastAnalyzedAt > 2) {
+        engine.pauseObservations()
+      }
+      analyzedGeneration = frame.generation
+      lastAnalyzedAt = frame.monotonic
+      var result = engine.analyze(frame.pixels, orientation: frame.orientation, capturedAtMs: frame.capturedAtMs,
+                                  capturedUptime: frame.uptime) as? [String: Any] ?? [:]
       frames += 1
       result["type"] = "state"
-      result["capturedAtMs"] = capturedAt
-      result["capturedAtMonotonic"] = monotonic
+      result["capturedAtMs"] = frame.capturedAtMs
+      result["capturedAtMonotonic"] = frame.monotonic
       result["frames"] = frames
-      networkQueue.async { [weak self, result] in
-        guard let self, !self.isFinished else { return }
-        self.pendingState = result
+      // Capture only scalars/results here, never frame/pixels. Network
+      // backpressure must not retain any ReplayKit pixel buffers.
+      networkQueue.async { [weak self, result, generation = frame.generation] in
+        guard let self else { return }
+        self.lock.lock()
+        let valid = !self.finished && !self.paused && self.configured && generation == self.generation
+        self.lock.unlock()
+        guard valid else { return }
+        self.pendingState = (generation, result)
         self.flushState()
       }
     }
   }
 
   override func broadcastPaused() {
-    engineLock.lock(); defer { engineLock.unlock() }
+    lock.lock()
     paused = true
-    engine?.pauseObservations()
+    generation += 1
+    lastAcquisition = 0
+    lock.unlock()
     networkQueue.async { [weak self] in
       self?.pendingState = nil
       self?.sendControl(["type": "paused", "message": "系统录屏已暂停，倒计时按实际时间继续。"])
@@ -112,23 +151,18 @@ final class SampleHandler: RPBroadcastSampleHandler {
   }
 
   override func broadcastResumed() {
-    engineLock.lock(); defer { engineLock.unlock() }
+    lock.lock()
     paused = false
-    engine?.pauseObservations()
-    lastAnalysis = 0
+    generation += 1
+    lastAcquisition = 0
+    lock.unlock()
     networkQueue.async { [weak self] in
       self?.sendControl(["type": "resumed", "message": "系统录屏已恢复，正在重新确认画面。"])
     }
   }
 
   override func broadcastFinished() {
-    engineLock.lock(); defer { engineLock.unlock() }
-    lock.lock()
-    finished = true
-    pendingSettings = nil
-    lock.unlock()
-    engine?.reset()
-    engine = nil
+    guard endRecognition() else { return }
     networkQueue.async { [weak self] in
       guard let self else { return }
       self.sendControl(["type": "finished", "message": "系统录屏已结束。"])
@@ -146,11 +180,23 @@ final class SampleHandler: RPBroadcastSampleHandler {
     return finished
   }
 
-  private func fail(_ message: String) {
+  private func endRecognition() -> Bool {
     lock.lock()
-    guard !finished else { lock.unlock(); return }
+    guard !finished else { lock.unlock(); return false }
     finished = true
+    generation += 1
+    pendingSettings = nil
+    configured = false
     lock.unlock()
+    recognitionQueue.async { [weak self] in
+      self?.engine?.reset()
+      self?.engine = nil
+    }
+    return true
+  }
+
+  private func fail(_ message: String) {
+    guard endRecognition() else { return }
     networkQueue.async { [weak self] in
       self?.sendControl(["type": "error", "message": message])
       self?.heartbeat?.cancel()
@@ -200,24 +246,26 @@ final class SampleHandler: RPBroadcastSampleHandler {
     client.cancel()
     lock.lock()
     configured = false
+    generation += 1
+    pendingSettings = nil
+    lastAcquisition = 0
     lock.unlock()
   }
 
   private func receive(on client: NWConnection) {
-    client.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self, weak client] data, _, complete, error in
+    client.receive(minimumIncompleteLength: 1, maximumLength: CaptureProtocol.receiveLimit) { [weak self, weak client] data, _, complete, error in
       guard let self, let client, self.connection === client else { return }
       if let data {
-        self.input.append(data)
-        guard self.input.count <= 16_384 else { self.fail("采集控制消息超出限制，已停止。"); return }
-        while let newline = self.input.firstIndex(of: 10) {
-          let line = self.input.prefix(upTo: newline)
-          self.input.removeSubrange(...newline)
+        let lines: [Data]
+        do { lines = try CaptureProtocol.receiveLines(data, buffering: &self.input) }
+        catch { self.fail("采集控制消息超出限制，已停止。"); return }
+        for line in lines {
           guard let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             self.fail("采集控制协议无效，已停止。")
             return
           }
           self.handle(message)
-          if self.isFinished { return }
+          if self.isFinished || self.connection !== client { return }
         }
       }
       if complete || error != nil { self.disconnect(client); return }
@@ -240,11 +288,15 @@ final class SampleHandler: RPBroadcastSampleHandler {
       }
       session = next
       lastPong = CaptureProtocol.now()
+      let configuration = CaptureProtocol.settings(settings)
       lock.lock()
-      pendingSettings = CaptureProtocol.settings(settings)
+      generation += 1
+      pendingSettings = configuration
+      fps = CaptureProtocol.number(configuration["backgroundFPS"], 8)
+      lastAcquisition = 0
       configured = true
       lock.unlock()
-      flushState()
+      pendingState = nil
     } else if type == "pong", message["session"] as? String == session, !session.isEmpty {
       lastPong = CaptureProtocol.now()
     } else if type == "stop", message["session"] as? String == session, !session.isEmpty {
@@ -286,8 +338,13 @@ final class SampleHandler: RPBroadcastSampleHandler {
   }
 
   private func flushState() {
-    guard !sending, !session.isEmpty, let connection, var state = pendingState else { return }
+    guard !sending, !session.isEmpty, let connection, let pending = pendingState else { return }
     pendingState = nil
+    lock.lock()
+    let valid = !finished && !paused && configured && pending.generation == generation
+    lock.unlock()
+    guard valid else { return }
+    var state = pending.packet
     sequence += 1
     state["version"] = 1
     state["session"] = session
