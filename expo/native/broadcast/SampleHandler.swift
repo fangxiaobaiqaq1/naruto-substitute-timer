@@ -292,10 +292,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
       lastPong = CaptureProtocol.now()
       let configuration = CaptureProtocol.settings(settings)
       lock.lock()
-      generation += 1
+      // Apply atomically between analyses, not as a capture-source restart.
+      // APK-style side/display changes must preserve a pending bead-drop vote;
+      // the engine itself resynchronizes only real geometry/cadence changes.
       pendingSettings = configuration
       fps = CaptureProtocol.number(configuration["backgroundFPS"], 8)
-      lastAcquisition = 0
       configured = true
       lock.unlock()
       pendingState = nil

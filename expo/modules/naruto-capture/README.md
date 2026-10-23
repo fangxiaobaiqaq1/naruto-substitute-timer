@@ -4,7 +4,7 @@ Local Expo module, real ReplayKit Broadcast Upload extension and native sample-b
 
 ## Runtime contract
 
-`NarutoCapture` exposes `getState`, `prepare`, `startPictureInPicture`, `stop`, `setSettings`, `onState`, and its same-name Expo view. The view contains the visible `AVSampleBufferDisplayLayer` preview and genuine `RPSystemBroadcastPickerView`; it never programmatically taps or bypasses the system picker. The picker discovers the installed upload extension's actual bundle ID, including after re-signing.
+`NarutoCapture` exposes `getState`, `prepare`, `startPictureInPicture`, `stop`, `setSettings`, `setControls`, `onState`, and its same-name Expo view. The view contains the visible `AVSampleBufferDisplayLayer` preview and genuine `RPSystemBroadcastPickerView`; it never programmatically taps or bypasses the system picker. The picker discovers the installed upload extension's actual bundle ID, including after re-signing.
 
 Additional methods:
 
@@ -13,6 +13,14 @@ Additional methods:
 - `shareDocument(name,text): Promise<void>`: native share sheet for temporary file, <=1 MiB, sanitized filename. The temporary export is removed when sharing completes.
 
 Settings include manual-only `playerSide: left|right`, `ninjaQuery`, `rememberSide`, and normalized calibration rects. Account names, OCR and automatic side recognition are intentionally excluded from iOS. Diagnostics include `pipPossible`, `pipPending`, `stale`, `renderedFrames`, ninja names, substitution counts, scene, frame dimensions, recognition errors, `latencyMs` (recognition only), and `deliveryLatencyMs` (capture-to-host).
+
+## Game-side controls (build 2)
+
+`CaptureControls` owns `playerSide`, `showBothSides`, `rememberSide`, `initialized`, and a monotonic `revision`. Its UserDefaults record survives suspended JS and process restarts. `setSettings` may migrate old JS controls only once; after initialization stale bulk settings cannot override native controls. Explicit UI commands use validated `setControls` patches. Snapshots include `controls`; JS hydrates/merges it before restoring old settings and ignores lower revisions.
+
+Public AVKit transport callbacks provide the interaction: negative skip selects left, positive skip selects right, center play/pause chooses single/both. A finite rolling range surrounds the actual display-layer timebase; `requiresLinearPlayback = false` exposes seek controls. Completion always runs once, including invalid/stale callbacks. The paused delegate describes button UI state only; media clock rate stays 1 and capture never stops for these control actions. A persistent legend/current-side label distinguishes system buttons from video text. Closing PiP or a genuine audio/media interruption still stops capture.
+
+Apple documents that custom video-call content receives no touch events, so no custom touch forwarding/private KVC is used. This is an application-defined mapping of public playback controls, not a claim Apple provides arbitrary interactive game overlays. Test control availability and background rendering on real devices.
 
 ## Lifecycle / security
 
@@ -23,7 +31,7 @@ Settings include manual-only `playerSide: left|right`, `ninjaQuery`, `rememberSi
 
 Only newline-framed JSON metadata goes over the loopback-bound listener (16 KiB bound, version, per-connection UUID and increasing sequence checks). A broadcast UUID distinguishes reconnects from a fresh recording. This prevents stale/accidental replay; **it is not cryptographic authentication against a malicious co-resident app**. Screen and audio samples never leave the extension. Audio samples are ignored.
 
-Recognition runs synchronously before ReplayKit releases each video sample, throttled to 1–10 FPS. Pause/dropout invalidates visual continuity, not confirmed timers. The native host renders fresh PiP sample buffers independently of JS; audio session is playback/moviePlayback with mixWithOthers, but plays no audio. Confirmed epoch deadlines are pinned once to a shared CLOCK_MONOTONIC domain, so wall-clock jumps and repeated uncertain frames cannot reset them. Explicit engine round resets/new broadcast sessions can clear timers.
+Recognition runs on a serial worker with one strongly retained pixel buffer; captures while busy are dropped rather than queued. Acquisition is throttled to 1–10 FPS and at most 2.5 FPS outside a match. Pause/dropout invalidates visual continuity, not confirmed timers. The native host renders fresh PiP sample buffers independently of JS; audio session is playback/moviePlayback with mixWithOthers, but plays no audio. Confirmed epoch deadlines are pinned once to a shared CLOCK_MONOTONIC domain, so wall-clock jumps and repeated uncertain frames cannot reset them. Explicit engine round resets/new broadcast sessions can clear timers.
 
 No frame for 3 seconds makes recognition stale; no protocol packet for 6 seconds disconnects the host. The extension ends recording after an 8-second missing-pong timeout (10-second initial handshake/reconnect allowance). Closing PiP, audio interruption, or leaving the app without active PiP stops capture honestly. An already-confirmed countdown can continue with an explicit stale warning after transport loss.
 
@@ -31,7 +39,7 @@ No frame for 3 seconds makes recognition stale; no protocol packet for 6 seconds
 
 Use `./plugins/withReplayKit` in app.json. Optional `extensionBundleIdentifier` must be below the app bundle ID. The plugin stages sources/assets into generated `ios/NarutoBroadcast`, creates the `NarutoBroadcast` extension target, explicit app target dependency and PlugIns copy phase, C++17 / ObjC++ / Swift bridging header / required Apple frameworks, `APPLICATION_EXTENSION_API_ONLY=YES`, `SKIP_INSTALL=YES`, and iOS 16.4. It adds `UIBackgroundModes=audio` and EAS extension credential metadata; it does not require App Groups or disable signing globally.
 
-The repo must include `android/app/src/main/cpp/{include,src}`, `expo/native/recognition`, `assets/{templates,avatars,game}`, `internal/ninja/templates`, and `internal/ocr/neuraldata/recognizer.onnx` with licenses. No JNI/Android framework is built. PNG assets are copied byte-for-byte to preserve hashes. The product is `NarutoBroadcast.appex/RecognitionAssets/{templates,avatars,game,ninja_templates,ocr}`.
+The repo must include `android/app/src/main/cpp/{include,src}`, `expo/native/recognition`, `assets/{templates,avatars,game}`, `internal/ninja/templates`, and licenses. No JNI/Android framework, account OCR model or Vision backend is loaded. PNG assets are copied byte-for-byte to preserve hashes. The product is `NarutoBroadcast.appex/RecognitionAssets/{templates,avatars,game,ninja_templates,licenses}`.
 
 Autolinking explicitly selects the single root `NarutoCapture.podspec`. `legacy/*.disabled` preserves older ignored WIP, excluded from compilation; the runtime is `ios/CaptureHost.swift` plus its protocol, renderer, document helper and Expo module.
 

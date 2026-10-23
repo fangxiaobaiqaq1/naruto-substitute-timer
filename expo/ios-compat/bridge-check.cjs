@@ -29,7 +29,7 @@ function bridge(native, globals = {}) {
   }, globals) };
 }
 const nativeModule = (extra = {}) => ({ getState: () => ({}), prepare: async () => ({}),
-  startPictureInPicture: async () => ({}), stop: async () => ({}), setSettings: async () => {}, ...extra });
+  startPictureInPicture: async () => ({}), stop: async () => ({}), setSettings: async () => {}, setControls: async () => ({}), ...extra });
 
 test('no native module is unavailable, never success-shaped', async () => {
   const { api } = bridge(null);
@@ -87,8 +87,43 @@ test('events beat older requests and foreground watchdog/lifecycle clean up', as
   stop(); assert.equal(timers.size, 0); assert.equal(listeners.size, 0); assert.equal(removed, true);
 });
 
+test('control state is strict and merges only native-owned fields without echo churn', () => {
+  const { api } = bridge(nativeModule());
+  const controls = { initialized: true, revision: 4, playerSide: 'right', showBothSides: true, rememberSide: false };
+  for (const invalid of [null, {}, { ...controls, playerSide: 'auto' }, { ...controls, revision: Infinity },
+    { ...controls, revision: -1 }, { ...controls, revision: 1.5 }, { ...controls, initialized: 'yes' }, { ...controls, showBothSides: 1 }]) {
+    assert.equal(api.normalizeCaptureControls(invalid), null);
+  }
+  const normalized = api.normalizeCaptureState({ available: true, controls }).controls;
+  assert.equal(normalized.playerSide, 'right'); assert.equal(normalized.revision, 4);
+  const old = { playerSide: 'left', showBothSides: false, rememberSide: true, fontScale: 1.1, calibration: { profile: 'camp' } };
+  assert.equal(api.mergeCaptureControls(old, null), old);
+  assert.equal(api.mergeCaptureControls(old, { ...controls, initialized: false }), old, 'uninitialized native defaults cannot erase legacy settings');
+  const updated = api.mergeCaptureControls(old, normalized);
+  assert.equal(updated.playerSide, 'right'); assert.equal(updated.showBothSides, true); assert.equal(updated.rememberSide, false);
+  assert.equal(updated.fontScale, old.fontScale); assert.equal(updated.calibration, old.calibration);
+  assert.equal(api.mergeCaptureControls(updated, normalized), updated, 'duplicate state keeps React object identity');
+});
+
+test('explicit control patches validate and await native acknowledgement', async () => {
+  const sent = [];
+  const controls = { initialized: true, revision: 5, playerSide: 'right', showBothSides: false, rememberSide: true };
+  const { api } = bridge(nativeModule({ setControls: async (patch) => { sent.push(patch); return { available: true, controls }; } }));
+  const state = await api.setCaptureControls({ playerSide: 'right', fontScale: 100, playerName: 'ignored' });
+  assert.equal(JSON.stringify(sent[0]), '{"playerSide":"right"}'); assert.equal(state.controls.revision, 5);
+  await api.setCaptureControls({ showBothSides: false });
+  assert.equal(JSON.stringify(sent[1]), '{"showBothSides":false}');
+  for (const invalid of [{}, { playerSide: 'auto' }, { showBothSides: 'false' }, { rememberSide: 1 }]) await assert.rejects(api.setCaptureControls(invalid));
+  assert.equal(sent.length, 2, 'invalid control commands never reach native');
+  const missingAck = bridge(nativeModule()).api;
+  await assert.rejects(missingAck.setCaptureControls({ playerSide: 'left' }), /原生未确认/);
+});
+
 test('special ninja and semantic version rules match v0.3.0', () => {
   const api = load(path.join(__dirname, '../updates.ts'));
+  const config = JSON.parse(readFileSync(path.join(__dirname, '../app.json'), 'utf8')).expo;
+  assert.equal(api.APP_VERSION, config.version);
+  assert.equal(String(api.IOS_BUILD), config.ios.buildNumber);
   assert.equal(api.isDualNinja('照美冥【五代目水影】'), true);
   assert.equal(api.isDualNinja('半藏[秽土转生]'), true);
   for (const name of ['', '半藏', '照美冥', '千手柱间[秽土转生]']) assert.equal(api.isDualNinja(name), false);

@@ -1,4 +1,4 @@
-# iOS 原生版 · v0.3.0
+# iOS 原生版 · v0.3.0 / 构建 2
 
 基于正式版 `v0.3.0`（`325eee5`），开发分支 **`ios/v0.3.0-native`**。不是 Expo Go 演示或网页套壳：主 App 使用 Expo / React Native，游戏采集由 **ReplayKit Broadcast Upload Extension** 完成，共享最新版 Android 的 C++ 视觉核心，跨应用显示使用原生 **AVSampleBufferDisplayLayer 画中画**。
 
@@ -28,7 +28,8 @@
 2. 点「准备采集」，再点「开启画中画」，保持原生预览在屏幕内，等系统真正开启 PiP。
 3. 点击原生系统录屏按钮，选择「替身计时器」，确认「开始直播」。麦克风不采集；录屏权限不能绕过。
 4. 切到游戏，进入决斗/训练场。扩展从实际游戏画面分析，主 App 的原生画中画显示结果；不依赖后台 JavaScript 定时器。
-5. 用系统控制中心停止录屏，或返回 App 点「停止采集与画中画」。关闭 PiP / 系统媒体中断时停止采集，避免留着无显示的后台工作。
+5. **游戏中换边**：轻点画中画，显示系统控制。左侧后退键＝我方左，右侧前进键＝我方右；中间播放／暂停键＝单边／双边切换。下方显示当前我方位置与模式，确认已经生效。系统图标保持播放器样式，但本应用不会快进/倒退计时，也不会因中间键暂停识别。
+6. 用系统控制中心停止录屏，或返回 App 点「停止采集与画中画」。**关闭 PiP** / 系统媒体中断仍会停止采集，与中间的模式切换键不同。
 
 如果系统尚未允许 PiP，界面显示等待/失败原因，不把调用按钮成功当作画中画已经运行。录屏中断、画面遮挡、连接超时只撤销视觉证据，**已经确认的倒计时继续按真实经过时间走**。
 
@@ -39,17 +40,21 @@
 | 自动识别豆、忍者、场景 | 直接编译共享 C++ 场景/头像/标题/特殊豆算法；支持决斗和训练、4/6 颗豆、特殊配色/下移布局 |
 | 替身计时 | 原生状态机；新鲜帧确认、去重、掉帧重新同步、恢复即再次替身、换轮/整局计数 |
 | 特殊忍者 | 照美冥[五代目水影]、半藏[秽土转生]同时 15/10 秒；自动识别与完整变体名覆盖，按每侧独立处理 |
-| 我方位置 | 仅手动左/右，记住位置、一键换边；不做账号文字识别或自动认边 |
-| 双边/对面、迷你、字号、透明度 | 主界面支持；PiP 支持单/双边和字号，位置/缩放/贴边由系统手势管理。iOS 不开放任意透明、任意长宽的 Android 悬浮窗 |
+| 我方位置 | 仅手动左/右；游戏内 PiP 左右键即可换边，记住位置；不做账号文字识别或自动认边 |
+| 双边/对面、迷你、字号、透明度 | PiP 中间键切单/双边，原生计时不停；主界面保留完整/紧凑、字号与透明度，PiP 位置/缩放/贴边使用系统手势 |
 | 区域校准 | 从「文件」选择完整游戏截图，画/拖/缩放四个区域、像素微调、恢复自动；使用和电脑/安卓相同的方案 JSON，可导入/导出。文件截图没有该帧自动识别几何，不伪造自动框；特殊下移忍者请选普通忍者截图校准 |
-| 设置 | 自动持久化，输入范围校验、错误提示；主 App 将有效设置传给扩展 |
+| 设置 | 游戏内换边/单双边先在原生落盘并发送给扩展，回到 App 同步；旧 JS/AsyncStorage 设置不能反向覆盖后台选择 |
 | 诊断 | 实时连接/录屏/PiP/豆数/忍者/计数/尺寸/识别耗时，导出脱敏 JSON。不包含账号、截图、原始录屏 |
 | 更新 | Gitee / GitHub 版本检查、发布说明、自动检查开关、IPA 云构建入口；iOS 更新必须自行重签，不下载 Android APK / Windows EXE |
 | 手动备用 | 前台手动计时；明确隔离自动识别状态，不冒充后台自动功能 |
 
 ### 不能直接照搬的系统行为
 
-iOS 普通应用没有 Android `SYSTEM_ALERT_WINDOW` / 无障碍截屏权限，也不能像 Windows 读取模拟器窗口；替代方式是用户授权 ReplayKit + PiP，而不是私有 API / 越狱 / 静音音频保活。PiP 不能承载可点的 React Native 设置面板，修改设置要返回主 App。
+iOS 版以 APK 的 `OverlayController` / `Session` 操作为对应目标，并直接复用其 C++ 识别核心，但不把 APK 二进制改名为 IPA。跨应用显示通过 ReplayKit + PiP；**PiP 有可用的系统交互入口**，构建 2 已接入左右选边与单/双边，无需回到 App。
+
+实现采用公开 AVKit 接口：[`requiresLinearPlayback`](https://developer.apple.com/documentation/avkit/avpictureinpicturecontroller/requireslinearplayback)、[`skipByInterval:completion:`](https://developer.apple.com/documentation/avkit/avpictureinpicturesamplebufferplaybackdelegate/pictureinpicturecontroller(_:skipbyinterval:completion:))、[`isPlaybackPaused`](https://developer.apple.com/documentation/avkit/avpictureinpicturesamplebufferplaybackdelegate/pictureinpicturecontrollerisplaybackpaused(_:))。允许跳转、提供包含真实媒体时钟的有限控制范围，并在回调中更新手动位置；中间键仅改变显示模式，媒体时钟和替身截止时间照常运行。
+
+这是将系统播放器控件映射为计时器操作，不是 Apple 宣称提供了通用游戏悬浮窗 API。Apple 的[视频通话 PiP 指南](https://developer.apple.com/documentation/avkit/adopting-picture-in-picture-for-video-calls)明确指出内容视图收不到触摸，不能靠往画面里添加 UIView 按钮实现点击；因此没有使用私有 KVC、系统窗口遍历或假按钮。校准等复杂设置仍在主 App 中操作。具体系统的控件显示和后台行为需要真机回归。
 
 本版不声称包含 Windows 的原帧/滚动录像录制器、模拟器诊断、桌面快捷键；诊断文件也不冒充包含这些数据。截图校准使用用户选择的游戏截图，不伪装成自动抓取当前游戏帧。自动认边、账号 OCR 与账号图片模板按用户最新要求不纳入 iOS 版。
 

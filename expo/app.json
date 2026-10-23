@@ -8,7 +8,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.narutotimer.mobile",
-      "buildNumber": "1"
+      "buildNumber": "2"
     },
     "android": {
       "package": "com.narutotimer.mobile"
