@@ -6,7 +6,12 @@ final class CountdownRenderer {
   private var pool: CVPixelBufferPool?
   private var format: CMVideoFormatDescription?
   private let width = 640
-  private let height = 240
+  private let height = 320
+
+  var playbackTime: CMTime {
+    guard let timebase = layer.controlTimebase else { return CMClockGetTime(CMClockGetHostTimeClock()) }
+    return CMTimebaseGetTime(timebase)
+  }
 
   init() {
     layer.videoGravity = .resizeAspect
@@ -31,7 +36,7 @@ final class CountdownRenderer {
   }
 
   @discardableResult
-  func render(lines: [String], status: String, scale: Double, stale: Bool, warning: Bool = false) -> Bool {
+  func render(lines: [String], status: String, controls: String, scale: Double, stale: Bool, warning: Bool = false) -> Bool {
     if layer.status == .failed || layer.requiresFlushToResumeDecoding { layer.flush() }
     guard layer.isReadyForMoreMediaData, let pool else { return false }
     var output: CVPixelBuffer?
@@ -67,6 +72,19 @@ final class CountdownRenderer {
       .foregroundColor: stale ? UIColor.systemOrange : (warning ? UIColor.systemRed : UIColor.systemTeal),
       .paragraphStyle: paragraph
     ])
+    // Always visible, including stale/no-match frames. This is the local
+    // applied control state, not recognition evidence from an older packet.
+    (controls as NSString).draw(in: CGRect(x: 12, y: 239, width: CGFloat(width - 24), height: 34), withAttributes: [
+      .font: UIFont.systemFont(ofSize: 24, weight: .semibold),
+      .foregroundColor: UIColor.systemGreen,
+      .paragraphStyle: paragraph
+    ])
+    ("左键=我方左 | 中键=单/双 | 右键=我方右" as NSString).draw(
+      in: CGRect(x: 8, y: 282, width: CGFloat(width - 16), height: 30), withAttributes: [
+        .font: UIFont.systemFont(ofSize: 22, weight: .medium),
+        .foregroundColor: UIColor.white,
+        .paragraphStyle: paragraph
+      ])
     UIGraphicsPopContext()
     if format == nil {
       CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixels,
@@ -74,7 +92,7 @@ final class CountdownRenderer {
     }
     guard let format else { return false }
     var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 8),
-                                    presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+                                    presentationTimeStamp: playbackTime,
                                     decodeTimeStamp: .invalid)
     var sample: CMSampleBuffer?
     guard CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixels,

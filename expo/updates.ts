@@ -1,4 +1,5 @@
 export const APP_VERSION = '0.3.0';
+export const IOS_BUILD = 2;
 export const IOS_BUILDS_URL = 'https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/actions/workflows/ios-unsigned.yml';
 export const RELEASES_URL = 'https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest';
 export type UpdateSource = 'gitee' | 'github';

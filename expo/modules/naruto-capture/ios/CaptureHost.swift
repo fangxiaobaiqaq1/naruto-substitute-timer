@@ -41,10 +41,12 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   private var lastFrame = 0.0
   private var lastEmit = 0.0
   private var lastRender = 0.0
+  private var lastPlaybackRefresh = 0.0
   private var pendingUntil = 0.0
   private var startIssued = false
   private var deadlines = Array(repeating: CaptureDeadline(), count: 4)
   private var settings = CaptureProtocol.settings([:])
+  private let controls = CaptureControls()
   private var state: [String: Any] = [
     "available": true, "prepared": false, "broadcastActive": false,
     "pipSupported": false, "pipPossible": false, "pipPending": false, "pipActive": false,
@@ -60,6 +62,7 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
 
   private override init() {
     super.init()
+    copyControlsToSettings()
     state["pipSupported"] = AVPictureInPictureController.isPictureInPictureSupported()
     if Self.broadcastExtensionIdentifier == nil {
       state["available"] = false
@@ -73,6 +76,7 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
 
   func snapshot() -> [String: Any] {
     var output = state
+    output["controls"] = controls.snapshot
     let monotonic = CaptureProtocol.now()
     let wall = Date().timeIntervalSince1970 * 1000
     // JS formats wall-clock deadlines. Rebase only the exported view after a
@@ -94,9 +98,9 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
     }
     guard AVPictureInPictureController.isPictureInPictureSupported() else {
       message("此设备不支持画中画；不能保证切到游戏后继续计时。")
-      return state
+      return snapshot()
     }
-    guard listener == nil else { return state }
+    guard listener == nil else { return snapshot() }
     guard UIApplication.shared.applicationState == .active else {
       throw NSError(domain: "NarutoCapture", code: 4, userInfo: [NSLocalizedDescriptionKey: "请在 App 前台准备画中画。"])
     }
@@ -136,7 +140,7 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       let controller = AVPictureInPictureController(contentSource: source)
       controller.delegate = self
       controller.canStartPictureInPictureAutomaticallyFromInline = false
-      controller.requiresLinearPlayback = true
+      controller.requiresLinearPlayback = false
       pip = controller
       // AVKit may query playback during initialization, before identity is set.
       controller.invalidatePlaybackState()
@@ -155,22 +159,22 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       source.resume()
     }
     render()
-    return state
+    return snapshot()
   }
 
   func startPictureInPicture() throws -> [String: Any] {
     _ = try prepare()
-    guard let pip, !pip.isPictureInPictureActive, !startIssued else { return state }
+    guard let pip, !pip.isPictureInPictureActive, !startIssued else { return snapshot() }
     guard UIApplication.shared.applicationState == .active else {
       message("请回到 App 前台开启画中画。")
-      return state
+      return snapshot()
     }
     pendingUntil = CaptureProtocol.now() + 8
     state["pipPending"] = true
     message("正在等待系统允许画中画；请保持预览可见。")
     render()
     updatePossible()
-    return state
+    return snapshot()
   }
 
   private func updatePossible() {
@@ -186,11 +190,32 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   }
 
   func setSettings(_ value: [String: Any]) -> [String: Any] {
-    settings = CaptureProtocol.settings(value)
+    let previousRevision = controls.revision
+    let next = controls.settings(value)
+    guard previousRevision != controls.revision || !NSDictionary(dictionary: settings).isEqual(to: next) else { return snapshot() }
+    settings = next
     timer?.schedule(deadline: .now(), repeating: 1 / CaptureProtocol.number(settings["backgroundFPS"], 8), leeway: .milliseconds(15))
+    return publishSettings()
+  }
+
+  func setControls(_ patch: [String: Any]) -> [String: Any] {
+    guard controls.setControls(patch) else { return snapshot() }
+    copyControlsToSettings()
+    return publishSettings()
+  }
+
+  private func copyControlsToSettings() {
+    settings["playerSide"] = controls.playerSide
+    settings["showBothSides"] = controls.showBothSides
+    settings["rememberSide"] = controls.rememberSide
+  }
+
+  private func publishSettings() -> [String: Any] {
     sendConfiguration()
-    render()
-    return state
+    render() // Local effect ACK; never wait for an old extension game snapshot.
+    pip?.invalidatePlaybackState()
+    emit()
+    return snapshot()
   }
 
   func stop(reason: String = "采集已停止；可重新准备。") {
@@ -410,6 +435,11 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       return
     }
     render()
+    if now - lastPlaybackRefresh >= 30 {
+      lastPlaybackRefresh = now
+      // The ±60-second window retains room for both skips between refreshes.
+      pip?.invalidatePlaybackState()
+    }
   }
   private func render() {
     let now = CaptureProtocol.now()
@@ -422,8 +452,8 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       }
       return text
     }
-    let side = settings["playerSide"] as? String == "right" ? "right" : "left"
-    let both = settings["showBothSides"] as? Bool == true
+    let side = controls.playerSide
+    let both = controls.showBothSides
     let lines = both ? [label(0, "左侧"), label(1, "右侧")] : [side == "left" ? label(1, "对手") : label(0, "对手")]
     let stale = state["stale"] as? Bool ?? true
     let visible = both ? [0, 1] : [side == "left" ? 1 : 0]
@@ -443,7 +473,8 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
     if stale { status = "画面未确认 · 已有计时继续" }
     else if state["match"] as? Bool != true { status = "等待对局 · 已有计时继续" }
     else { status = "我方\(side == "left" ? "左" : "右") · " + (warning ? "即将恢复 · " : "") + visible.map(identity).joined(separator: " / ") }
-    if renderer.render(lines: lines, status: status,
+    let selection = "\(controls.initialized ? "已应用" : "当前") · 我方\(side == "left" ? "左" : "右") · \(both ? "双侧" : "单侧（对手）") · #\(controls.revision)"
+    if renderer.render(lines: lines, status: status, controls: selection,
                        scale: CaptureProtocol.number(settings["fontScale"], 0.75), stale: stale, warning: warning) {
       lastRender = now
       state["renderedFrames"] = (state["renderedFrames"] as? Int ?? 0) + 1
@@ -473,14 +504,18 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, setPlaying playing: Bool) {
     guard pip === pictureInPictureController else { return }
-    if !playing { stop(reason: "系统暂停了画中画，采集已停止。") }
+    // This utility uses AVKit's center transport action as SINGLE/BOTH, not
+    // media pause. The paused delegate describes AVKit UI state independently
+    // of playback rate: keep samples/timebase/timers running at rate 1.
+    // Real close, interruption and broadcast lifecycle stay separate.
+    _ = setControls(["showBothSides": CaptureTransport.showBothSides(playing: playing)])
   }
   func pictureInPictureControllerTimeRangeForPlayback(_ pictureInPictureController: AVPictureInPictureController) -> CMTimeRange {
     guard pip === pictureInPictureController else { return CMTimeRange(start: .zero, duration: .zero) }
-    return CMTimeRange(start: .zero, duration: .positiveInfinity)
+    return CaptureTransport.timeRange(around: renderer.playbackTime)
   }
   func pictureInPictureControllerIsPlaybackPaused(_ pictureInPictureController: AVPictureInPictureController) -> Bool {
-    pip !== pictureInPictureController || listener == nil
+    pip !== pictureInPictureController || listener == nil || controls.showBothSides
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
                                   didTransitionToRenderSize newRenderSize: CMVideoDimensions) {
@@ -488,7 +523,9 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
                                   skipByInterval skipInterval: CMTime, completion completionHandler: @escaping @Sendable () -> Void) {
-    defer { completionHandler() } // Complete even obsolete/non-seekable requests.
-    guard pip === pictureInPictureController else { return }
+    defer { completionHandler() } // Exactly once, including obsolete/invalid requests.
+    guard pip === pictureInPictureController,
+          let side = CaptureTransport.side(forSkipSeconds: CMTimeGetSeconds(skipInterval)) else { return }
+    _ = setControls(["playerSide": side])
   }
 }

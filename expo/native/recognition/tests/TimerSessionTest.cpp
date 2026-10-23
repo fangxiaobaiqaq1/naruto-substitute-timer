@@ -140,6 +140,16 @@ void manualSideAndRules() {
         assert(t.snapshot().left.alternateDeadlineMs == epoch + 11100);
     }
     assert(!ninja::DualCooldown("半藏") && !ninja::DualCooldown("照美冥"));
+    // A PiP control change between the two confirming frames is not a new
+    // capture source. Do not lose the first candidate or move its deadline.
+    TimerSession duringDrop;
+    feed(duringDrop, fight(0)); feed(duringDrop, fight(1, 3, 3));
+    TimerSettings controls;
+    controls.playerSide = "right"; controls.showBothSides = true;
+    duringDrop.configure(controls);
+    const auto afterControl = feed(duringDrop, fight(2, 3, 3));
+    assert(afterControl.left.eventCount == 1 && afterControl.right.eventCount == 1);
+    assert(afterControl.left.deadlineMs == epoch + 16100 && afterControl.right.deadlineMs == epoch + 16100);
 }
 }
 int main() {

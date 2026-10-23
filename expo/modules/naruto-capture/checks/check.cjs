@@ -26,6 +26,8 @@ try {
   assert(sources.some((s) => s.endsWith('TimerSession.cpp')));
   assert(sources.some((s) => s.endsWith('Core/src/ninja/rules.cpp')));
   assert(!sources.some((s) => s.endsWith('jni.cpp')));
+  assert(sources.some((s) => s.endsWith('CaptureProtocol.swift')));
+  assert(!sources.some((s) => s.endsWith('CaptureControls.swift')), 'host controls must not leak into the upload extension');
   const targetID = configureProject(project, sources, 'com.test.naruto.broadcast', null, '0.3.0', '1');
   const first = project.writeSync();
   configureProject(project, sources, 'com.test.naruto.broadcast', null, '0.3.0', '1');
@@ -64,16 +66,17 @@ try {
     const { execFileSync } = require('node:child_process');
     const executable = path.join(temp, 'protocol-check');
     execFileSync('xcrun', ['swiftc', '-swift-version', '5',
-      path.join(__dirname, '../ios/CaptureProtocol.swift'), path.join(__dirname, 'main.swift'), '-o', executable], { stdio: 'inherit' });
+      path.join(__dirname, '../ios/CaptureProtocol.swift'), path.join(__dirname, '../ios/CaptureControls.swift'),
+      path.join(__dirname, 'main.swift'), '-o', executable], { stdio: 'inherit' });
     execFileSync(executable, [], { stdio: 'inherit' });
     const sdk = execFileSync('xcrun', ['--sdk', 'iphoneos', '--show-sdk-path'], { encoding: 'utf8' }).trim();
     const flags = ['swiftc', '-typecheck', '-swift-version', '5', '-sdk', sdk, '-target', 'arm64-apple-ios16.4'];
-    execFileSync('xcrun', [...flags, ...['CaptureProtocol', 'CountdownRenderer', 'CaptureHost'].map((name) =>
+    execFileSync('xcrun', [...flags, ...['CaptureProtocol', 'CaptureControls', 'CountdownRenderer', 'CaptureHost'].map((name) =>
       path.join(__dirname, `../ios/${name}.swift`))], { stdio: 'inherit' });
     execFileSync('xcrun', [...flags, '-import-objc-header', path.join(root, 'native/recognition/RecognitionBridge.h'),
       path.join(__dirname, '../ios/CaptureProtocol.swift'), path.join(root, 'native/broadcast/SampleHandler.swift')], { stdio: 'inherit' });
     console.log('PASS iPhoneOS Swift typecheck: PiP delegates/renderer/transport and ReplayKit acquisition bridge');
   } else {
-    console.log('SKIP Swift protocol compilation: requires the macOS CI toolchain');
+    console.log('SKIP Swift protocol/controls/CoreMedia compilation: requires the macOS CI toolchain');
   }
 } finally { fs.rmSync(temp, { recursive: true, force: true }); }

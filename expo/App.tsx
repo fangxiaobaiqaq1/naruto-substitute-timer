@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Alert,
   AppState,
@@ -22,20 +22,26 @@ import {
   INITIAL_CAPTURE_STATE,
   NativeCaptureView,
   hasNativeCapture,
+  getCaptureState,
+  mergeCaptureControls,
   normalizeCaptureSettings,
   pickCalibrationImage,
   importCalibrationDocument,
   shareDocument,
   prepareCapture,
   setCaptureSettings,
+  setCaptureControls,
   startCapturePictureInPicture,
   stopCapture,
   subscribeCaptureState,
   type CaptureSettings,
+  type CaptureState,
+  type CaptureControls,
+  type CaptureControlPatch,
 } from './replayKit';
 import { useCountdownNow } from './ios-compat/useCountdownNow';
 import { CalibrationEditor } from './CalibrationEditor';
-import { APP_VERSION, IOS_BUILDS_URL, RELEASES_URL, checkForUpdate, isDualNinja, type UpdateSource } from './updates';
+import { APP_VERSION, IOS_BUILD, IOS_BUILDS_URL, RELEASES_URL, checkForUpdate, isDualNinja, type UpdateSource } from './updates';
 
 type TimerSide = 'left' | 'right';
 type TimerMode = 'auto' | 'manual';
@@ -184,10 +190,15 @@ function TimerScreen() {
   const [busy, setBusy] = useState<CaptureAction | ''>('');
   const [actionError, setActionError] = useState('');
   const [settingsError, setSettingsError] = useState('');
+  const [controlError, setControlError] = useState('');
+  const [controlBusy, setControlBusy] = useState(false);
+  const [controlsReady, setControlsReady] = useState(false);
   const [storageError, setStorageError] = useState('');
   const [applyingSettings, setApplyingSettings] = useState(false);
   const [deadlines, setDeadlines] = useState({ left: 0, right: 0, leftAlternate: 0, rightAlternate: 0 });
   const settingsQueue = useRef(Promise.resolve());
+  const nativeControls = useRef<CaptureControls | null>(null);
+  const controlPending = useRef(false);
   const saveQueue = useRef(Promise.resolve());
   const updatePending = useRef(false);
   const lastUpdateCheck = useRef(0);
@@ -200,21 +211,58 @@ function TimerScreen() {
   } : deadlines;
   const now = useCountdownNow(Math.max(currentDeadlines.left, currentDeadlines.right, currentDeadlines.leftAlternate, currentDeadlines.rightAlternate));
 
+  const acceptControls = useCallback((state: CaptureState) => {
+    const next = state.controls;
+    if (!next) return;
+    setControlsReady(true);
+    if (!next.initialized || (nativeControls.current && next.revision < nativeControls.current.revision)) return;
+    nativeControls.current = next;
+    setSettings((current) => mergeCaptureControls(current, next));
+  }, []);
+
+  const receiveCapture = useCallback((state: CaptureState) => {
+    setCapture(state);
+    acceptControls(state);
+  }, [acceptControls]);
+
   const applyNativeSettings = (value: MobileSettings) => {
     const next = normalizeCaptureSettings({ ...value, ninjaQuery: value.opponentNinja, dual: isDualNinja(value.opponentNinja) });
     // Keep slower native calls ordered when the user edits several fields quickly.
-    settingsQueue.current = settingsQueue.current.catch(() => undefined).then(() => setCaptureSettings(next));
+    settingsQueue.current = settingsQueue.current.catch(() => undefined)
+      .then(() => setCaptureSettings(next)).then(acceptControls);
     return settingsQueue.current;
   };
 
   useEffect(() => {
     let active = true;
-    AsyncStorage.getItem(SETTINGS_KEY)
-      .then((stored) => {
-        if (active && stored) setSettings(normalizeSettings(JSON.parse(stored)));
-      })
-      .catch(() => { if (active) setStorageError('无法读取已保存的设置，正在使用默认值；请检查校准与我方位置。'); })
-      .finally(() => { if (active) setLoaded(true); });
+    void (async () => {
+      let saved = DEFAULT_SETTINGS;
+      try {
+        const stored = await AsyncStorage.getItem(SETTINGS_KEY);
+        if (stored) saved = normalizeSettings(JSON.parse(stored));
+      } catch {
+        if (active) setStorageError('无法读取已保存的设置，正在使用默认值；请检查校准与我方位置。');
+      }
+      // Read native controls before any initial settings push. A game-side PiP
+      // choice survives a JS reload, app restart and an old AsyncStorage copy.
+      if (hasNativeCapture) {
+        const state = await getCaptureState();
+        if (!active) return;
+        receiveCapture(state);
+        if (state.controls?.initialized === false) {
+          try {
+            const migrated = await setCaptureSettings(normalizeCaptureSettings({ ...saved,
+              ninjaQuery: saved.opponentNinja, dual: isDualNinja(saved.opponentNinja) }));
+            if (!active) return;
+            receiveCapture(migrated);
+          } catch { if (active) setSettingsError('原生设置初始化失败，请重新准备后再开始。'); }
+        }
+      }
+      if (active) {
+        setSettings(mergeCaptureControls(saved, nativeControls.current));
+        setLoaded(true);
+      }
+    })();
     return () => { active = false; };
   }, []);
 
@@ -225,10 +273,10 @@ function TimerScreen() {
       .catch(() => { setStorageError('设置保存失败；关闭 App 后这些改动可能丢失。'); });
   }, [loaded, settings]);
 
-  useEffect(() => subscribeCaptureState(setCapture), []);
+  useEffect(() => subscribeCaptureState(receiveCapture), [receiveCapture]);
 
   useEffect(() => {
-    if (!loaded || !hasNativeCapture) return;
+    if (!loaded || !hasNativeCapture || !controlsReady) return;
     let active = true;
     setApplyingSettings(true);
     const timer = setTimeout(() => {
@@ -238,7 +286,7 @@ function TimerScreen() {
         .finally(() => { if (active) setApplyingSettings(false); });
     }, 200);
     return () => { active = false; clearTimeout(timer); };
-  }, [loaded, settings]);
+  }, [loaded, settings, controlsReady]);
 
   useEffect(() => {
     if (!controlsVisible) return;
@@ -246,13 +294,31 @@ function TimerScreen() {
     return () => clearTimeout(timer);
   }, [controlsVisible]);
 
+  const changeControls = (patch: CaptureControlPatch) => {
+    if (!loaded || controlPending.current) return;
+    if (!hasNativeCapture) {
+      setSettings((current) => ({ ...current, ...patch }));
+      return;
+    }
+    controlPending.current = true;
+    setControlBusy(true);
+    setControlError('');
+    // Unlike bulk settings restoration, this call is an explicit user command.
+    // Only display acknowledged native values; failure must not pretend a swap.
+    // Send now, not behind deferred bulk saves whose JS continuation might
+    // resume only after the user has already changed controls in the game.
+    void setCaptureControls(patch).then(acceptControls)
+      .catch((error) => setControlError(error instanceof Error ? error.message : '画中画控制未生效，请重试。'))
+      .finally(() => { controlPending.current = false; setControlBusy(false); });
+  };
+
   const dual = isDualNinja(settings.opponentNinja);
   const leftDual = automatic ? currentDeadlines.leftAlternate > 0 || isDualNinja(capture.leftNinja) || (dual && settings.playerSide === 'right') : dual;
   const rightDual = automatic ? currentDeadlines.rightAlternate > 0 || isDualNinja(capture.rightNinja) || (dual && settings.playerSide === 'left') : dual;
   const frameAge = now - capture.lastFrameAtMs;
   const freshFrame = capture.frames > 0 && capture.lastFrameAtMs > 0 && frameAge >= 0 && frameAge < 3000;
   const receivingMatch = capture.available && capture.broadcastActive && capture.connected && capture.match && freshFrame;
-  const healthy = receivingMatch && capture.prepared && capture.pipSupported && capture.pipActive && !actionError && !settingsError && !storageError && !applyingSettings;
+  const healthy = receivingMatch && capture.prepared && capture.pipSupported && capture.pipActive && !actionError && !settingsError && !controlError && !storageError && !applyingSettings;
   const playerSide = settings.playerSide;
   const opponentSide = playerSide === 'left' ? 'right' : 'left';
   const showBothClocks = settings.showBothSides;
@@ -296,7 +362,7 @@ function TimerScreen() {
 
   const swapSide = () => {
     const nextSide = playerSide === 'left' ? 'right' : 'left';
-    setSettings((current) => ({ ...current, playerSide: nextSide }));
+    changeControls({ playerSide: nextSide });
   };
 
   const runCaptureAction = async (action: CaptureAction) => {
@@ -311,7 +377,7 @@ function TimerScreen() {
       const state = action === 'prepare' ? await prepareCapture()
         : action === 'pip' ? await startCapturePictureInPicture() : await stopCapture();
       // A successful JS call is not evidence that broadcasting or PiP has started.
-      setCapture(state);
+      receiveCapture(state);
     } catch (error) {
       const detail = error instanceof Error ? error.message.slice(0, 300) : '原生调用失败，请检查采集状态。';
       setActionError(`${action === 'prepare' ? '准备失败' : action === 'pip' ? '画中画开启失败' : '停止失败'}：${detail}`);
@@ -354,13 +420,14 @@ function TimerScreen() {
     try {
       // Deliberately enumerate fields: account names, screenshots and logs are never exported.
       const report = {
-        kind: 'naruto-timer-ios-diagnostics', version: APP_VERSION, createdAt: new Date().toISOString(),
+        kind: 'naruto-timer-ios-diagnostics', version: APP_VERSION, iosBuild: IOS_BUILD, createdAt: new Date().toISOString(),
         platform: Platform.OS, systemVersion: Platform.Version,
         capture: { available: capture.available, prepared: capture.prepared, connected: capture.connected,
           broadcastActive: capture.broadcastActive, pipSupported: capture.pipSupported, pipActive: capture.pipActive,
           match: capture.match, scene: capture.scene, frames: capture.frames, lastFrameAtMs: capture.lastFrameAtMs,
           frameWidth: capture.frameWidth, frameHeight: capture.frameHeight, latencyMs: capture.latencyMs,
           deliveryLatencyMs: capture.deliveryLatencyMs, pipPossible: capture.pipPossible, pipPending: capture.pipPending,
+          controls: capture.controls,
           leftCount: capture.leftCount, rightCount: capture.rightCount,
           leftSubstitutions: capture.leftSubstitutions, rightSubstitutions: capture.rightSubstitutions },
         settings: { playerSide: settings.playerSide,
@@ -385,7 +452,7 @@ function TimerScreen() {
         <View style={styles.headerLine}>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>替身计时器</Text>
-            <Text style={styles.subtitle}>v{APP_VERSION} · 自动采集 · 系统画中画</Text>
+            <Text style={styles.subtitle}>v{APP_VERSION} · iOS 构建 {IOS_BUILD} · 交互画中画</Text>
           </View>
           <Pressable accessibilityRole="button" accessibilityLabel="打开替身设置" disabled={!loaded} style={styles.closeButton} onPress={() => setSettingsVisible(true)}><Text style={styles.closeText}>设置</Text></Pressable>
         </View>
@@ -394,10 +461,13 @@ function TimerScreen() {
           <Text style={styles.cardTitle}>我方位置 · 请手动选择</Text>
           <View style={styles.actionRow}>{([['left', '我方左边'], ['right', '我方右边']] as const).map(([value, label]) => (
             <Pressable key={value} accessibilityRole="button" accessibilityState={{ selected: settings.playerSide === value }}
-              onPress={() => setSettings((current) => ({ ...current, playerSide: value }))}
+              disabled={!loaded || controlBusy} onPress={() => changeControls({ playerSide: value })}
               style={[styles.segment, settings.playerSide === value && styles.segmentSelected]}><Text style={styles.segmentText}>{label}</Text></Pressable>
           ))}</View>
-          <Text style={styles.cardHint}>当前显示{settings.showBothSides ? '左右两边' : `对面（${settings.playerSide === 'left' ? '右' : '左'}侧）`}。换场或换人后如位置变化，点此切换；iOS 不读取账号、不自动认边。</Text>
+          <Text style={styles.cardHint}>当前显示{settings.showBothSides ? '左右两边' : `对面（${settings.playerSide === 'left' ? '右' : '左'}侧）`}。也可在游戏画中画中直接选边，不需切回 App；不读取账号、不自动认边。</Text>
+          {controlBusy ? <Text style={styles.cardHint}>正在应用原生控制…</Text> : null}
+          {hasNativeCapture && loaded && !controlsReady ? <Text style={styles.cardHint}>等待原生控制状态，不会用未知状态覆盖已保存的位置。</Text> : null}
+          {controlError ? <Text accessibilityRole="alert" style={styles.errorText}>{controlError}</Text> : null}
         </View>
 
         <View style={styles.statusCard}>
@@ -415,11 +485,11 @@ function TimerScreen() {
           {capture.recognitionError ? <Text accessibilityRole="alert" style={styles.errorText}>{capture.recognitionError}</Text> : null}
           {!receivingMatch && running ? <Text style={styles.cardHint}>当前画面未确认；已确认的倒计时继续，不凭旧帧新增替身。</Text> : null}
           {capture.available && !capture.pipSupported ? <Text accessibilityRole="alert" style={styles.errorText}>此设备或系统当前不支持画中画，无法在游戏上方显示计时。可切换手动备用模式，仅在本页使用。</Text> : null}
-          {actionError || settingsError || storageError ? <Text accessibilityRole="alert" style={styles.errorText}>{actionError || settingsError || storageError}</Text> : null}
+          {actionError || settingsError || controlError || storageError ? <Text accessibilityRole="alert" style={styles.errorText}>{actionError || controlError || settingsError || storageError}</Text> : null}
           {applyingSettings ? <Text style={styles.cardHint}>正在同步原生设置…</Text> : null}
 
           <View style={styles.actionRow}>
-            <ActionButton label={busy === 'prepare' ? '准备中…' : capture.prepared ? '1. 已准备' : '1. 准备采集'} disabled={!loaded || !capture.available || !!busy || capture.prepared} onPress={() => void runCaptureAction('prepare')} />
+            <ActionButton label={busy === 'prepare' ? '准备中…' : capture.prepared ? '1. 已准备' : '1. 准备采集'} disabled={!loaded || !controlsReady || !capture.available || !!busy || capture.prepared} onPress={() => void runCaptureAction('prepare')} />
             <ActionButton label={busy === 'pip' || capture.pipPending ? '等待画中画…' : capture.pipActive ? '2. 画中画已开启' : '2. 开启画中画'} disabled={!capture.prepared || !capture.pipSupported || capture.pipActive || capture.pipPending || !!busy || applyingSettings || !!settingsError} onPress={() => void runCaptureAction('pip')} />
           </View>
           <Text style={styles.stepTitle}>3. 点击系统录屏按钮</Text>
@@ -431,6 +501,8 @@ function TimerScreen() {
           ) : <Text style={styles.errorText}>当前安装包没有可用的系统录屏控件。</Text>}
           <Text style={styles.stepTitle}>4. 切换到游戏</Text>
           <Text style={styles.cardHint}>确认系统广播和画中画已开启后，切到游戏开始决斗。收到有效画面才会显示自动倒计时。</Text>
+          <Text style={styles.stepTitle}>游戏中操作（不用退出游戏）</Text>
+          <Text style={styles.cardHint}>轻点画中画，显示系统控制：左侧后退键＝我方左，右侧前进键＝我方右；中间播放／暂停键切换单边／双边显示，计时和录屏继续。看下方“我方左／右”确认已生效；不要把画面里的说明文字当作按钮。系统关闭键仍会停止画中画与采集。</Text>
           <Pressable accessibilityRole="button" accessibilityLabel="停止采集与画中画" accessibilityState={{ disabled: !hasNativeCapture || !!busy }} disabled={!hasNativeCapture || !!busy} style={[styles.outlineButton, (!hasNativeCapture || !!busy) && styles.disabledButton]} onPress={() => void runCaptureAction('stop')}>
             <Text style={styles.outlineText}>{busy === 'stop' ? '正在停止…' : '停止采集与画中画'}</Text>
           </Pressable>
@@ -448,7 +520,7 @@ function TimerScreen() {
         {settings.miniMode ? (
           <MiniPill settings={settings} text={pillText} controlsVisible={controlsVisible}
             onToggleControls={() => setControlsVisible((visible) => !visible)} onSwap={swapSide}
-            onToggleBoth={() => setSettings((current) => ({ ...current, showBothSides: !current.showBothSides }))}
+            onToggleBoth={() => changeControls({ showBothSides: !settings.showBothSides })}
             onOpenSettings={() => setSettingsVisible(true)}
             onExitMini={() => { setControlsVisible(false); setSettings((current) => ({ ...current, miniMode: false })); }} />
         ) : (
@@ -503,15 +575,15 @@ function TimerScreen() {
               <SettingRow label="我方位置">
                 <View style={styles.segmented}>
                   {([['left', '左边'], ['right', '右边']] as const).map(([value, label]) => (
-                    <Pressable key={value} accessibilityRole="button" accessibilityLabel={`我方位置：${label}`} accessibilityState={{ selected: settings.playerSide === value }} onPress={() => setSettings((current) => ({ ...current, playerSide: value }))} style={[styles.segment, settings.playerSide === value && styles.segmentSelected]}>
+                    <Pressable key={value} accessibilityRole="button" accessibilityLabel={`我方位置：${label}`} accessibilityState={{ selected: settings.playerSide === value }} disabled={!loaded || controlBusy} onPress={() => changeControls({ playerSide: value })} style={[styles.segment, settings.playerSide === value && styles.segmentSelected]}>
                       <Text style={styles.segmentText}>{label}</Text>
                     </Pressable>
                   ))}
                 </View>
-                <Text style={styles.cardHint}>iOS 不做自动认边。请按当前对局选择我方左／右；只影响显示对象，不会清空已经确认的倒计时。也可以开启两边计时。</Text>
+                <Text style={styles.cardHint}>iOS 不做自动认边。选择我方左／右只改变显示对象，不清空倒计时。游戏中轻点画中画，再点系统后退／前进键即可换边；原生选择会同步回本页。</Text>
               </SettingRow>
               <SettingRow label="记住我方位置">
-                <Switch accessibilityLabel="记住我方位置" style={styles.switch} hitSlop={7} value={settings.rememberSide} onValueChange={(value) => setSettings((current) => ({ ...current, rememberSide: value }))} />
+                <Switch accessibilityLabel="记住我方位置" style={styles.switch} hitSlop={7} value={settings.rememberSide} disabled={!loaded || controlBusy} onValueChange={(value) => changeControls({ rememberSide: value })} />
               </SettingRow>
               <SettingRow label="对面忍者（留空自动识别）">
                 <TextInput accessibilityLabel="对面忍者" returnKeyType="done" maxLength={40} value={settings.opponentNinja} onChangeText={(value) => setSettings((current) => ({ ...current, opponentNinja: value }))} placeholder="照美冥[五代目水影]" placeholderTextColor="#71819a" style={styles.input} />
@@ -520,7 +592,7 @@ function TimerScreen() {
                 <Text style={styles.cardHint}>自动识别头像和忍者标题。填完整变体名可覆盖对面；照美冥[五代目水影]和半藏[秽土转生]使用15／10秒双计时。覆盖只作用于你手动选择的对面。</Text>
               </SettingRow>
               <SettingRow label="两边计时（含画中画）">
-                <Switch accessibilityLabel="两边计时" style={styles.switch} hitSlop={7} value={settings.showBothSides} onValueChange={(value) => setSettings((current) => ({ ...current, showBothSides: value }))} />
+                <Switch accessibilityLabel="两边计时" style={styles.switch} hitSlop={7} value={settings.showBothSides} disabled={!loaded || controlBusy} onValueChange={(value) => changeControls({ showBothSides: value })} />
               </SettingRow>
               <SettingRow label="计时字号（含画中画）">
                 <ValueStepper label="计时字号" value={settings.fontScale} minimum={0.55} maximum={1.2} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, fontScale: value }))} />
@@ -551,10 +623,10 @@ function TimerScreen() {
               <SettingRow label="本页紧凑计时透明度">
                 <ValueStepper label="本页紧凑计时透明度" value={settings.miniOpacity} minimum={0.2} maximum={1} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, miniOpacity: value }))} />
               </SettingRow>
-              <Text style={styles.settingsNote}>紧凑显示与透明度仅改变本页外观，不控制系统画中画的透明度或大小。画中画可用系统拖动、双指缩放及贴边隐藏；iOS 不允许应用伪造任意大小的跨应用悬浮窗。设置自动保存，字号保留系统字体缩放。</Text>
+              <Text style={styles.settingsNote}>画中画支持系统拖动、缩放、贴边隐藏，以及本版接入的换边、单／双边控制。紧凑显示与透明度调节仅影响本页卡片。高级校准仍在设置页完成；设置自动保存。</Text>
               <MiniButton label="恢复外观默认值" onPress={() => setSettings((current) => ({ ...current, miniMode: false, windowOpacity: 1, miniOpacity: 0.85, fontScale: DEFAULT_SETTINGS.fontScale }))} />
               <SettingRow label="关于与更新">
-                <Text style={styles.cardHint}>v{APP_VERSION} · iOS 原生版。仅检查和提醒，不自动下载安装；更新 IPA 仍需你自行签名，主 App 与广播扩展要一起签。</Text>
+                <Text style={styles.cardHint}>v{APP_VERSION} · iOS 构建 {IOS_BUILD}。仅检查和提醒，不自动下载安装；更新 IPA 仍需你自行签名，主 App 与广播扩展要一起签。</Text>
                 <Switch accessibilityLabel="自动检查更新" value={settings.autoCheckUpdates} onValueChange={(autoCheckUpdates) => setSettings((current) => ({ ...current, autoCheckUpdates }))} />
                 <View style={styles.segmented}>
                   {(['gitee', 'github'] as const).map((source) => <MiniButton key={source} label={`${settings.updateSource === source ? '✓ ' : ''}${source === 'gitee' ? 'Gitee 国内源' : 'GitHub 源'}`} onPress={() => setSettings((current) => ({ ...current, updateSource: source }))} />)}
@@ -570,7 +642,7 @@ function TimerScreen() {
                 <Text style={styles.cardHint}>导出 JSON 包含系统版本、连接状态、帧计数、识别耗时、豆数与校准；不含账号名、截图或原帧。截图校准只在设备内处理，退出编辑器后不会进入诊断包。</Text>
                 <ActionButton label="导出脱敏诊断文件" disabled={!hasNativeCapture} onPress={() => void exportDiagnostics()} />
               </SettingRow>
-              {settingsError || storageError ? <Text accessibilityRole="alert" style={styles.errorText}>{settingsError || storageError}</Text> : null}
+              {settingsError || controlError || storageError ? <Text accessibilityRole="alert" style={styles.errorText}>{controlError || settingsError || storageError}</Text> : null}
             </ScrollView>
             <Modal animationType="slide" presentationStyle="fullScreen" visible={calibrationVisible} onRequestClose={() => setCalibrationVisible(false)}>
               <SafeAreaProvider><SafeAreaView style={styles.modalSafeArea}>

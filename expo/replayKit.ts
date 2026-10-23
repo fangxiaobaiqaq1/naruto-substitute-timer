@@ -18,6 +18,12 @@ export type CaptureSettings = {
   calibration: Calibration;
 };
 
+export type CaptureControls = Pick<CaptureSettings, 'playerSide' | 'showBothSides' | 'rememberSide'> & {
+  initialized: boolean;
+  revision: number;
+};
+export type CaptureControlPatch = Partial<Pick<CaptureControls, 'playerSide' | 'showBothSides' | 'rememberSide'>>;
+
 export type CaptureState = {
   available: boolean;
   prepared: boolean;
@@ -47,6 +53,7 @@ export type CaptureState = {
   frameWidth: number;
   frameHeight: number;
   recognitionError: string;
+  controls: CaptureControls | null;
 };
 
 export type CalibrationImage = { uri: string; width: number; height: number };
@@ -57,6 +64,7 @@ type NarutoCaptureModule = {
   startPictureInPicture: () => Promise<unknown>;
   stop: () => Promise<unknown>;
   setSettings: (settings: CaptureSettings) => Promise<unknown>;
+  setControls: (patch: CaptureControlPatch) => Promise<unknown>;
   pickCalibrationImage?: () => Promise<unknown>;
   importCalibration?: () => Promise<string>;
   shareDocument?: (name: string, text: string) => Promise<void>;
@@ -119,7 +127,7 @@ function loadNativeModule(): NarutoCaptureModule | null {
 
 const nativeModule = loadNativeModule();
 export const hasNativeCapture = nativeModule !== null &&
-  (['getState', 'prepare', 'startPictureInPicture', 'stop', 'setSettings'] as const)
+  (['getState', 'prepare', 'startPictureInPicture', 'stop', 'setSettings', 'setControls'] as const)
     .every((method) => typeof nativeModule[method] === 'function');
 
 function loadNativeView(): ComponentType<ViewProps> | null {
@@ -170,6 +178,7 @@ export const INITIAL_CAPTURE_STATE: CaptureState = {
   frameWidth: 0,
   frameHeight: 0,
   recognitionError: '',
+  controls: null,
 };
 
 function timestamp(value: unknown): number {
@@ -178,6 +187,23 @@ function timestamp(value: unknown): number {
 
 function beanCount(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= -1 && value <= 6 ? value : -1;
+}
+
+export function normalizeCaptureControls(value: unknown): CaptureControls | null {
+  const source = record(value);
+  if ((source.playerSide !== 'left' && source.playerSide !== 'right') ||
+      typeof source.showBothSides !== 'boolean' || typeof source.rememberSide !== 'boolean' ||
+      typeof source.initialized !== 'boolean' || typeof source.revision !== 'number' ||
+      !Number.isSafeInteger(source.revision) || source.revision < 0) return null;
+  return { playerSide: source.playerSide, showBothSides: source.showBothSides,
+    rememberSide: source.rememberSide, initialized: source.initialized, revision: source.revision };
+}
+
+/** Native is authoritative for controls changed while JS was suspended. */
+export function mergeCaptureControls<T extends CaptureControlPatch>(settings: T, controls: CaptureControls | null): T {
+  if (!controls?.initialized || (settings.playerSide === controls.playerSide &&
+      settings.showBothSides === controls.showBothSides && settings.rememberSide === controls.rememberSide)) return settings;
+  return { ...settings, playerSide: controls.playerSide, showBothSides: controls.showBothSides, rememberSide: controls.rememberSide };
 }
 
 export function normalizeCaptureState(value: unknown): CaptureState {
@@ -214,6 +240,7 @@ export function normalizeCaptureState(value: unknown): CaptureState {
     frameWidth: Math.floor(clamp(source.frameWidth, 0, 16384, 0)),
     frameHeight: Math.floor(clamp(source.frameHeight, 0, 16384, 0)),
     recognitionError: typeof source.recognitionError === 'string' ? source.recognitionError.slice(0, 500) : '',
+    controls: normalizeCaptureControls(source.controls),
   };
 }
 
@@ -246,8 +273,27 @@ export async function stopCapture(): Promise<CaptureState> {
   return getCaptureState();
 }
 
-export async function setCaptureSettings(settings: CaptureSettings): Promise<void> {
-  await requireCapture().setSettings(normalizeCaptureSettings(settings));
+export async function setCaptureSettings(settings: CaptureSettings): Promise<CaptureState> {
+  return normalizeCaptureState(await requireCapture().setSettings(normalizeCaptureSettings(settings)));
+}
+
+export async function setCaptureControls(value: CaptureControlPatch): Promise<CaptureState> {
+  const source = record(value);
+  const patch: CaptureControlPatch = {};
+  if (source.playerSide !== undefined) {
+    if (source.playerSide !== 'left' && source.playerSide !== 'right') throw new Error('我方位置只能选择左或右。');
+    patch.playerSide = source.playerSide;
+  }
+  for (const key of ['showBothSides', 'rememberSide'] as const) {
+    if (source[key] !== undefined) {
+      if (typeof source[key] !== 'boolean') throw new Error('控制设置必须是开关值。');
+      patch[key] = source[key];
+    }
+  }
+  if (!Object.keys(patch).length) throw new Error('没有可应用的画中画操作。');
+  const state = normalizeCaptureState(await requireCapture().setControls(patch));
+  if (!state.controls?.initialized) throw new Error('原生未确认控制操作，请重新安装包含画中画控制的完整 IPA。');
+  return state;
 }
 
 export async function pickCalibrationImage(): Promise<CalibrationImage> {
