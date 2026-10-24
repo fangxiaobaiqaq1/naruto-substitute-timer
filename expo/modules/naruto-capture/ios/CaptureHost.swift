@@ -423,34 +423,22 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       if tenths == 0 { return ("—", CountdownRenderer.idle) }
       return ("\(tenths / 10).\(tenths % 10)", tenths <= 30 ? CountdownRenderer.warn : CountdownRenderer.live)
     }
+    // Compact strip: countdowns only. Ninja names/counts stay on the app page.
     func column(_ index: Int) -> CountdownColumn {
-      let prefix = index == 0 ? "left" : "right"
-      let name = state[prefix + "Ninja"] as? String ?? ""
-      let ninja = name.count > 10 ? String(name.prefix(9)) + "…" : name
-      let count = Int(CaptureProtocol.number(state[prefix + "Substitutions"]))
       let primary = clock(index)
       var alternate: (text: String, color: UIColor)?
       if deadlines[index + 2].epochMs > 0 {
         let value = clock(index + 2)
         alternate = ("10秒 " + (value.text == "—" ? "就绪" : value.text), value.color)
       }
-      var title = [index == 0 ? "左" : "右"]
-      if !ninja.isEmpty { title.append(ninja) }
-      title.append("\(count)次")
-      return CountdownColumn(title: title.joined(separator: " · "), clock: primary.text,
+      return CountdownColumn(title: index == 0 ? "左" : "右", clock: primary.text,
                              color: primary.color, alternate: alternate)
     }
-    let stale = state["stale"] as? Bool ?? true
-    func beads(_ key: String) -> String {
-      let count = Int(CaptureProtocol.number(state[key], -1))
-      return count < 0 ? "?" : String(count)
-    }
-    let status: String
-    if stale { status = "画面未确认 · 已有计时继续" }
-    else if state["match"] as? Bool != true { status = "等待对局 · 已有计时继续" }
-    else { status = "对局中 · 豆 左\(beads("leftCount"))/右\(beads("rightCount"))" }
-    if renderer.render(columns: [column(0), column(1)], status: status,
-                       scale: CaptureProtocol.number(settings["fontScale"], 0.75), stale: stale) {
+    // Side labels carry the status: orange = picture unconfirmed (clocks keep
+    // running), grey = waiting for a match, white = live match.
+    let label: UIColor = (state["stale"] as? Bool ?? true) ? .systemOrange
+      : (state["match"] as? Bool == true ? CountdownRenderer.tag : CountdownRenderer.idle)
+    if renderer.render(columns: [column(0), column(1)], labelColor: label) {
       lastRender = now
       state["renderedFrames"] = (state["renderedFrames"] as? Int ?? 0) + 1
     }

@@ -14,9 +14,9 @@ Additional methods:
 
 Settings are font scale, ROI/FPS and normalized calibration rects. iOS has no side selection: the PiP always shows both sides, so account names, OCR, side recognition and the opponent ninja override are intentionally excluded. Diagnostics include `pipPossible`, `pipPending`, `stale`, `renderedFrames`, ninja names, substitution counts, scene, frame dimensions, recognition errors, `latencyMs` (recognition only), and `deliveryLatencyMs` (capture-to-host).
 
-## PiP display (build 3)
+## PiP display (build 4)
 
-Display-only live content: a two-column card (left/right) in the APK both-side colours, `requiresLinearPlayback = true`, an infinite live time range, play/pause requests ignored so an accidental tap never stops capture. Closing PiP or a genuine audio/media interruption still stops capture.
+Display-only live content: a 4:1 two-column strip (left/right countdowns only, APK both-side colours; side-label colour = match/waiting/stale). AVKit has no window-size API, so the aspect ratio is what keeps the system window small; `requiresLinearPlayback = true`, an infinite live time range, play/pause requests ignored so an accidental tap never stops capture. Closing PiP or a genuine audio/media interruption still stops capture.
 
 ## Lifecycle / security
 

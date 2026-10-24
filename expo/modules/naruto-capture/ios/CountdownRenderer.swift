@@ -1,7 +1,7 @@
 import AVFoundation
 import UIKit
 
-/// One side of the always-both-sides card (APK `MiniTimerView` two-column mode).
+/// One side of the always-both-sides strip (APK `MiniTimerView` two-column mode).
 struct CountdownColumn {
   let title: String
   let clock: String
@@ -14,7 +14,7 @@ final class CountdownRenderer {
   static let idle = UIColor(red: 0x9F / 255, green: 0xB9 / 255, blue: 0xC4 / 255, alpha: 1)
   static let live = UIColor(red: 0x5C / 255, green: 0xE1 / 255, blue: 1, alpha: 1)
   static let warn = UIColor(red: 1, green: 0xB5 / 255, blue: 0x47 / 255, alpha: 1)
-  private static let tag = UIColor(red: 0xE3 / 255, green: 0xF6 / 255, blue: 0xFB / 255, alpha: 1)
+  static let tag = UIColor(red: 0xE3 / 255, green: 0xF6 / 255, blue: 0xFB / 255, alpha: 1)
   private static let background = UIColor(red: 0x06 / 255, green: 0x18 / 255, blue: 0x20 / 255, alpha: 1)
   private static let border = UIColor(red: 0x24 / 255, green: 0x48 / 255, blue: 0x5A / 255, alpha: 1)
 
@@ -26,8 +26,10 @@ final class CountdownRenderer {
   let layer = AVSampleBufferDisplayLayer()
   private var pool: CVPixelBufferPool?
   private var format: CMVideoFormatDescription?
-  private let width = 640
-  private let height = 320
+  // iOS gives apps no PiP size API; the system sizes the window by the video's
+  // aspect ratio. A thin 4:1 strip keeps the floating window small.
+  private let width = 720
+  private let height = 180
 
   var playbackTime: CMTime {
     guard let timebase = layer.controlTimebase else { return CMClockGetTime(CMClockGetHostTimeClock()) }
@@ -57,7 +59,7 @@ final class CountdownRenderer {
   }
 
   @discardableResult
-  func render(columns: [CountdownColumn], status: String, scale: Double, stale: Bool) -> Bool {
+  func render(columns: [CountdownColumn], labelColor: UIColor) -> Bool {
     if layer.status == .failed || layer.requiresFlushToResumeDecoding { layer.flush() }
     guard layer.isReadyForMoreMediaData, let pool else { return false }
     var output: CVPixelBuffer?
@@ -82,21 +84,23 @@ final class CountdownRenderer {
     func draw(_ text: String, _ rect: CGRect, _ font: UIFont, _ color: UIColor) {
       (text as NSString).draw(in: rect, withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph])
     }
-    let column = CGFloat(width / 2)
+    let half = CGFloat(width / 2)
     context.setFillColor(Self.border.cgColor)
-    context.fill(CGRect(x: column - 1, y: 18, width: 2, height: 228))
-    let clockFont = UIFont.monospacedDigitSystemFont(ofSize: CGFloat(min(112, max(64, 100 * scale))), weight: .bold)
+    context.fill(CGRect(x: half - 1, y: 24, width: 2, height: CGFloat(height) - 48))
     for (index, item) in columns.prefix(2).enumerated() {
-      let x = CGFloat(index) * column
-      draw(item.title, CGRect(x: x + 10, y: 14, width: column - 20, height: 32), .systemFont(ofSize: 22, weight: .semibold), Self.tag)
-      draw(item.clock, CGRect(x: x + 6, y: 52, width: column - 12, height: 140), clockFont, item.color)
+      let x = CGFloat(index) * half
+      draw(item.title, CGRect(x: x + 8, y: 64, width: 54, height: 52), .systemFont(ofSize: 40, weight: .semibold), labelColor)
+      let clockX = x + 62, clockWidth = half - 70
       if let alternate = item.alternate {
-        draw(alternate.text, CGRect(x: x + 10, y: 198, width: column - 20, height: 42),
-             .monospacedDigitSystemFont(ofSize: 30, weight: .semibold), alternate.color)
+        draw(item.clock, CGRect(x: clockX, y: 4, width: clockWidth, height: 118),
+             .monospacedDigitSystemFont(ofSize: 96, weight: .bold), item.color)
+        draw(alternate.text, CGRect(x: clockX, y: 122, width: clockWidth, height: 52),
+             .monospacedDigitSystemFont(ofSize: 38, weight: .semibold), alternate.color)
+      } else {
+        draw(item.clock, CGRect(x: clockX, y: 18, width: clockWidth, height: 150),
+             .monospacedDigitSystemFont(ofSize: 120, weight: .bold), item.color)
       }
     }
-    draw(status, CGRect(x: 14, y: 264, width: CGFloat(width - 28), height: 40),
-         .systemFont(ofSize: 24, weight: .medium), stale ? .systemOrange : Self.idle)
     UIGraphicsPopContext()
     if format == nil {
       CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixels,
