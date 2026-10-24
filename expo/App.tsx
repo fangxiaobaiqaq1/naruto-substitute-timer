@@ -379,7 +379,7 @@ function TimerScreen() {
           ) : <Text style={styles.errorText}>当前安装包没有可用的系统录屏控件。</Text>}
           <Text style={styles.stepTitle}>4. 切换到游戏</Text>
           <Text style={styles.cardHint}>确认系统广播和画中画已开启后，切到游戏开始决斗。收到有效画面才会显示自动倒计时。</Text>
-          <Text style={styles.cardHint}>画中画固定显示左右两边的替身倒计时，游戏中不用操作。可用系统手势拖动、缩放或贴边收起；点关闭会停止采集。</Text>
+          <Text style={styles.cardHint}>画中画是一条细长条，只显示左右两边的替身倒计时，游戏中不用操作。“左/右”字样：白色＝对局中，灰色＝等待对局，橙色＝画面未确认（已有倒计时继续）。双指捏合可再缩小，也可拖动或贴边收起；点关闭会停止采集。</Text>
           <Pressable accessibilityRole="button" accessibilityLabel="停止采集与画中画" accessibilityState={{ disabled: !hasNativeCapture || !!busy }} disabled={!hasNativeCapture || !!busy} style={[styles.outlineButton, (!hasNativeCapture || !!busy) && styles.disabledButton]} onPress={() => void runCaptureAction('stop')}>
             <Text style={styles.outlineText}>{busy === 'stop' ? '正在停止…' : '停止采集与画中画'}</Text>
           </Pressable>
@@ -440,7 +440,7 @@ function TimerScreen() {
                 <Text style={styles.modalTitle}>替身设置</Text>
                 <Pressable accessibilityRole="button" accessibilityLabel="完成设置" style={styles.closeButton} onPress={saveSettings}><Text style={styles.closeText}>完成</Text></Pressable>
               </View>
-              <SettingRow label="计时字号（含画中画）">
+              <SettingRow label="本页计时字号">
                 <ValueStepper label="计时字号" value={settings.fontScale} minimum={0.55} maximum={1.2} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, fontScale: value }))} />
               </SettingRow>
               <SettingRow label="区域校准（豆 / 头像）">
@@ -469,7 +469,7 @@ function TimerScreen() {
               <SettingRow label="本页紧凑计时透明度">
                 <ValueStepper label="本页紧凑计时透明度" value={settings.miniOpacity} minimum={0.2} maximum={1} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, miniOpacity: value }))} />
               </SettingRow>
-              <Text style={styles.settingsNote}>画中画固定显示左右两边，可用系统手势拖动、缩放、贴边隐藏；字号同时作用于画中画。紧凑显示与透明度调节仅影响本页卡片。高级校准仍在设置页完成；设置自动保存。</Text>
+              <Text style={styles.settingsNote}>画中画固定为显示左右两边的细长条，大小由系统决定，可双指捏合缩放、拖动、贴边隐藏。紧凑显示与透明度调节仅影响本页卡片。高级校准仍在设置页完成；设置自动保存。</Text>
               <MiniButton label="恢复外观默认值" onPress={() => setSettings((current) => ({ ...current, miniMode: false, windowOpacity: 1, miniOpacity: 0.85, fontScale: DEFAULT_SETTINGS.fontScale }))} />
               <SettingRow label="关于与更新">
                 <Text style={styles.cardHint}>v{APP_VERSION} · iOS 构建 {IOS_BUILD}。仅检查和提醒，不自动下载安装；更新 IPA 仍需你自行签名，主 App 与广播扩展要一起签。</Text>
