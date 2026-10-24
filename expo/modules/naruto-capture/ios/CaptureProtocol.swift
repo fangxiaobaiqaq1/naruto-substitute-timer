@@ -59,7 +59,6 @@ enum CaptureProtocol {
     func bounded(_ key: String, _ low: Double, _ high: Double, _ fallback: Double) -> Double {
       min(high, max(low, number(source[key], fallback)))
     }
-    let side = source["playerSide"] as? String
     let supplied = source["calibration"] as? [String: Any] ?? [:]
     var calibration: [String: Any] = ["profile": supplied["profile"] as? String == "camp" ? "camp" : "duel"]
     for key in ["leftBeads", "rightBeads", "leftAvatar", "rightAvatar"] {
@@ -77,12 +76,9 @@ enum CaptureProtocol {
       guard k >= 0.5, k <= 2, min(u, v) >= k * 0.25 else { continue }
       calibration[key] = ["x": rx, "y": ry, "width": rw, "height": rh]
     }
+    // iOS has no side selection: both sides are always shown, and special
+    // 15/10 s ninjas come from per-side recognition, not an opponent override.
     return [
-      "playerSide": side == "right" ? "right" : "left",
-      "showBothSides": bool(source["showBothSides"]),
-      "dual": bool(source["dual"]),
-      "ninjaQuery": String((source["ninjaQuery"] as? String ?? "").prefix(100)),
-      "rememberSide": bool(source["rememberSide"], true),
       "calibration": calibration,
       "fontScale": bounded("fontScale", 0.55, 1.2, 0.75),
       "roiScale": bounded("roiScale", 0.7, 1.4, 1),

@@ -30,9 +30,6 @@ public final class NarutoCaptureModule: Module {
     AsyncFunction("setSettings") { (settings: [String: Any]) -> [String: Any] in
       CaptureHost.shared.setSettings(settings)
     }.runOnQueue(.main)
-    AsyncFunction("setControls") { (patch: [String: Any]) -> [String: Any] in
-      CaptureHost.shared.setControls(patch)
-    }.runOnQueue(.main)
     AsyncFunction("pickCalibrationImage") { (promise: Promise) in
       self.documents.pick(image: true, promise: promise)
     }.runOnQueue(.main)

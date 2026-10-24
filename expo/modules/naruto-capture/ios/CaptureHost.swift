@@ -41,12 +41,10 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   private var lastFrame = 0.0
   private var lastEmit = 0.0
   private var lastRender = 0.0
-  private var lastPlaybackRefresh = 0.0
   private var pendingUntil = 0.0
   private var startIssued = false
   private var deadlines = Array(repeating: CaptureDeadline(), count: 4)
   private var settings = CaptureProtocol.settings([:])
-  private let controls = CaptureControls()
   private var state: [String: Any] = [
     "available": true, "prepared": false, "broadcastActive": false,
     "pipSupported": false, "pipPossible": false, "pipPending": false, "pipActive": false,
@@ -62,7 +60,6 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
 
   private override init() {
     super.init()
-    copyControlsToSettings()
     state["pipSupported"] = AVPictureInPictureController.isPictureInPictureSupported()
     if Self.broadcastExtensionIdentifier == nil {
       state["available"] = false
@@ -76,7 +73,6 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
 
   func snapshot() -> [String: Any] {
     var output = state
-    output["controls"] = controls.snapshot
     let monotonic = CaptureProtocol.now()
     let wall = Date().timeIntervalSince1970 * 1000
     // JS formats wall-clock deadlines. Rebase only the exported view after a
@@ -140,7 +136,8 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       let controller = AVPictureInPictureController(contentSource: source)
       controller.delegate = self
       controller.canStartPictureInPictureAutomaticallyFromInline = false
-      controller.requiresLinearPlayback = false
+      // Display-only live timer: hide scrubbing/skip. iOS always shows both sides.
+      controller.requiresLinearPlayback = true
       pip = controller
       // AVKit may query playback during initialization, before identity is set.
       controller.invalidatePlaybackState()
@@ -190,30 +187,12 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   }
 
   func setSettings(_ value: [String: Any]) -> [String: Any] {
-    let previousRevision = controls.revision
-    let next = controls.settings(value)
-    guard previousRevision != controls.revision || !NSDictionary(dictionary: settings).isEqual(to: next) else { return snapshot() }
+    let next = CaptureProtocol.settings(value)
+    guard !NSDictionary(dictionary: settings).isEqual(to: next) else { return snapshot() }
     settings = next
     timer?.schedule(deadline: .now(), repeating: 1 / CaptureProtocol.number(settings["backgroundFPS"], 8), leeway: .milliseconds(15))
-    return publishSettings()
-  }
-
-  func setControls(_ patch: [String: Any]) -> [String: Any] {
-    guard controls.setControls(patch) else { return snapshot() }
-    copyControlsToSettings()
-    return publishSettings()
-  }
-
-  private func copyControlsToSettings() {
-    settings["playerSide"] = controls.playerSide
-    settings["showBothSides"] = controls.showBothSides
-    settings["rememberSide"] = controls.rememberSide
-  }
-
-  private func publishSettings() -> [String: Any] {
     sendConfiguration()
-    render() // Local effect ACK; never wait for an old extension game snapshot.
-    pip?.invalidatePlaybackState()
+    render()
     emit()
     return snapshot()
   }
@@ -435,47 +414,43 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
       return
     }
     render()
-    if now - lastPlaybackRefresh >= 30 {
-      lastPlaybackRefresh = now
-      // The ±60-second window retains room for both skips between refreshes.
-      pip?.invalidatePlaybackState()
-    }
   }
   private func render() {
     let now = CaptureProtocol.now()
-    func label(_ index: Int, _ title: String) -> String {
-      let clock = deadlines[index]
-      let value = clock.epochMs == 0 ? "--" : String(format: "%.1f", clock.remaining(at: now))
-      var text = "\(title)  \(value)"
-      if deadlines[index + 2].epochMs > 0 {
-        text += " / " + String(format: "%.1f", deadlines[index + 2].remaining(at: now))
-      }
-      return text
+    // Same text/colour rules as the APK's both-side card (Session.overlayState).
+    func clock(_ index: Int) -> (text: String, color: UIColor) {
+      let tenths = CountdownRenderer.tenths(deadlines[index].epochMs == 0 ? 0 : deadlines[index].remaining(at: now))
+      if tenths == 0 { return ("—", CountdownRenderer.idle) }
+      return ("\(tenths / 10).\(tenths % 10)", tenths <= 30 ? CountdownRenderer.warn : CountdownRenderer.live)
     }
-    let side = controls.playerSide
-    let both = controls.showBothSides
-    let lines = both ? [label(0, "左侧"), label(1, "右侧")] : [side == "left" ? label(1, "对手") : label(0, "对手")]
-    let stale = state["stale"] as? Bool ?? true
-    let visible = both ? [0, 1] : [side == "left" ? 1 : 0]
-    let warning = visible.contains { index in
-      [deadlines[index], deadlines[index + 2]].contains { clock in
-        let remaining = clock.remaining(at: now)
-        return clock.epochMs > 0 && remaining > 0 && remaining <= 3
-      }
-    }
-    func identity(_ index: Int) -> String {
+    func column(_ index: Int) -> CountdownColumn {
       let prefix = index == 0 ? "left" : "right"
-      let ninja = String((state[prefix + "Ninja"] as? String ?? "").prefix(12))
+      let name = state[prefix + "Ninja"] as? String ?? ""
+      let ninja = name.count > 10 ? String(name.prefix(9)) + "…" : name
       let count = Int(CaptureProtocol.number(state[prefix + "Substitutions"]))
-      return "\(ninja.isEmpty ? (index == 0 ? "左侧" : "右侧") : ninja) · 替身 \(count)"
+      let primary = clock(index)
+      var alternate: (text: String, color: UIColor)?
+      if deadlines[index + 2].epochMs > 0 {
+        let value = clock(index + 2)
+        alternate = ("10秒 " + (value.text == "—" ? "就绪" : value.text), value.color)
+      }
+      var title = [index == 0 ? "左" : "右"]
+      if !ninja.isEmpty { title.append(ninja) }
+      title.append("\(count)次")
+      return CountdownColumn(title: title.joined(separator: " · "), clock: primary.text,
+                             color: primary.color, alternate: alternate)
+    }
+    let stale = state["stale"] as? Bool ?? true
+    func beads(_ key: String) -> String {
+      let count = Int(CaptureProtocol.number(state[key], -1))
+      return count < 0 ? "?" : String(count)
     }
     let status: String
     if stale { status = "画面未确认 · 已有计时继续" }
     else if state["match"] as? Bool != true { status = "等待对局 · 已有计时继续" }
-    else { status = "我方\(side == "left" ? "左" : "右") · " + (warning ? "即将恢复 · " : "") + visible.map(identity).joined(separator: " / ") }
-    let selection = "\(controls.initialized ? "已应用" : "当前") · 我方\(side == "left" ? "左" : "右") · \(both ? "双侧" : "单侧（对手）") · #\(controls.revision)"
-    if renderer.render(lines: lines, status: status, controls: selection,
-                       scale: CaptureProtocol.number(settings["fontScale"], 0.75), stale: stale, warning: warning) {
+    else { status = "对局中 · 豆 左\(beads("leftCount"))/右\(beads("rightCount"))" }
+    if renderer.render(columns: [column(0), column(1)], status: status,
+                       scale: CaptureProtocol.number(settings["fontScale"], 0.75), stale: stale) {
       lastRender = now
       state["renderedFrames"] = (state["renderedFrames"] as? Int ?? 0) + 1
     }
@@ -503,19 +478,17 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
     completionHandler(pip === pictureInPictureController)
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, setPlaying playing: Bool) {
+    // A live timer has nothing to pause; an accidental tap must not stop
+    // capture. Keep running and resync AVKit's button to "playing".
     guard pip === pictureInPictureController else { return }
-    // This utility uses AVKit's center transport action as SINGLE/BOTH, not
-    // media pause. The paused delegate describes AVKit UI state independently
-    // of playback rate: keep samples/timebase/timers running at rate 1.
-    // Real close, interruption and broadcast lifecycle stay separate.
-    _ = setControls(["showBothSides": CaptureTransport.showBothSides(playing: playing)])
+    pictureInPictureController.invalidatePlaybackState()
   }
   func pictureInPictureControllerTimeRangeForPlayback(_ pictureInPictureController: AVPictureInPictureController) -> CMTimeRange {
-    guard pip === pictureInPictureController else { return CMTimeRange(start: .zero, duration: .zero) }
-    return CaptureTransport.timeRange(around: renderer.playbackTime)
+    guard pip === pictureInPictureController else { return .invalid }
+    return CMTimeRange(start: .negativeInfinity, duration: .positiveInfinity) // Live content.
   }
   func pictureInPictureControllerIsPlaybackPaused(_ pictureInPictureController: AVPictureInPictureController) -> Bool {
-    pip !== pictureInPictureController || listener == nil || controls.showBothSides
+    pip !== pictureInPictureController || listener == nil
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
                                   didTransitionToRenderSize newRenderSize: CMVideoDimensions) {
@@ -523,9 +496,6 @@ final class CaptureHost: NSObject, AVPictureInPictureControllerDelegate, AVPictu
   }
   func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
                                   skipByInterval skipInterval: CMTime, completion completionHandler: @escaping @Sendable () -> Void) {
-    defer { completionHandler() } // Exactly once, including obsolete/invalid requests.
-    guard pip === pictureInPictureController,
-          let side = CaptureTransport.side(forSkipSeconds: CMTimeGetSeconds(skipInterval)) else { return }
-    _ = setControls(["playerSide": side])
+    completionHandler() // Linear live playback has no seeking; always complete.
   }
 }
