@@ -293,8 +293,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
       let configuration = CaptureProtocol.settings(settings)
       lock.lock()
       // Apply atomically between analyses, not as a capture-source restart.
-      // APK-style side/display changes must preserve a pending bead-drop vote;
-      // the engine itself resynchronizes only real geometry/cadence changes.
+      // A display/FPS tweak must preserve a pending bead-drop vote; the
+      // engine itself resynchronizes only real geometry/cadence changes.
       pendingSettings = configuration
       fps = CaptureProtocol.number(configuration["backgroundFPS"], 8)
       configured = true
