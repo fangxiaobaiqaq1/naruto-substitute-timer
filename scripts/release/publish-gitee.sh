@@ -50,7 +50,7 @@ download_request() {
 upload_attachment() {
   # Bulk transfers need more than the API's 120s budget. Avoid intermediary
   # HTTP/2/100-continue issues, but stop a stalled connection after one minute.
-  request --http1.1 --header 'Expect:' --max-time 900 --retry 1 \
+  request --ipv4 --http1.1 --header 'Expect:' --max-time 900 --retry 1 \
     --speed-limit 1024 --speed-time 60 \
     --write-out '%{stderr}Gitee upload: HTTP %{response_code}, sent=%{size_upload}B speed=%{speed_upload}B/s total=%{time_total}s\n' \
     --form "file=@$1" "$api/releases/$release_id/attach_files" >/dev/null

@@ -48,7 +48,7 @@ def last_option(name):
 
 if form is not None:
     method = "POST"
-    assert "--http1.1" in args and "Expect:" in args
+    assert "--ipv4" in args and "--http1.1" in args and "Expect:" in args
     assert last_option("--max-time") == "900"
     assert last_option("--retry") == "1"
     assert last_option("--speed-limit") == "1024" and last_option("--speed-time") == "60"
