@@ -43,8 +43,18 @@ for i, arg in enumerate(args):
         form = args[i + 1]
 if "--data" in args and method == "GET":
     method = "POST"
+def last_option(name):
+    return [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == name][-1]
+
 if form is not None:
     method = "POST"
+    assert "--http1.1" in args and "Expect:" in args
+    assert last_option("--max-time") == "900"
+    assert last_option("--retry") == "1"
+    assert last_option("--speed-limit") == "1024" and last_option("--speed-time") == "60"
+    assert last_option("--write-out").startswith("%{stderr}Gitee upload:")
+else:
+    assert last_option("--max-time") == "120"
 
 state_path = Path(os.environ["MOCK_GITEE_STATE"])
 log_path = Path(os.environ["MOCK_GITEE_LOG"])
@@ -152,25 +162,60 @@ fi
 grep -q 'Required artifact exceeds Gitee 100 MB limit: too-large.apk' "$tmpdir/bad.out"
 [[ "$before" == "$(wc -l < "$log")" ]]
 
-# Exercise the workflow's exact helper without contacting Gitee or persisting credentials.
-python3 - "$script_dir/../../.github/workflows/release.yml" <<'PY'
+# Run the mirror's actual verification block against tiny local fixtures.
+python3 - "$script_dir/../../.github/workflows/mirror-gitee.yml" "$tmpdir" <<'PY'
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+workflow = Path(sys.argv[1]).read_text()
+verify = workflow.split("      - name: Verify GitHub digests and checksum manifest\n", 1)[1]
+verify = textwrap.dedent(verify.split("        run: |\n", 1)[1].split("      - name: Publish Gitee release\n", 1)[0])
+root = Path(sys.argv[2])
+assets = root / "mirror-gitee/assets"
+assets.mkdir(parents=True)
+names = ["timer-app.exe", "naruto-timer-universal.apk", "naruto-timer-v0.3.1-windows-x64.zip"]
+for name in names:
+    (assets / name).write_text("fixture " + name)
+def digest(name):
+    return hashlib.sha256((assets / name).read_bytes()).hexdigest()
+manifest = "".join(f"{digest(name)}  {name}\n" for name in names)
+for content, good in [(manifest, True), (manifest.replace("timer-app.exe", "../timer-app.exe"), False),
+                      (manifest + manifest.splitlines()[0] + "\n", False),
+                      (manifest.replace(digest(names[0]), "0" * 64), False)]:
+    (assets / "SHA256SUMS.txt").write_text(content)
+    metadata = {"assets": [{"name":n, "state":"uploaded", "digest":"sha256:" + digest(n)}
+                           for n in names + ["SHA256SUMS.txt"]]}
+    (root / "mirror-gitee/release.json").write_text(json.dumps(metadata))
+    result = subprocess.run(["bash", "-c", verify], cwd=assets, text=True, capture_output=True,
+                            env=dict(os.environ, TAG="v0.3.1", RUNNER_TEMP=str(root)))
+    assert (result.returncode == 0) == good, result.stdout + result.stderr
+PY
+
+# Exercise both workflows' exact helpers without contacting Gitee or storing credentials.
+python3 - "$script_dir/../../.github/workflows/release.yml" "$script_dir/../../.github/workflows/mirror-gitee.yml" <<'PY'
 import os
 import shlex
 import subprocess
 import sys
 from pathlib import Path
 
-workflow = Path(sys.argv[1]).read_text()
-line = next(line.strip().removesuffix("\\").strip() for line in workflow.splitlines()
-            if "-c 'credential.helper=!" in line)
-helper = shlex.split(line)[1]
-env = dict(os.environ, GITEE_REPOSITORY="test-owner/repo", GITEE_TOKEN="git-test-token", GIT_TERMINAL_PROMPT="0")
-result = subprocess.run(["git", "-c", "credential.helper=", "-c", helper, "credential", "fill"],
-                        input="protocol=https\nhost=gitee.com\n\n", text=True, capture_output=True, env=env, check=True)
-fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
-assert fields["username"] == "test-owner" and fields["password"] == "git-test-token"
-assert all("git-test-token" not in arg for arg in result.args)
-assert '"refs/tags/$TAG:refs/tags/$TAG"' in workflow
+for path in sys.argv[1:]:
+    workflow = Path(path).read_text()
+    line = next(line.strip().removesuffix("\\").strip() for line in workflow.splitlines()
+                if "-c 'credential.helper=!" in line)
+    helper = shlex.split(line)[1]
+    env = dict(os.environ, GITEE_REPOSITORY="test-owner/repo", GITEE_TOKEN="git-test-token", GIT_TERMINAL_PROMPT="0")
+    result = subprocess.run(["git", "-c", "credential.helper=", "-c", helper, "credential", "fill"],
+                            input="protocol=https\nhost=gitee.com\n\n", text=True, capture_output=True, env=env, check=True)
+    fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    assert fields["username"] == "test-owner" and fields["password"] == "git-test-token"
+    assert all("git-test-token" not in arg for arg in result.args)
+    assert '"refs/tags/$TAG:refs/tags/$TAG"' in workflow
 PY
 
-echo 'publish-gitee.sh and workflow credential helper mock tests passed'
+echo 'publish-gitee.sh, mirror validation and workflow credential helper mock tests passed'

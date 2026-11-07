@@ -47,6 +47,15 @@ download_request() {
   request --location "$@"
 }
 
+upload_attachment() {
+  # Bulk transfers need more than the API's 120s budget. Avoid intermediary
+  # HTTP/2/100-continue issues, but stop a stalled connection after one minute.
+  request --http1.1 --header 'Expect:' --max-time 900 --retry 1 \
+    --speed-limit 1024 --speed-time 60 \
+    --write-out '%{stderr}Gitee upload: HTTP %{response_code}, sent=%{size_upload}B speed=%{speed_upload}B/s total=%{time_total}s\n' \
+    --form "file=@$1" "$api/releases/$release_id/attach_files" >/dev/null
+}
+
 max_attachment_bytes=100000000
 declare -a upload_assets=()
 checksum_asset=''
@@ -152,7 +161,7 @@ for asset in "${upload_assets[@]}"; do
   existing_id=$(attachment_id "$name")
   [[ -n "$existing_id" ]] && continue
   echo "Uploading $name to Gitee release $tag"
-  request --form "file=@$asset" "$api/releases/$release_id/attach_files" >/dev/null
+  upload_attachment "$asset"
 done
 
 if [[ -n "$checksum_asset" ]]; then
@@ -164,7 +173,7 @@ if [[ -n "$checksum_asset" ]]; then
   fi
   if [[ -z "$checksum_existing_id" ]]; then
     echo "Uploading SHA256SUMS.txt to Gitee release $tag"
-    request --form "file=@$checksum_asset" "$api/releases/$release_id/attach_files" >/dev/null
+    upload_attachment "$checksum_asset"
   fi
 fi
 

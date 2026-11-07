@@ -1,0 +1,88 @@
+name: Mirror Gitee
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published stable GitHub release tag to mirror
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      # Use the current workflow source, not the old tag's publisher.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve tag and release notes
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must look like v0.3.1"; exit 1; }
+          commit="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+          mkdir -p "$RUNNER_TEMP/mirror-gitee/assets"
+          git show "$commit:docs/release-$TAG.md" > "$RUNNER_TEMP/mirror-gitee/notes.md"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Download published GitHub assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/releases/tags/$TAG" > "$RUNNER_TEMP/mirror-gitee/release.json"
+          jq -e --arg tag "$TAG" '
+            .tag_name == $tag and .draft == false and .prerelease == false and .published_at != null
+          ' "$RUNNER_TEMP/mirror-gitee/release.json" >/dev/null || { echo "::error::Release must be published and stable"; exit 1; }
+          gh release download "$TAG" --dir "$RUNNER_TEMP/mirror-gitee/assets" \
+            --pattern timer-app.exe --pattern naruto-timer-universal.apk \
+            --pattern "naruto-timer-$TAG-windows-x64.zip" --pattern SHA256SUMS.txt
+      - name: Verify GitHub digests and checksum manifest
+        shell: bash
+        working-directory: ${{ runner.temp }}/mirror-gitee/assets
+        run: |
+          set -euo pipefail
+          assets=(timer-app.exe naruto-timer-universal.apk "naruto-timer-$TAG-windows-x64.zip" SHA256SUMS.txt)
+          for name in "${assets[@]}"; do
+            test -s "$name"
+            digest="$(jq -er --arg name "$name" '
+              [.assets[] | select(.name == $name)] |
+              select(length == 1 and .[0].state == "uploaded") | .[0].digest
+            ' "$RUNNER_TEMP/mirror-gitee/release.json")"
+            [[ "$digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]] || { echo "::error::Invalid GitHub digest for $name"; exit 1; }
+            printf '%s  %s\n' "${digest#sha256:}" "$name" | sha256sum --check --strict -
+          done
+          # Accept exactly one checksum per binary, with no paths or unknown filenames.
+          checksum_names=()
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ "$line" =~ ^[0-9a-fA-F]{64}\ [\ \*](.+)$ ]] || { echo "::error::Invalid checksum line"; exit 1; }
+            checksum_names+=("${BASH_REMATCH[1]}")
+          done < SHA256SUMS.txt
+          diff -u <(printf '%s\n' "${assets[@]:0:3}" | sort) <(printf '%s\n' "${checksum_names[@]}" | sort)
+          sha256sum --check --strict SHA256SUMS.txt
+      - name: Publish Gitee release
+        shell: bash
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPOSITORY: xiaobaiqaq/naruto-substitute-timer
+          GITEE_TARGET_COMMITISH: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test -n "$GITEE_TOKEN" || { echo "::error::GITEE_TOKEN is required to publish the mirrored release"; exit 1; }
+          # Same tag-only, non-force push as release.yml; credentials stay in this step.
+          git -c credential.helper= \
+            -c 'credential.helper=!f() { if [ "$1" = get ]; then printf "username=%s\npassword=%s\n" "${GITEE_REPOSITORY%%/*}" "$GITEE_TOKEN"; fi; }; f' \
+            push "https://gitee.com/$GITEE_REPOSITORY.git" "refs/tags/$TAG:refs/tags/$TAG"
+          assets="$RUNNER_TEMP/mirror-gitee/assets"
+          scripts/release/publish-gitee.sh "$TAG" "$RUNNER_TEMP/mirror-gitee/notes.md" \
+            "$assets/naruto-timer-universal.apk" "$assets/timer-app.exe" \
+            "$assets/naruto-timer-$TAG-windows-x64.zip" "$assets/SHA256SUMS.txt"
