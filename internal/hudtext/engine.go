@@ -31,6 +31,7 @@ type job struct {
 	key        frameKey
 	at         time.Time
 	strips     [2]strip
+	names      []string // exact account snapshot for a VS footer job
 }
 type completion struct {
 	job    job
@@ -80,6 +81,7 @@ type Engine struct {
 	dict                  Dictionary
 	mu                    sync.Mutex
 	enabled, closed, busy bool
+	refresh, pollOCR      bool // re-run async evidence on identical pixels, not new bean votes
 	generation            uint64
 	key                   frameKey
 	haveKey               bool
@@ -166,6 +168,12 @@ func (e *Engine) read(request job) (out completion) {
 	out = completion{job: request, err: err}
 	if err == nil {
 		for i, raw := range sheet.texts(lines) {
+			if request.key.profile == "vs" {
+				out.titles[i].Account = footerAccount(raw, request.names)
+				// The whole footer signature binds the COMPLETE account. A local
+				// prefix proof could survive an appended character in a new name.
+				continue
+			}
 			out.titles[i] = e.dict.consensus(raw)
 			out.proofs[i][0] = sheet.evidence(lines, request, i, out.titles[i].Ninja)
 			if out.titles[i].Account != "" {
@@ -206,6 +214,7 @@ func (e *Engine) SetEnabled(enabled bool) {
 		return
 	}
 	e.enabled = enabled
+	e.refresh = true
 	e.invalidate()
 	e.lastError = ""
 	e.retryAt = time.Time{}
@@ -214,6 +223,42 @@ func (e *Engine) SetEnabled(enabled bool) {
 	} else {
 		e.status = "off"
 	}
+}
+
+// SetPreMatchSideRecognition controls VS footer OCR independently of battle
+// title OCR. A setting change invalidates in-flight and accepted VS evidence.
+func (e *Engine) SetPreMatchSideRecognition(on bool) {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return
+	}
+	if e.cfg.UI.PreMatchSideRecognition != on {
+		e.cfg.UI.PreMatchSideRecognition = on
+		e.refresh = true
+		e.invalidate()
+	}
+	e.mu.Unlock()
+	if inner, ok := e.inner.(interface{ SetPreMatchSideRecognition(bool) }); ok {
+		inner.SetPreMatchSideRecognition(on)
+	}
+}
+
+// NeedsAnalysis lets a frozen loading screen consume completed OCR and submit
+// its next bounded confirmation. Capture fingerprints still mark it Duplicate.
+func (e *Engine) NeedsAnalysis(at time.Time) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return false
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	_, namesKey := configuredNames(e.names())
+	return e.refresh || namesKey != e.namesKey || len(e.results) > 0 ||
+		(!e.lastAt.IsZero() && at.Before(e.lastAt)) || (!e.pausedAt.IsZero() && at.Sub(e.pausedAt) > textPauseTTL) ||
+		(e.pollOCR && !e.busy && !at.Before(e.nextAt) && !at.Before(e.retryAt))
 }
 
 // SetCalibration applies a live region calibration (docs/区域校准.md) to
@@ -257,6 +302,7 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.refresh, e.pollOCR = false, false
 	if at.IsZero() {
 		at = time.Now()
 	}
@@ -274,11 +320,19 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		e.lastError = ""
 	}
 	e.lastAt = at
-	active := !e.closed && e.enabled && img != nil && res.Fighting && !res.Uncertain && (res.LayoutProfile == "duel" || res.LayoutProfile == "camp")
+	vs := e.cfg.UI.PreMatchSideRecognition && res.Scene == "vs" && len(names) > 0
+	if res.Scene == "vs" && !e.cfg.UI.PreMatchSideRecognition {
+		res.PlayerSide, res.PlayerName, res.OppName = "", "", ""
+	}
+	profile := res.LayoutProfile
+	if vs {
+		profile = "vs"
+	}
+	active := !e.closed && img != nil && (vs || (e.enabled && res.Fighting && !res.Uncertain && (profile == "duel" || profile == "camp")))
 	var regions [2]image.Rectangle
 	if active {
 		var ok bool
-		regions, ok = e.nameRegions(img, res.LayoutProfile)
+		regions, ok = e.nameRegions(img, profile)
 		active = ok
 	}
 	if !active {
@@ -288,12 +342,12 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		select {
 		case done := <-e.results:
 			e.busy = false
-			if done.err != nil && e.enabled && !e.closed {
+			if done.err != nil && (e.enabled || e.cfg.UI.PreMatchSideRecognition) && !e.closed {
 				e.backendFailed(at, done.err)
 			}
 		default:
 		}
-		if !e.enabled || e.closed {
+		if (!e.enabled && !e.cfg.UI.PreMatchSideRecognition) || e.closed {
 			res.TextStatus = "off"
 		} else {
 			res.TextStatus = "waiting"
@@ -304,7 +358,7 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		e.invalidate()
 	}
 	e.pausedAt = time.Time{}
-	key := frameKey{bounds: img.Bounds(), regions: regions, profile: res.LayoutProfile}
+	key := frameKey{bounds: img.Bounds(), regions: regions, profile: profile}
 	if !e.haveKey || e.key != key {
 		e.invalidate()
 		e.key = key
@@ -402,6 +456,9 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 		}
 	}
 	needs := res.LeftNinja == "" || res.RightNinja == "" || (len(names) > 0 && res.PlayerSide == "")
+	if vs {
+		needs = res.PlayerSide == ""
+	}
 	// Derive UI status from CURRENT evidence/work. A remembered "ready" is not
 	// evidence after the glyphs disappear, and an old error must not hide retry.
 	switch {
@@ -420,8 +477,9 @@ func (e *Engine) AnalyzeAt(img *image.RGBA, at time.Time) engine.Result {
 	}
 	// Even a stable base gets infrequent re-reads, allowing a later exact
 	// version to be acquired. Missing-side retries cannot erase a proven field.
-	if (needs || used) && !e.busy && !at.Before(e.nextAt) && !at.Before(e.retryAt) && (white[0] >= 12 || white[1] >= 12) {
-		request := job{generation: e.generation, key: key, at: at}
+	e.pollOCR = (needs || used) && (white[0] >= 12 || white[1] >= 12)
+	if e.pollOCR && !e.busy && !at.Before(e.nextAt) && !at.Before(e.retryAt) {
+		request := job{generation: e.generation, key: key, at: at, names: names}
 		for i, roi := range regions {
 			request.strips[i] = strip{img: match.CropRGBA(img, roi), signature: signatures[i], white: white[i]}
 		}

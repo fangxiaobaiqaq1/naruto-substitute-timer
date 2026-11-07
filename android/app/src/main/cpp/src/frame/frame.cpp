@@ -173,14 +173,16 @@ Frame AnalyzeImage(const RGBA* img, engine::Engine* eng, detect::ContentMode mod
 
 // dedupedAnalysis skips the recognition chain for a capture whose pixels are
 // identical to the previously analyzed capture. The emulator does not present a
-// new frame for every poll; re-analyzing the same pixels would only burn CPU and
-// could never produce different beads. The reused result keeps this capture's
+// new frame for every poll; normally re-analyzing it cannot produce different
+// beads. NeedsAnalysis lets asynchronous OCR/settings progress without inventing
+// a new pixel observation. The reused result keeps this capture's
 // own image and acquisition times; the delivery layer still decides Duplicate
 // against the frame the UI actually received last.
 Frame DedupedAnalysis::analyze(const RGBA* img, engine::Engine* eng, detect::ContentMode mode, TimeNs started,
                                TimeNs capturedAt, const std::string& source) {
     const uint64_t fingerprint = frameFingerprint(img, source);
-    if (valid_ && img != nullptr && fingerprint == fingerprint_ && !last_.HasErr) {
+    if (valid_ && img != nullptr && fingerprint == fingerprint_ && !last_.HasErr &&
+        (eng == nullptr || !eng->NeedsAnalysis(capturedAt))) {
         Frame f = last_;
         f.Width = img->Bounds().Dx();
         f.Height = img->Bounds().Dy();
@@ -240,6 +242,12 @@ std::shared_ptr<engine::Engine> Pipeline::build(const config::Config& cfg, std::
 void Pipeline::SetTextEnabled(bool enabled) {
     textEnabled_ = enabled;
     if (text_ != nullptr) text_->SetEnabled(enabled);
+}
+
+void Pipeline::SetPreMatchSideRecognition(bool on) {
+    cfg_.UI.PreMatchSideRecognition = on;
+    if (text_ != nullptr) text_->SetPreMatchSideRecognition(on);
+    else if (auto* gated = dynamic_cast<engine::Gated*>(engine_.get())) gated->SetPreMatchSideRecognition(on);
 }
 
 Frame Pipeline::Analyze(const RGBA* img, TimeNs started, TimeNs capturedAt, const std::string& method) {

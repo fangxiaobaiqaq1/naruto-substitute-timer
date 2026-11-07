@@ -92,6 +92,7 @@ class MainActivity : Activity() {
     // 设置区。
     private lateinit var sideGroup: RadioGroup
     private lateinit var rememberChk: CheckBox
+    private lateinit var preMatchSideChk: CheckBox
     private lateinit var namesEdit: EditText
     private lateinit var ninjaEdit: EditText
     private lateinit var modeGroup: RadioGroup
@@ -252,6 +253,10 @@ class MainActivity : Activity() {
         Ui.add(basics, rememberChk, 0f)
         Ui.add(basics, Ui.note(this, "选的是我方；悬浮窗计时的是另一边。自动认边未完成时显示“待认边”。"), 2f)
 
+        preMatchSideChk = check("开局/换人画面自动认边（可选）") { on -> settings.preMatchSideRecognition = on }
+        Ui.add(basics, preMatchSideChk, 10f)
+        Ui.add(basics, Ui.note(this, "默认关闭。开启后，请填写并保存完整账号名（含装饰符号）；在开局或死亡换人的 VS 画面读取底部账号。" +
+            "只确认完整我方名字，不凭陌生名字反推；手动选左/右始终优先，不影响已有倒计时。"), 2f)
         Ui.add(basics, Ui.text(this, "我的名字", 13f, Ui.TEXT_2), 14f)
         namesEdit = EditText(this).apply {
             hint = "账号名（多个用逗号分隔）"
@@ -398,7 +403,7 @@ class MainActivity : Activity() {
         Ui.add(advancedPanel, Ui.note(
             this,
             "一般不需要：填好「我的名字」后，对局中会用本机文字识别读血条上方的账号自动认边。" +
-                "图片只是补充，可以在对战加载（VS）画面就认出我方：① 在 VS 画面用这台手机截屏；② 裁下画面底部自己账号名那一行字" +
+                "图片只是补充，同样需要开启「开局/换人画面自动认边」才能在 VS 画面认边：① 在 VS 画面用这台手机截屏；② 裁下画面底部自己账号名那一行字" +
                 "（贴着文字裁，不带头像和段位，不要缩放）；③ 下面填与「我的名字」完全相同的账号名，点「导入图片」。" +
                 "导入时会按本机屏幕换算成识别用的尺寸。认出我方后会自动收集对面的账号名图片（只保留最近 ${IdentityStore.SEEN_CAP} 张，可随时清除）。",
         ), 2f)
@@ -493,6 +498,7 @@ class MainActivity : Activity() {
             }
             syncSide()
             rememberChk.isChecked = settings.rememberSide
+            preMatchSideChk.isChecked = settings.preMatchSideRecognition
             syncMode()
             bothChk.isChecked = settings.showBothSides
             setSlider(miniOpacityBar, MINI_OPACITY_MIN, OPACITY_STEP, settings.miniOpacity.toDouble())
@@ -548,6 +554,7 @@ class MainActivity : Activity() {
             when (key) {
                 Settings.KEY_PLAYER_SIDE -> syncSide()
                 Settings.KEY_REMEMBER_SIDE -> rememberChk.isChecked = settings.rememberSide
+                Settings.KEY_PRE_MATCH_SIDE_RECOGNITION -> preMatchSideChk.isChecked = settings.preMatchSideRecognition
                 Settings.KEY_OVERLAY_MODE -> syncMode()
                 Settings.KEY_SHOW_BOTH -> bothChk.isChecked = settings.showBothSides
                 Settings.KEY_CALIB_PROFILE, in Settings.KEY_CALIB_RECTS -> refreshCalibration()

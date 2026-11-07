@@ -34,7 +34,12 @@ func Diagnose(ctx context.Context, reader ocr.Recognizer, img *image.RGBA, cfg c
 	report.Variants = sheet.texts(lines)
 	dict := NewDictionary(cfg.UI.SubstituteTable)
 	for i, raw := range report.Variants {
-		report.Titles[i] = dict.consensus(raw)
+		if profile == "vs" {
+			names, _ := configuredNames(cfg.UI.PlayerNames)
+			report.Titles[i].Account = footerAccount(raw, names)
+		} else {
+			report.Titles[i] = dict.consensus(raw)
+		}
 	}
 	return report, nil
 }

@@ -308,6 +308,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.metadata.outputs.tag }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -323,6 +324,12 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GITEE_TOKEN" || { echo "::error::GITEE_TOKEN is required to publish the mirrored release"; exit 1; }
+          # The release API's target commit must exist on Gitee. Push only the
+          # release tag and its history: never force a tag or overwrite a branch.
+          # Credentials stay in this step's environment, not a URL or git config.
+          git -c credential.helper= \
+            -c 'credential.helper=!f() { if [ "$1" = get ]; then printf "username=%s\npassword=%s\n" "${GITEE_REPOSITORY%%/*}" "$GITEE_TOKEN"; fi; }; f' \
+            push "https://gitee.com/$GITEE_REPOSITORY.git" "refs/tags/$TAG:refs/tags/$TAG"
           rm -rf release-assets/windows release-assets/RELEASE_TAG
           (
             cd release-assets

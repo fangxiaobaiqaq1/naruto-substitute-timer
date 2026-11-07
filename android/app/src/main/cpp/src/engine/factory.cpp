@@ -5,7 +5,7 @@
 // Package factory 提供引擎工厂：按配置构造检测引擎（默认 RGB）。
 // 独立子包避免 import cycle（engine 接口包不依赖任何引擎实现）。
 // Android 只有 plain 构建：defaultKind = KindRGB，opencv/model 返回 UnsupportedError。
-// NewLive（hudtext OCR 包装）与 MustDefault 不移植：OCR 已移除，构建失败由 Pipeline 报告。
+// NewLive 的 hudtext OCR 包装在 Pipeline::build；构建失败由 Pipeline 报告。
 #include "nt/factory.h"
 
 #include "nt/identity.h"
@@ -84,7 +84,10 @@ std::shared_ptr<engine::Engine> New(const Config& cfg, std::string* err) {
         setErr(err, gateErr.empty() ? std::string("scene gate unavailable") : gateErr);
         return nullptr;
     }
-    return engine::NewGatedWithGuess(gate, inner, adaptGuesser(cfg.App));
+    auto gated = engine::NewGatedWithGuess(gate, inner, adaptGuesser(cfg.App));
+    if (auto* g = dynamic_cast<engine::Gated*>(gated.get()))
+        g->SetPreMatchSideRecognition(cfg.App.UI.PreMatchSideRecognition);
+    return gated;
 }
 
 }  // namespace nt::factory

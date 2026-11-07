@@ -58,6 +58,37 @@ func TestXiayinSkinsAreBilateralAndUseCurrentCounts(t *testing.T) {
 	}
 }
 
+func TestXiayinJinyingDarkRedCores(t *testing.T) {
+	area := detect.ContentArea{W: 960, H: 540}
+	for _, redLeft := range []bool{false, true} {
+		for _, hint := range []bool{false, true} {
+			id := ninja.Readout{Name: ninja.SasukeXiayin, Palette: ninja.Xiayin, Slots: 4}
+			if hint {
+				id = ninja.Readout{Unverified: true, PaletteHint: ninja.Xiayin, Slots: 4}
+			}
+			for _, count := range []int{0, 2, 4} {
+				img, positions := xiayinTestRows(redLeft, [2]int{count, count})
+				for _, p := range positions {
+					if (p.Side == "left") == redLeft && p.Idx >= count {
+						// The supplied skin's empty core is nearly pure red, not black.
+						draw.Draw(img, image.Rect(p.X-4, p.Y-5, p.X+5, p.Y+6), image.NewUniform(color.RGBA{100, 5, 5, 255}), image.Point{}, draw.Src)
+					}
+				}
+				beads := sampleCalibratedSpecial(img, positions, area, config.Default().Vision, [2]ninja.Readout{id, id})
+				l, r := countReady(beads)
+				if l != count || r != count || knownCount(beads) != 8 {
+					t.Fatalf("redLeft=%v hint=%v count=%d: %+v", redLeft, hint, count, beads)
+				}
+			}
+		}
+	}
+	for _, c := range []color.RGBA{{111, 0, 0, 255}, {100, 16, 0, 255}, {100, 0, 16, 255}, {0, 0, 0, 255}} {
+		if got := specialPixel(ninja.Red, int(c.R), int(c.G), int(c.B)); got != detect.StateUnknown {
+			t.Fatalf("ambiguous red %v classified as %v", c, got)
+		}
+	}
+}
+
 func TestXiayinRedRequiresVariantAndRejectsEffects(t *testing.T) {
 	area := detect.ContentArea{W: 960, H: 540}
 	for _, id := range []ninja.Readout{{}, {Name: ninja.Obito, Palette: ninja.Purple, Slots: 4}, {Unverified: true, PaletteHint: ninja.Purple, Slots: 4}} {

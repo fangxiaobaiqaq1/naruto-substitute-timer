@@ -44,7 +44,7 @@ Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 Windows 原生构建的验收路径需要 Go 1.26.10（`go.mod` 的 `toolchain`；旧的 Go 1.26.x 会自动下载它）、PowerShell 和 Fyne 所需的 Windows x64 C/C++ 工具链（cgo）。在 Developer PowerShell 中：
 
 ```powershell
-$env:TIMER_VERSION = "v0.3.0"
+$env:TIMER_VERSION = "v0.3.1"
 .\build.bat
 ```
 

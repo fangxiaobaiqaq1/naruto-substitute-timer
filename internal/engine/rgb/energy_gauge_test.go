@@ -116,13 +116,14 @@ func (h energyHUD) title(t *testing.T, side int) {
 	draw.Draw(h.img, image.Rectangle{Min: at, Max: at.Add(g.Bounds().Size())}, g, image.Point{}, draw.Src)
 }
 
-// portrait stamps catalog avatar 90316 (波风水门[九喇嘛连结]) like syntheticHUDFrame.
+// portrait stamps the current 70px catalog avatar 90316 (波风水门[九喇嘛连结])
+// at its observed HUD size; the old 85px icon used .6 rather than .72.
 func (h energyHUD) portrait(t *testing.T, side int) {
 	t.Helper()
 	avatar := decodeRGBA(t, "../../../assets/avatars/90316.png")
 	first := h.rows[side][0]
 	roi := ninja.AvatarRegion(image.Pt(first.X, first.Y), h.s540, side == 0)
-	size := int(math.Round(float64(avatar.Bounds().Dx()) * h.s540 * .6))
+	size := int(math.Round(float64(avatar.Bounds().Dx()) * h.s540 * .72))
 	center := roi.Min.Add(image.Pt(h.px(35.5), h.px(48)))
 	box := image.Rectangle{Min: center.Sub(image.Pt(size/2, size/2)), Max: center.Add(image.Pt(size-size/2, size-size/2))}
 	xdraw.BiLinear.Scale(h.img, box, avatar, avatar.Bounds(), draw.Over, nil)

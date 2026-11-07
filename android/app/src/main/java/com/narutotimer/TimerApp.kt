@@ -66,6 +66,12 @@ class TimerApp : Application() {
         // 区域校准保存后立即生效（docs/区域校准.md）。一次保存会连写几个键，合并成一次重建；
         // 引擎尚未建好时 native 只记下，由 nativeFinishAssets 应用。
         settings.addListener { key ->
+            if (key == Settings.KEY_PRE_MATCH_SIDE_RECOGNITION) {
+                // Preserve each off/on transition: disabling must cancel accepted/in-flight
+                // footer evidence, even if the user enables it again before the next frame.
+                val on = settings.preMatchSideRecognition
+                calibrationWorker.execute { NativeCore.nativeSetPreMatchSideRecognition(on) }
+            }
             if (key == Settings.KEY_CALIB_PROFILE || key in Settings.KEY_CALIB_RECTS) {
                 main.removeCallbacks(applyCalibration)
                 main.postDelayed(applyCalibration, CALIBRATION_DEBOUNCE_MS)

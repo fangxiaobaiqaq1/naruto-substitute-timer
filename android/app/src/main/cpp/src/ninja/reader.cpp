@@ -371,7 +371,8 @@ Readout avatarReadout(const AvatarMatch& m) {
     if (key == normalizeAvatarName(Obito)) {
         out.Slots = 4;
         out.Palette_ = Purple;
-    } else if (key == normalizeAvatarName(SasukeXiayin)) {
+    } else if (key == normalizeAvatarName(SasukeXiayin) || key == normalizeAvatarName(SasukeJinying)) {
+        // The reviewed 924641 skin retains Xiayin's row, not a normal Sasuke HUD.
         out.Slots = 4;
         out.Palette_ = Xiayin;
         out.RowOffsetY = 9;

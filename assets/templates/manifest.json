@@ -252,6 +252,19 @@
       "threshold": 0.8
     },
     {
+      "id": "vs-death-swap",
+      "anchor": "center",
+      "file": "vs_swap_mark.png",
+      "scene": "vs",
+      "roi": {
+        "x": 0.41,
+        "y": 0.59,
+        "width": 0.20,
+        "height": 0.32
+      },
+      "threshold": 0.88
+    },
+    {
       "id": "queue-search",
       "anchor": "center",
       "file": "queue_search.png",

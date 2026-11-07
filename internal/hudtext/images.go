@@ -78,6 +78,9 @@ func (n *nameLayout) regions(img *image.RGBA, profile string) ([2]image.Rectangl
 	if !ok {
 		return out, false
 	}
+	if profile == "vs" {
+		return vsNameRegions(ca, img.Bounds())
+	}
 	positions := n.layout.PositionsInImage(profile, img, ca)
 	if len(positions) != 2*cfg.BeadsPerSide || cfg.BeadsPerSide < 1 {
 		return out, false

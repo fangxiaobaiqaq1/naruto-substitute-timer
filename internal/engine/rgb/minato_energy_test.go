@@ -1,7 +1,9 @@
 package rgb
 
 import (
+	"fmt"
 	"image"
+	"image/draw"
 	_ "image/png"
 	"os"
 	"testing"
@@ -11,6 +13,8 @@ import (
 	"narutotimer/internal/detect"
 	"narutotimer/internal/engine"
 	"narutotimer/internal/ninja"
+
+	xdraw "golang.org/x/image/draw"
 )
 
 func loadLocalRGBA(t *testing.T, path string) *image.RGBA {
@@ -34,6 +38,40 @@ func loadLocalRGBA(t *testing.T, path string) *image.RGBA {
 		}
 	}
 	return out
+}
+
+// The supplied duel frame is 2/4 on both sides. Hidden titles are synthetic
+// occlusions to verify current portrait recognition, not additional gameplay.
+func TestMinatoKyubiDuelScreenshot(t *testing.T) {
+	src := loadLocalRGBA(t, "../../../inbox/regressions/duel-minato-kyubi-20261106/game.png")
+	for _, width := range []int{960, 1280, 1600, 1920, 2560} {
+		for _, hideTitles := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/hideTitles=%v", width, hideTitles), func(t *testing.T) {
+				img := image.NewRGBA(image.Rect(0, 0, width, width*9/16))
+				xdraw.BiLinear.Scale(img, img.Bounds(), src, src.Bounds(), draw.Src, nil)
+				cfg := config.Default()
+				layout := engine.NewConfiguredLayout(detect.ModeAuto, cfg.Layout)
+				if hideTitles {
+					area, _ := layout.ContentArea(img)
+					positions := layout.PositionsInImage("duel", img, area)
+					for _, row := range [][]detect.BeadPosition{positions[:4], positions[4:]} {
+						p := row[0]
+						roi := ninja.NameRegion(image.Pt(p.X, p.Y), detect.RowHUDScale(row, area, 960, 540), p.Side == "left")
+						draw.Draw(img, roi, image.Black, image.Point{}, draw.Src)
+					}
+				}
+				e := NewConfigured(layout, cfg.Vision)
+				e.Prefer("duel")
+				for _, ms := range []int{0, 20, 100, 600} {
+					got := e.AnalyzeAt(img, time.Unix(100, 0).Add(time.Duration(ms)*time.Millisecond))
+					left, right := countReady(got.Beads)
+					if got.LeftNinja != ninja.MinatoKyubi || got.RightNinja != ninja.MinatoKyubi || got.LeftSlots != 4 || got.RightSlots != 4 || left != 2 || right != 2 || knownCount(got.Beads) != 8 {
+						t.Fatalf("frame %d: names=%q/%q want 2/2: %+v", ms, got.LeftNinja, got.RightNinja, got.Beads)
+					}
+				}
+			})
+		}
+	}
 }
 
 // The training HUD visibly includes Minato's energy gauge. Only a currently

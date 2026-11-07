@@ -105,6 +105,7 @@ func main() {
 	names := flag.String("names", "", "comma-separated 我的名字")
 	interval := flag.Duration("interval", 250*time.Millisecond, "capture interval between frames")
 	diagnose := flag.Bool("diagnose", false, "print hudtext.Diagnose for every fighting frame")
+	preMatch := flag.Bool("pre-match", false, "enable optional VS footer account recognition")
 	flag.Parse()
 	if *lib == "" || flag.NArg() == 0 {
 		flag.Usage()
@@ -130,6 +131,7 @@ func main() {
 	cfg := config.Default()
 	cfg.UI.PlayerNames = mine
 	cfg.UI.AutoTextRecognition = true
+	cfg.UI.PreMatchSideRecognition = *preMatch
 	identity.SetMineNames(mine)
 	inner, err := factory.New(factory.FromApp(cfg))
 	if err != nil {
@@ -163,7 +165,11 @@ func main() {
 			r.TextStatus, r.LeftNinja, r.RightNinja, r.LeftNinjaCandidate, r.RightNinjaCandidate, job)
 		if *diagnose && (r.LayoutProfile == "duel" || r.LayoutProfile == "camp") {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			report, err := hudtext.Diagnose(ctx, host, img, cfg, r.LayoutProfile)
+			profile := r.LayoutProfile
+			if *preMatch && r.Scene == "vs" {
+				profile = "vs"
+			}
+			report, err := hudtext.Diagnose(ctx, host, img, cfg, profile)
 			cancel()
 			if err != nil {
 				fmt.Printf("\tdiagnose: %v\n", err)

@@ -72,17 +72,18 @@ type SideGuesser func(img *image.RGBA, scene string) Identity
 
 // Gated 先过门闩，再把对局帧交给内层引擎采豆。
 type Gated struct {
-	Gate           Gate
-	Inner          Engine
-	Guess          SideGuesser
-	name           string
-	mu             sync.Mutex // Prefer and Analyze must belong to the same frame.
-	lastFight      GateDecision
-	lastAt         time.Time
-	lastBounds     image.Rectangle
-	pendingProfile string
-	pendingAt      time.Time
-	pendingImage   uint64
+	Gate                    Gate
+	Inner                   Engine
+	Guess                   SideGuesser
+	preMatchSideRecognition bool
+	name                    string
+	mu                      sync.Mutex // Prefer and Analyze must belong to the same frame.
+	lastFight               GateDecision
+	lastAt                  time.Time
+	lastBounds              image.Rectangle
+	pendingProfile          string
+	pendingAt               time.Time
+	pendingImage            uint64
 }
 
 var pixelHashSeed = maphash.MakeSeed()
@@ -115,7 +116,7 @@ func NewGatedWithGuess(gate Gate, inner Engine, guess SideGuesser) Engine {
 	if name == "" {
 		name = "engine"
 	}
-	return &Gated{Gate: gate, Inner: inner, Guess: guess, name: name}
+	return &Gated{Gate: gate, Inner: inner, Guess: guess, name: name, preMatchSideRecognition: true}
 }
 
 type nopEngine struct{}
@@ -124,6 +125,13 @@ func (nopEngine) Analyze(*image.RGBA) Result { return Result{Name: "nop"} }
 
 func (g *Gated) Analyze(img *image.RGBA) Result {
 	return g.AnalyzeAt(img, time.Now())
+}
+
+// SetPreMatchSideRecognition also gates optional VS account-image templates.
+func (g *Gated) SetPreMatchSideRecognition(on bool) {
+	g.mu.Lock()
+	g.preMatchSideRecognition = on
+	g.mu.Unlock()
 }
 
 // SetCalibration forwards a live region calibration to the inner engine.
@@ -208,7 +216,7 @@ func (g *Gated) AnalyzeAt(img *image.RGBA, at time.Time) Result {
 		g.clearScene()
 	}
 	id := Identity{}
-	if g.Guess != nil && img != nil {
+	if g.Guess != nil && img != nil && (d.SceneID != "vs" || g.preMatchSideRecognition) {
 		id = g.Guess(img, d.SceneID)
 	}
 

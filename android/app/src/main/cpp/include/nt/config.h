@@ -1,7 +1,7 @@
 // nt/config.h — internal/config 的默认值部分（architect 所有，实现在 src/config/config.cpp）。
 // 只保留识别核心用得到的字段；桌面/采集/更新/调试相关配置已移除。
 // Android 端没有 config.json：nt::config::Default() 就是唯一配置，
-// 只有 UI.PlayerNames（nativeSetPlayerNames）与 Layout.Calibration（nativeSetCalibration）
+// 只有 UI.PlayerNames / PreMatchSideRecognition 与 Layout.Calibration
 // 由 Kotlin 设置页通过 JNI 覆盖。
 #pragma once
 
@@ -137,6 +137,7 @@ struct UIConfig {
     int IdlePollIntervalMS = 0;
     std::string PlayerSide;
     std::vector<std::string> PlayerNames;
+    bool PreMatchSideRecognition = false;
 };
 
 struct Config {

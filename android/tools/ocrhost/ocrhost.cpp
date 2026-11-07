@@ -3,6 +3,8 @@
 // 与 Go 的 android/tools/ocrcheck（Windows OCR 路径在 Linux 上跑）对照：
 //
 //   ocrhost [--names 白方小,…] [--interval 250ms] [--diagnose] [--no-text] <png 或目录>...
+//   --pre-match：开启 VS 底栏；--battle-text-off：仅关闭战斗顶部 OCR；--repeat N：同一 PNG 重复采集。
+//   诊断的 scene=vs 使用 footer profile；Duplicate 始终仅由原采集像素/来源决定。
 //
 //  * 每帧走与 JNI 相同的 frame::Pipeline(cfg, text = true)（Gated 引擎 + 文字认边），采集时间按
 //    --interval 递增；每个识别任务在下一帧之前做完（输出与本机速度无关）。打印 scene / 对局 /
@@ -51,7 +53,8 @@ int main(int argc, char** argv) {
     std::string repo = REPO_ROOT;
     std::vector<std::string> names, files;
     long intervalMs = 250, realtimeMs = 0, jobDelayMs = 0;
-    bool diagnose = false, text = true;
+    bool diagnose = false, text = true, preMatch = false, battleText = true;
+    int repeat = 1;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--names" && i + 1 < argc) {
@@ -70,6 +73,12 @@ int main(int argc, char** argv) {
             realtimeMs = std::strtol(argv[++i], nullptr, 10);
         } else if (a == "--job-delay" && i + 1 < argc) {
             jobDelayMs = std::strtol(argv[++i], nullptr, 10);
+        } else if (a == "--pre-match") {
+            preMatch = true;
+        } else if (a == "--battle-text-off") {
+            battleText = false;
+        } else if (a == "--repeat" && i + 1 < argc) {
+            repeat = std::max(1, std::atoi(argv[++i]));
         } else if (a == "--diagnose") {
             diagnose = true;
         } else if (a == "--no-text") {
@@ -80,6 +89,10 @@ int main(int argc, char** argv) {
         } else {
             files.push_back(a);
         }
+    }
+    if (repeat > 1) {
+        auto originals = std::move(files);
+        for (const auto& file : originals) for (int i = 0; i < repeat; ++i) files.push_back(file);
     }
     registerAssets(repo);
     const std::string modelPath = repo + "/internal/ocr/neuraldata/recognizer.onnx";
@@ -101,8 +114,10 @@ int main(int argc, char** argv) {
     }
     nt::config::Config cfg = nt::config::Default();
     cfg.UI.PlayerNames = names;
+    cfg.UI.PreMatchSideRecognition = preMatch;
     nt::identity::SetMineNames(names);
     nt::frame::Pipeline pipeline(cfg, text);
+    pipeline.SetTextEnabled(battleText);
     if (!pipeline.Ok()) {
         std::fprintf(stderr, "engine: %s\n", pipeline.Error().c_str());
         return 1;
@@ -137,12 +152,15 @@ int main(int argc, char** argv) {
         }
         const nt::engine::Result& r = f.Res;
         std::string base = files[i].substr(files[i].find_last_of('/') + 1);
-        std::printf("%s\tscene=%s fight=%s unc=%s profile=%s side=%s mine=%s opp=%s text=%s\n", base.c_str(), r.Scene.c_str(),
+        std::printf("%s\tscene=%s fight=%s unc=%s profile=%s side=%s mine=%s opp=%s text=%s", base.c_str(), r.Scene.c_str(),
                     r.Fighting ? "true" : "false", r.Uncertain ? "true" : "false", r.LayoutProfile.c_str(), r.PlayerSide.c_str(),
                     r.PlayerName.c_str(), r.OppName.c_str(), r.TextStatus.c_str());
-        if (diagnose && (r.LayoutProfile == "duel" || r.LayoutProfile == "camp")) {
+        std::printf(" duplicate=%s reused=%s hold=%s opening=%s\n", f.Duplicate ? "true" : "false", f.Reused ? "true" : "false",
+                    f.Hold ? "true" : "false", r.RoundOpening ? "true" : "false");
+        const std::string profile = r.Scene == "vs" ? "vs" : r.LayoutProfile;
+        if (diagnose && (profile == "vs" || profile == "duel" || profile == "camp")) {
             std::array<nt::Rect, 2> regions;
-            if (!layout.Regions(&img, r.LayoutProfile, regions)) {
+            if (!layout.Regions(&img, profile, regions)) {
                 std::printf("\tdiagnose: unsupported OCR HUD geometry\n");
                 continue;
             }
@@ -162,7 +180,9 @@ int main(int argc, char** argv) {
             }
             const auto texts = nt::hudtext::Texts(rows, lines);
             for (size_t s = 0; s < 2; ++s)
-                std::printf("\t%c views=%s account=%s\n", "LR"[s], views(texts[s]).c_str(), nt::hudtext::Consensus(texts[s]).c_str());
+                std::printf("\t%c views=%s account=%s\n", "LR"[s], views(texts[s]).c_str(),
+                            (profile == "vs" ? nt::hudtext::FooterAccount(texts[s], names) : nt::hudtext::Consensus(texts[s])).c_str());
+            if (profile == "vs") continue; // footer deliberately reads all three views
             // The live job reads the third treatment only when it can matter: same values and evidence.
             nt::hudtext::ReadResult lazy;
             if (!nt::hudtext::ReadAccounts(*sync, strips, regions, lazy)) {

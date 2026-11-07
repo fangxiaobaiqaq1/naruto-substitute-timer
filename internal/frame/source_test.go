@@ -300,6 +300,42 @@ func TestIdenticalCapturesSkipAnalysisAndChangedPixelsRunItAgain(t *testing.T) {
 	}
 }
 
+type asyncAnalysisProbe struct {
+	countingEngine
+	pending bool
+}
+
+func (e *asyncAnalysisProbe) NeedsAnalysis(time.Time) bool { return e.pending }
+func (e *asyncAnalysisProbe) Analyze(img *image.RGBA) engine.Result {
+	e.pending = false
+	r := e.countingEngine.Analyze(img)
+	r.PlayerSide = "left"
+	return r
+}
+
+func TestAsyncEvidenceReanalysisStillDeliversDuplicatePixels(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 400, 250))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{90, 120, 140, 255}), image.Point{}, draw.Src)
+	eng := &asyncAnalysisProbe{}
+	var d dedupedAnalysis
+	at := time.Unix(1700000000, 0)
+	p, closeProvider := boundedProvider(func() Frame {
+		at = at.Add(16 * time.Millisecond)
+		return d.analyze(img, eng, detect.ModeStretch, at, at, "sdk")
+	}, nil, time.Second)
+	defer closeProvider()
+	for i := range 4 {
+		eng.pending = i == 2 // OCR completed between otherwise identical captures.
+		f := p()
+		if f.Err != nil || f.Duplicate != (i > 0) || f.AnalysisStarted.IsZero() != (i == 1 || i == 3) || f.PlayerSide != "left" {
+			t.Fatalf("frame %d: %+v", i, f)
+		}
+	}
+	if eng.calls != 2 {
+		t.Fatalf("want initial + one async reanalysis, got %d", eng.calls)
+	}
+}
+
 type geometryEngine struct{ countingEngine }
 
 func (e *geometryEngine) Analyze(img *image.RGBA) engine.Result {

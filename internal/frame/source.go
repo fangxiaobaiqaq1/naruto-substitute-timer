@@ -569,7 +569,8 @@ func snapshotFingerprinted(eng engine.Engine, mode detect.ContentMode, ring *cap
 // new frame for every poll; re-analyzing the same pixels would only burn CPU and
 // could never produce different beads. The reused result keeps this capture's
 // own image and acquisition times; the delivery layer still decides Duplicate
-// against the frame the UI actually received last.
+// against the frame the UI actually received last. Pending asynchronous text
+// can request re-analysis of identical pixels without changing that fingerprint.
 type dedupedAnalysis struct {
 	valid       bool
 	fingerprint uint64
@@ -587,7 +588,11 @@ func (d *dedupedAnalysis) analyzeFingerprinted(img *image.RGBA, base uint64, eng
 }
 
 func (d *dedupedAnalysis) analyzeWith(img *image.RGBA, fingerprint uint64, eng engine.Engine, mode detect.ContentMode, started, capturedAt time.Time, source string) Frame {
-	if d.valid && img != nil && fingerprint == d.fingerprint && d.last.Err == nil {
+	needsAnalysis := false
+	if async, ok := eng.(interface{ NeedsAnalysis(time.Time) bool }); ok {
+		needsAnalysis = async.NeedsAnalysis(capturedAt)
+	}
+	if d.valid && img != nil && fingerprint == d.fingerprint && d.last.Err == nil && !needsAnalysis {
 		f := d.last
 		f.Img = img
 		f.CaptureStarted, f.CapturedAt = started, capturedAt

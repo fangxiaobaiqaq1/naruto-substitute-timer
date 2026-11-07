@@ -71,6 +71,7 @@ class Session(
         if (!settings.rememberSide && settings.playerSide != "auto") settings.playerSide = "auto"
     }
     private var autoSide = ""
+    private var autoSideFromVS = false
     private var leftNinja = ""
     private var rightNinja = ""
     private var leftNinjaCandidate = ""
@@ -111,6 +112,16 @@ class Session(
      * it must only schedule work (OverlayController posts a refresh while it is not polling).
      */
     @Volatile var revisionListener: (() -> Unit)? = null
+
+    init {
+        // Clear at the settings change, even without another capture. The source
+        // belongs to the cached identity, NOT the current scene (it may be fight).
+        settings.addListener { key ->
+            if (key == Settings.KEY_PRE_MATCH_SIDE_RECOGNITION) synchronized(lock) {
+                if (clearDisabledVSSideLocked()) bump()
+            }
+        }
+    }
 
     val fighting: Boolean get() = synchronized(lock) { isFighting }
     val side: String get() = synchronized(lock) { effectiveSideLocked() }
@@ -317,6 +328,7 @@ class Session(
 
     fun swapSide() {
         synchronized(lock) {
+            clearDisabledVSSideLocked()
             when (effectiveSideLocked()) {
                 "left" -> lockSideLocked("right")
                 "right" -> {
@@ -335,6 +347,7 @@ class Session(
 
     fun selectSideMode(mode: String) {
         synchronized(lock) {
+            clearDisabledVSSideLocked()
             when (mode.lowercase()) {
                 "left", "左", "左边" -> lockSideLocked("left")
                 "right", "右", "右边" -> lockSideLocked("right")
@@ -349,6 +362,7 @@ class Session(
 
     fun setRememberSide(remember: Boolean) {
         synchronized(lock) {
+            clearDisabledVSSideLocked()
             settings.rememberSide = remember
             if (!remember) {
                 settings.playerSide = "auto"
@@ -429,11 +443,25 @@ class Session(
         rightNinjaCandidate = f.rightNinjaCandidate
     }
 
+    /** Disabling VS revokes only that source's cached identity, never clocks/manual/battle identity. */
+    private fun clearDisabledVSSideLocked(): Boolean {
+        if (settings.preMatchSideRecognition || !autoSideFromVS) return false
+        autoSide = ""
+        autoSideFromVS = false
+        if (!manualSideLocked()) playerSideState = ""
+        return true
+    }
+
     /** Go maybeAutoSide. */
     private fun maybeAutoSideLocked(f: AnalysisResult) {
         if (f.err != null) return
+        // A VS result already in flight when the switch changed is not permission
+        // to auto-select a side. This never resets clocks or changes the hold state.
+        clearDisabledVSSideLocked()
+        if (f.scene == "vs" && !settings.preMatchSideRecognition) return
         if (f.scene.isNotEmpty() && f.scene != "fight" && f.scene != "vs") {
             autoSide = ""
+            autoSideFromVS = false
             if (!manualSideLocked()) playerSideState = ""
             return
         }
@@ -445,6 +473,7 @@ class Session(
             }) return
         // Remembered under a manual lock so switching back to auto applies at once.
         autoSide = f.playerSide
+        autoSideFromVS = f.scene == "vs"
         if (!manualSideLocked()) playerSideState = f.playerSide
     }
 

@@ -1,0 +1,11 @@
+{
+  "source": "user-supplied death-swap VS screenshot (private, not distributed)",
+  "sourcePath": "inbox/regressions/vs-account-side-20261107/swap.png",
+  "sourceSize": [1268, 713],
+  "sourceSha256": "b1648640d4ade7c2845e4f8e92687021459558f3eec5a29764956cdf440fb857",
+  "cropXYXY": [548, 449, 716, 620],
+  "normalization": "RGB crop resized with Pillow bilinear to the manifest's 1920-wide reference",
+  "templateSize": [254, 259],
+  "templateSha256": "1553f3174a5925c440fbb2f87de303689b04ddd6081151411dcf864afbe11b6c",
+  "scope": "VS logo only; no account name or portrait. A hold scene, never round-opening evidence."
+}

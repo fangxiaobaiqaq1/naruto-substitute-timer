@@ -429,7 +429,8 @@ func avatarReadout(m AvatarMatch) Readout {
 	switch normalizeAvatarName(name) {
 	case normalizeAvatarName(Obito):
 		out.Slots, out.Palette = 4, Purple
-	case normalizeAvatarName(SasukeXiayin):
+	case normalizeAvatarName(SasukeXiayin), normalizeAvatarName(SasukeJinying):
+		// The reviewed 924641 skin retains Xiayin's row, not a normal Sasuke HUD.
 		out.Slots, out.Palette, out.RowOffsetY = 4, Xiayin, 9
 	case normalizeAvatarName(ItachiHyakusen):
 		// Corpus ID 920541 is 宇智波鼬[百战]. Only that exact current avatar

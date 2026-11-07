@@ -5,6 +5,8 @@
 # Export the optional matrix with NARUTO_MATRIX_OUT=/tmp/matrix go test ./internal/ui \
 #   -run '^TestSpecialHUDResolutionMatrix$' -count=1
 # Reuse this check's *own* output: ANDROID_CHAIN_OUT=/tmp/my-chaincheck .../run.sh
+# Also checks unchanged opening/swap PNGs through real OCR -> JNI -> Session.
+# ANDROID_CHAIN_VS_ONLY=1 skips the older bean/calibration matrix, not the VS assertions.
 # No Gradle/network/APK build; Kotlin 2.0.21 and dependencies come from Gradle cache.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -24,7 +26,8 @@ FIXTURE="${1:-$REPO/inbox/regressions/wide-overlay-beans-20261009.png}"
 SPECIAL_FIXTURE="${2:-$REPO/inbox/regressions/xiayin-wide-overlay-20261009.png}"
 MATRIX="${3:-${NARUTO_MATRIX_OUT:-}}"
 [[ -z "$MATRIX" || -d "$MATRIX" ]] || { echo "Missing exported matrix directory: $MATRIX" >&2; exit 1; }
-for fixture in "$FIXTURE" "$SPECIAL_FIXTURE"; do
+VS_DIR="$REPO/inbox/regressions/vs-account-side-20261107"
+for fixture in "$FIXTURE" "$SPECIAL_FIXTURE" "$VS_DIR/opening.png" "$VS_DIR/swap.png"; do
     [[ -f "$fixture" ]] || { echo "Missing required user PNG fixture: $fixture" >&2; exit 1; }
 done
 [[ -x "$JAVA_HOME/bin/java" && -f "$ANDROID_JAR" ]] || {
@@ -57,7 +60,9 @@ snapshot() {
             "$REPO/internal/ninja/templates" -type f \( -name '*.json' -o -name '*.png' \) -print0
         if [[ -n "$MATRIX" ]]; then find "$MATRIX" -type f \( -name '*.png' -o -name 'case.tsv' \) -print0; fi
         printf '%s\0' "$CPP/jni.cpp" "${PRODUCTION[@]}" "$FIXTURE" "$SPECIAL_FIXTURE" \
-            "$HERE/ChainCheck.kt" "$HERE/run.sh"
+            "$HERE/ChainCheck.kt" "$HERE/VSCheck.kt" "$HERE/host_pixels.cpp" "$HERE/run.sh" \
+            "$VS_DIR/opening.png" "$VS_DIR/swap.png" "$REPO/internal/ocr/neuraldata/recognizer.onnx"
+        find "$HERE/stubs" "$CPP/tests/jnihost" -type f -print0
     } | sort -z | xargs -0 sha256sum
 }
 snapshot > "$OUT/production.before.sha256"
@@ -65,14 +70,14 @@ snapshot > "$OUT/production.before.sha256"
 HOSTCHECK_OUT="$OUT/pic" EXTRA_CXXFLAGS=-fPIC EXTRA_LDFLAGS= \
     bash "$HERE/../hostcheck.sh"
 "${CXX:-g++}" -std=c++17 -O2 -g -fPIC -shared -fno-fast-math -ffp-contract=off -pthread \
-    -Wall -Wno-unused-function -I "$HERE/stubs" -I "$CPP/include" \
+    -Wall -Wno-unused-function -I "$HERE/stubs" -I "$CPP/tests/jnihost" -I "$CPP/include" \
     -I "$JAVA_HOME/include" -I "$JAVA_HOME/include/linux" \
     "$CPP/jni.cpp" "$HERE/host_pixels.cpp" "$OUT/pic/libnarutocore_host.a" \
     -Wl,-z,defs -o "$OUT/libnarutocore.so"
 mkdir -p "$OUT/stubs" "$OUT/classes" "$OUT/tests"
 "$JAVA_HOME/bin/javac" --release 17 -d "$OUT/stubs" \
     "$HERE/stubs/android/content/Context.java" "$HERE/stubs/android/content/SharedPreferences.java" \
-    "$HERE/stubs/android/hardware/HardwareBuffer.java"
+    "$HERE/stubs/android/hardware/HardwareBuffer.java" "$HERE/stubs/android/content/res/AssetManager.java"
 kotlinc() {
     "$JAVA_HOME/bin/java" -cp "$COMPILER" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
         -jvm-target 17 -no-stdlib -no-reflect "$@"
@@ -81,12 +86,18 @@ kotlinc() {
 kotlinc -classpath "$STDLIB:$ANNOTATIONS:$ANDROID_JAR" -d "$OUT/classes" "${PRODUCTION[@]}"
 # Only the test driver is compiled against the instantiable host Context.
 kotlinc -classpath "$OUT/classes:$OUT/stubs:$STDLIB:$ANNOTATIONS" \
-    -d "$OUT/tests" "$HERE/ChainCheck.kt"
+    -d "$OUT/tests" "$HERE/ChainCheck.kt" "$HERE/VSCheck.kt"
+if [[ "${ANDROID_CHAIN_VS_ONLY:-0}" != 1 ]]; then
 "$JAVA_HOME/bin/java" -Dfile.encoding=UTF-8 -Djava.awt.headless=true -XX:MaxDirectMemorySize=512m -Djava.library.path="$OUT" \
     -cp "$OUT/tests:$OUT/classes:$OUT/stubs:$STDLIB" hostchain.ChainCheckKt "$REPO" "$FIXTURE" "$SPECIAL_FIXTURE" "$MATRIX" \
     | tee "$OUT/results.log"
+fi
+"$JAVA_HOME/bin/java" -Dfile.encoding=UTF-8 -Djava.awt.headless=true -XX:MaxDirectMemorySize=512m -Djava.library.path="$OUT" \
+    -cp "$OUT/tests:$OUT/classes:$OUT/stubs:$STDLIB" hostchain.VSCheckKt "$REPO" "$FIXTURE" \
+    | tee "$OUT/vs-results.log"
 snapshot > "$OUT/production.after.sha256"
 cmp -s "$OUT/production.before.sha256" "$OUT/production.after.sha256" || {
     echo "Production inputs changed during this run; results are provisional. Rerun." >&2; exit 1;
 }
-echo "PASS: stable production inputs; trace: $OUT/results.log"
+echo "PASS: stable production inputs; VS trace: $OUT/vs-results.log"
+[[ "${ANDROID_CHAIN_VS_ONLY:-0}" == 1 ]] || echo "Bean/calibration trace: $OUT/results.log"

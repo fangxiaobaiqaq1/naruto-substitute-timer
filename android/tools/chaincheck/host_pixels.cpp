@@ -5,6 +5,9 @@
 #undef main
 #include <jni.h>
 #include <stdexcept>
+#include <chrono>
+#include <thread>
+#include "nt/hudtext.h"
 
 namespace {
 std::string pathString(JNIEnv* env, jstring path) {
@@ -26,6 +29,30 @@ Java_hostchain_HostPixels_registerAssets(JNIEnv* env, jclass, jstring repo) {
         registerAssets(pathString(env, repo));
         if (g_images == 0 || g_texts == 0) throw std::runtime_error("missing recognition assets");
         std::fprintf(stderr, "host assets: %d images, %d texts\n", g_images, g_texts);
+    } catch (const std::exception& e) { fail(env, e); }
+}
+
+// Host-only model I/O; inference and async scheduling are the production Worker.
+// Does NOT emulate Android AssetManager/OS capture.
+extern "C" JNIEXPORT void JNICALL
+Java_hostchain_HostPixels_setOCRModel(JNIEnv* env, jclass, jstring path) {
+    try {
+        const auto file = pathString(env, path);
+        nt::hudtext::Worker::Instance().SetLoader([file](std::vector<uint8_t>& out, std::string* err) {
+            if (readFile(file, out)) return true;
+            if (err) *err = "host OCR model missing";
+            return false;
+        });
+    } catch (const std::exception& e) { fail(env, e); }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_hostchain_HostPixels_waitOCR(JNIEnv* env, jclass) {
+    try {
+        auto& worker = nt::hudtext::Worker::Instance();
+        for (int i = 0; i < 2000 && !worker.Idle(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (!worker.Idle()) throw std::runtime_error("host OCR did not finish");
     } catch (const std::exception& e) { fail(env, e); }
 }
 

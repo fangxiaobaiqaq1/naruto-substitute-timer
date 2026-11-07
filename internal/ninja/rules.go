@@ -18,6 +18,7 @@ const (
 	MadaraLegacyAlias = "宇智波斑[神驹佑祥]"
 	Obito             = "宇智波带土[十尾人柱力]"
 	SasukeXiayin      = "宇智波佐助[侠隐江湖]"
+	SasukeJinying     = "宇智波佐助[烬影绝踪]" // 侠隐江湖的红色 HUD 皮肤（924641）。
 	Naruto            = "漩涡鸣人[暴怒·第六尾]"
 	ItachiHyakusen    = "宇智波鼬[百战]"
 	MinatoKyubi       = "波风水门[九喇嘛连结]"

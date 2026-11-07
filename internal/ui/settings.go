@@ -81,6 +81,7 @@ func (s *session) setSideModeLocked(mode string) {
 func (s *session) clearAutoIdentity() {
 	s.autoIdentity = identity.Readout{}
 	s.autoIdentityAt = time.Time{}
+	s.autoIdentityFromVS = false
 	if !manualSide(s.cfg.UI.PlayerSide) {
 		s.side, s.oppName = "", ""
 	}
@@ -197,7 +198,7 @@ func (s *session) buildSettings(tab int) {
 	name := strings.Join(s.cfg.UI.PlayerNames, "，")
 	ninjaText := s.cfg.UI.NinjaQuery
 	mode, remember, top := s.cfg.UI.PlayerSide, s.remember, s.topmost
-	autoText := s.cfg.UI.AutoTextRecognition
+	autoText, preMatchSide := s.cfg.UI.AutoTextRecognition, s.cfg.UI.PreMatchSideRecognition
 	opacity, fontScale := s.cfg.UI.WindowOpacity, s.cfg.UI.FontScale
 	overlayMode, showBoth, gpuAccel := s.cfg.UI.OverlayMode, s.cfg.UI.ShowBothSides, s.cfg.UI.GPUAcceleration
 	miniOpacity, miniAutoScale := s.cfg.UI.MiniOpacity, s.cfg.UI.MiniAutoScale
@@ -223,6 +224,9 @@ func (s *session) buildSettings(tab int) {
 	rememberChk := widget.NewCheck("记住认边方式（下次启动沿用）", nil)
 	rememberChk.SetChecked(remember)
 	rememberChk.OnChanged = func(checked bool) { showSettingsError(s.setRememberSide(checked), w) }
+	preMatchSideCheck := widget.NewCheck("开局/换人画面自动认边", nil)
+	preMatchSideCheck.SetChecked(preMatchSide)
+	preMatchSideCheck.OnChanged = func(on bool) { showSettingsError(s.setPreMatchSideRecognition(on), w) }
 
 	// ---- 名字与忍者（点保存生效） ----
 	nameEntry := widget.NewEntry()
@@ -231,7 +235,7 @@ func (s *session) buildSettings(tab int) {
 	ninjaEntry := widget.NewSelectEntry([]string{"", ninja.FifthMizukage, ninja.Hashirama, ninja.Madara, ninja.Obito, ninja.Naruto, ninja.HanzoEdo})
 	ninjaEntry.SetPlaceHolder("留空自动；或选择完整忍者版本")
 	ninjaEntry.SetText(ninjaText)
-	textCheck := widget.NewCheck("后台识别名字（内置本地 OCR）", nil)
+	textCheck := widget.NewCheck("战斗画面识别名字（内置本地 OCR）", nil)
 	textCheck.SetChecked(autoText)
 	textCheck.OnChanged = func(on bool) { showSettingsError(s.setTextRecognition(on), w) }
 	s.textStatusLabel = wrapped(textStatus)
@@ -350,7 +354,9 @@ func (s *session) buildSettings(tab int) {
 	diagnosticEntry := widget.NewButtonWithIcon("采集与延迟诊断 / 原帧录制", theme.MediaRecordIcon(), s.openDiagnostics)
 	general := container.NewVScroll(container.NewVBox(
 		sectionCard("我方所在边", container.NewVBox(sideSel, rememberChk,
-			wrapped("点选即生效。选的是我方，浮窗计时的是另一边；自动尚未认出时显示“待认边”。"))),
+			wrapped("点选即生效。选的是我方，浮窗计时的是另一边；自动尚未认出时显示“待认边”。"),
+			preMatchSideCheck,
+			wrapped("默认关闭。先在下方“我的名字”填写并保存我的账号名，开局和换人的 VS 底部仅按账号名精确匹配；不改手动选择的左/右边。此开关独立于战斗名字 OCR，战斗 OCR 关闭也可用。"))),
 		sectionCard("名字与对面忍者", container.NewVBox(
 			widget.NewLabel("我的名字"), nameEntry, textCheck, s.textStatusLabel, gpuChk,
 			widget.NewLabel("指定对面忍者（留空自动识别）"), ninjaEntry,
@@ -493,11 +499,26 @@ func (s *session) setTextRecognition(on bool) error {
 	return err
 }
 
+func (s *session) setPreMatchSideRecognition(on bool) error {
+	s.mu.Lock()
+	s.cfg.UI.PreMatchSideRecognition = on
+	if !on && s.autoIdentityFromVS {
+		s.clearAutoIdentity()
+	}
+	snapshot := s.settingsSnapshotLocked()
+	s.mu.Unlock()
+	// Apply before disk I/O; a slow or failed save must not delay the toggle.
+	if s.preMatchSideControl != nil {
+		s.preMatchSideControl(on)
+	}
+	return snapshot.Save()
+}
+
 // Caller holds s.mu. Text recognition is an optional aid, never a replacement
 // for unknown/obscured bean states or the manually selected opponent variant.
 func (s *session) textStatusText() string {
 	if !s.cfg.UI.AutoTextRecognition {
-		return "文字识别已关闭，使用模板和手动选择"
+		return "战斗名字识别已关闭，使用模板和手动选择"
 	}
 	if s.textError != "" {
 		return s.textError

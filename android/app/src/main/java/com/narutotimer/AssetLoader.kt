@@ -113,6 +113,7 @@ object AssetLoader {
         }
         val decoded = System.nanoTime()
         if (settings != null) applyPlayerNames(settings) else NativeCore.setPlayerNames(playerNames)
+        NativeCore.nativeSetPreMatchSideRecognition(settings?.preMatchSideRecognition ?: false)
         if (settings != null && !NativeCore.setCalibration(settings)) errors += "calibration: ${NativeCore.lastError()}"
         // 对局顶部账号文字认边的识别模型：native 只记下位置，第一次要读账号时才加载（nt/hudtext.h）。
         if (!NativeCore.nativeSetTextModel(am, NativeCore.TEXT_MODEL_ASSET)) errors += "text model: ${NativeCore.lastError()}"

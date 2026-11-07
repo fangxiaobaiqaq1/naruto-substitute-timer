@@ -194,6 +194,8 @@ std::optional<nt::config::RegionCalibration>& g_calibration = *new std::optional
 std::string& g_lastError = *new std::string;
 // 对局顶部账号文字认边（nt/hudtext.h）：Kotlin 在自动认边时打开；分析线程每帧取用。
 std::atomic<bool>& g_textEnabled = *new std::atomic<bool>(true);
+// Independent VS footer/image option; persists across nativeInit like account names.
+std::atomic<bool>& g_preMatchSideRecognition = *new std::atomic<bool>(false);
 // 文字认边状态快照（nativeTextStatus），每帧分析后在 g_cfgMu 内更新；空 = 没有文字认边。
 std::string& g_textStatus = *new std::string;
 
@@ -405,6 +407,7 @@ nt::config::Config currentConfig() {
     nt::config::Config cfg = nt::config::Default();
     std::lock_guard<std::mutex> lock(g_cfgMu);
     cfg.UI.PlayerNames = g_playerNames;
+    cfg.UI.PreMatchSideRecognition = g_preMatchSideRecognition.load();
     cfg.Layout.Calibration = g_calibration;
     return cfg;
 }
@@ -822,6 +825,20 @@ jboolean nativeSetTextModel(JNIEnv* env, jclass, jobject assetManager, jstring j
 // 自动认边时打开（Kotlin：「我方」为自动）。下一帧生效，不等正在分析的一帧。
 void nativeSetTextRecognition(JNIEnv*, jclass, jboolean on) { g_textEnabled.store(on == JNI_TRUE); }
 
+// Called off the UI/session lock. Cancel obsolete VS work/evidence now; never
+// rebuild the pipeline/reset delivery to make identical pixels look fresh.
+void nativeSetPreMatchSideRecognition(JNIEnv*, jclass, jboolean on) {
+    try {
+        std::lock_guard<std::mutex> lock(g_analysisMu);
+        g_preMatchSideRecognition.store(on == JNI_TRUE);
+        if (g_pipeline) g_pipeline->SetPreMatchSideRecognition(on == JNI_TRUE);
+    } catch (const std::exception& e) {
+        setError(std::string("nativeSetPreMatchSideRecognition: ") + e.what());
+    } catch (...) {
+        setError("nativeSetPreMatchSideRecognition: unknown exception");
+    }
+}
+
 // 文字认边状态："<状态>\n<原因>\n<模型已加载 0/1>"；没有识别模型 = null。最近一帧分析后的快照
 // （g_cfgMu），不等正在分析的一帧。状态：off / waiting / reading / pending / ready / template /
 // unavailable（Go hudtext 的 TextStatus）。
@@ -883,6 +900,8 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(nativeSetTextModel)},
     {const_cast<char*>("nativeSetTextRecognition"), const_cast<char*>("(Z)V"),
      reinterpret_cast<void*>(nativeSetTextRecognition)},
+    {const_cast<char*>("nativeSetPreMatchSideRecognition"), const_cast<char*>("(Z)V"),
+     reinterpret_cast<void*>(nativeSetPreMatchSideRecognition)},
     {const_cast<char*>("nativeTextStatus"), const_cast<char*>("()Ljava/lang/String;"),
      reinterpret_cast<void*>(nativeTextStatus)},
     {const_cast<char*>("nativeReleaseTextModel"), const_cast<char*>("()V"),

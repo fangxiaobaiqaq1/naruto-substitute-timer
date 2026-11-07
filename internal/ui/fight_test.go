@@ -153,21 +153,48 @@ func TestApplySceneReturnFromHoldDoesNotStartClock(t *testing.T) {
 }
 
 func TestMaybeAutoSideFromVS(t *testing.T) {
-	s := &session{cfg: config.Default()}
-	s.cfg.UI.PlayerSide = "auto"
-	s.maybeAutoSide(frame.Frame{PlayerSide: "right"})
-	if s.side != "right" {
-		t.Fatalf("side = %q", s.side)
+	for _, tc := range []struct {
+		name, scene, account string
+		enabled              bool
+		want                 string
+	}{
+		{"VS disabled", "vs", "我的账号", false, ""},
+		{"VS enabled without battle OCR", "vs", "我的账号", true, "right"},
+		{"partial account", "vs", "我的账", true, ""},
+		{"different account", "vs", "别人的账号", true, ""},
+		{"fight unchanged", "fight", "我的账号", false, "right"},
+		{"legacy scene unchanged", "", "我的账号", false, "right"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &session{cfg: config.Default()}
+			s.cfg.UI.PlayerNames = []string{"我的账号"}
+			s.cfg.UI.AutoTextRecognition = false
+			s.cfg.UI.PreMatchSideRecognition = tc.enabled
+			s.maybeAutoSide(frame.Frame{Scene: tc.scene, PlayerSide: "right", PlayerName: tc.account})
+			if s.side != tc.want || s.autoIdentity.Side != tc.want || s.cfg.UI.PlayerSide != "auto" {
+				t.Fatalf("side=%q cached=%q mode=%q, want auto/%q", s.side, s.autoIdentity.Side, s.cfg.UI.PlayerSide, tc.want)
+			}
+		})
 	}
 }
 
 func TestMaybeAutoSideDoesNotOverrideManual(t *testing.T) {
-	s := &session{cfg: config.Default()}
-	s.cfg.UI.PlayerSide = "left"
-	s.side = "left"
-	s.maybeAutoSide(frame.Frame{PlayerSide: "right"})
-	if s.side != "left" {
-		t.Fatalf("manual side must stay, got %q", s.side)
+	for _, enabled := range []bool{false, true} {
+		s := &session{cfg: config.Default(), side: "left"}
+		s.cfg.UI.PlayerSide = "left"
+		s.cfg.UI.PlayerNames = []string{"我的账号"}
+		s.cfg.UI.PreMatchSideRecognition = enabled
+		s.maybeAutoSide(frame.Frame{Scene: "vs", PlayerSide: "right", PlayerName: "我的账号"})
+		if s.side != "left" || s.cfg.UI.PlayerSide != "left" {
+			t.Fatalf("manual side must stay, got %q (VS enabled=%v)", s.side, enabled)
+		}
+		wantCached := ""
+		if enabled {
+			wantCached = "right"
+		}
+		if s.autoIdentity.Side != wantCached {
+			t.Fatalf("cached=%q, want %q (VS enabled=%v)", s.autoIdentity.Side, wantCached, enabled)
+		}
 	}
 }
 

@@ -28,6 +28,11 @@
 //    卡片让对局每一两秒就「看不清」一帧，一次识别又要 1–2 s，按 Go 的规则永远凑不齐两次。
 //    读法仍要对上保持期间每一帧和之后第一帧的字形像素。
 //
+// 可选 VS 底栏独立于 SetEnabled：仅 scene=vs、完整配置账号（仅去 OCR 分字空白，不做模糊/前缀/排除）
+// 三视图两票 + 两次不同采集时间 + 当前整条 footer ROI lettering 签名（无局部 proof，防止新增后缀
+// 复用短账号）。战斗 glyph proof 不变。开局/死亡换人同一 footer，不新增 RoundOpening。
+// NeedsAnalysis 唤醒静态画面的异步完成和到期重试；交付层 Duplicate 仍由原像素指纹决定。
+//
 // 线程：Engine 只在分析线程调用（JNI g_analysisMu）；识别在 ocr 后台线程（一次最多一个任务），
 // 结果经带锁的单槽交回，分析线程从不等待识别。
 #pragma once
@@ -76,6 +81,10 @@ private:
     bool ok_ = false;
 };
 
+// VS footer：960×540 左右/底部锚点，不随战斗豆/头像校准。
+bool VSNameRegions(const detect::ContentArea& area, const Rect& bounds, std::array<Rect, 2>& out);
+std::string FooterAccount(const std::array<std::string, variants>& raw, const std::vector<std::string>& names);
+
 // Go lettering：白字黑边的像素签名（这里是 64 位哈希，只比相等）与像素数。
 uint64_t Lettering(const RGBA& img, Rect roi, int& white);
 
@@ -93,7 +102,8 @@ std::vector<ocr::Word> WordsForRow(const std::vector<ocr::Line>& lines, const Re
 std::array<std::array<std::string, variants>, 2> Texts(const std::vector<Row>& rows, const std::vector<ocr::Line>& lines);
 
 // Go compact。
-std::string Compact(const std::string& s);
+// normalizeBrackets=false 只去分字空白（footer 不等同全角/半角/其它字符）。
+std::string Compact(const std::string& s, bool normalizeBrackets = true);
 
 // 一种处理的账号读法：标题里最后一对完整括号内的文字，或者（没有完整括号时）最后一个左括号之后
 // 到行尾的可见部分（去掉行尾的 U+FFFD）。Value = "(" + 账号 + ")" 或 "(" + 可见部分；空 = 没有。
@@ -119,6 +129,7 @@ struct SideDecision {
 };
 SideDecision DecideSide(const std::array<std::string, 2>& accounts, const std::vector<std::string>& names,
                         const Dictionary& known);
+SideDecision DecideFooterSide(const std::array<std::string, 2>& accounts, const std::vector<std::string>& names);
 
 // ---------------------------------------------------------------------------
 // 字形证据（Go glyph_evidence.go）
@@ -154,6 +165,12 @@ struct ReadResult {
 };
 bool ReadAccounts(const ocr::Recognizer& recognizer, const std::array<RGBA, 2>& strips, const std::array<Rect, 2>& regions,
                   ReadResult& out, const std::atomic<bool>* cancel = nullptr);
+
+// Footer values are pure full accounts (no parentheses); proofs stay nil so the
+// whole ROI lettering signature binds them. A suffix invalidates even accepted text.
+bool ReadFooterAccounts(const ocr::Recognizer& recognizer, const std::array<RGBA, 2>& strips,
+                        const std::array<Rect, 2>& regions, const std::vector<std::string>& names,
+                        ReadResult& out, const std::atomic<bool>* cancel = nullptr);
 
 // Go valueState。
 struct ValueState {
@@ -225,7 +242,9 @@ public:
     ~Engine() override;
     engine::Result AnalyzeAt(const RGBA* img, TimeNs at) override;
 
+    bool NeedsAnalysis(TimeNs at) override;
     void SetEnabled(bool enabled);
+    void SetPreMatchSideRecognition(bool on);
     // "off" / "waiting" / "reading" / "pending" / "ready" / "template" / "unavailable"，以及失败原因。
     std::string Status() const;
     std::string LastError() const;
@@ -264,8 +283,11 @@ private:
     Worker* worker_;
     NameLayout layout_;
     std::shared_ptr<Mailbox> mailbox_;
+    // Completed during a short fight hold: consumed once, validated on readable return.
+    std::shared_ptr<Completion> heldCompletion_;
 
     bool enabled_ = true;
+    bool dirty_ = false, pollOCR_ = false;
     bool reported_ = false;  // side logged for this generation
     bool busy_ = false;
     TimeNs busySince_ = 0;

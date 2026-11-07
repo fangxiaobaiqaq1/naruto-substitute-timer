@@ -104,6 +104,8 @@ public:
     // 文字认边包装（没有则 nullptr）与开关（跨 Rebuild 保留）。
     hudtext::Engine* Text() const { return text_.get(); }
     void SetTextEnabled(bool enabled);
+    // Live VS OCR + image-Guesser gate; no engine rebuild or delivery reset.
+    void SetPreMatchSideRecognition(bool on);
 
 private:
     std::shared_ptr<engine::Engine> build(const config::Config& cfg, std::string* err);

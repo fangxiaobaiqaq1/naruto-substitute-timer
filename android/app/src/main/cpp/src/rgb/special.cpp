@@ -246,7 +246,10 @@ BeadState specialPixel(ninja::Palette palette, int r, int g, int b) {
             if (r >= 130 && r - g >= 65 && r - b >= 55) {
                 return detect::StateLight;
             }
-            if (r <= 85 && g <= 50 && b <= 55 && r - g >= 12 && r - b >= 12) {
+            // 烬影绝踪 empty cores reach R≈100 but retain almost zero G/B.
+            // Keep the brighter/desaturated transition and red rims unknown.
+            if (((r <= 85 && g <= 50 && b <= 55) || (r <= 110 && g <= 15 && b <= 15)) &&
+                r - g >= 12 && r - b >= 12) {
                 return detect::StateDark;
             }
             break;

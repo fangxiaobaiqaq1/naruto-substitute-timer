@@ -742,10 +742,11 @@ bool AvatarCatalog::decode(avatarEntry* entry) {
 bool avatarVariantPolicy(const std::string& name) {
     static const std::string& obito = *new std::string(normalizeAvatarName(Obito));
     static const std::string& xiayin = *new std::string(normalizeAvatarName(SasukeXiayin));
+    static const std::string& jinying = *new std::string(normalizeAvatarName(SasukeJinying));
     static const std::string& itachi = *new std::string(normalizeAvatarName(ItachiHyakusen));
     static const std::string& minato = *new std::string(normalizeAvatarName(MinatoKyubi));
     const std::string key = normalizeAvatarName(canonicalAvatarName(name));
-    return key == obito || key == xiayin || key == itachi || key == minato;
+    return key == obito || key == xiayin || key == jinying || key == itachi || key == minato;
 }
 
 void avatarFactorSize(const avatarEntry* entry, double scale, double factor, int& w, int& h) {

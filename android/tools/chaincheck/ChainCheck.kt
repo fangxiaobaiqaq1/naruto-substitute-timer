@@ -21,6 +21,8 @@ import kotlin.math.roundToInt
 object HostPixels {
     @JvmStatic external fun registerAssets(repo: String)
     @JvmStatic external fun readPng(path: String, target: ByteBuffer?): IntArray
+    @JvmStatic external fun setOCRModel(path: String)
+    @JvmStatic external fun waitOCR()
 }
 
 private const val BASE = 10_000_000_000L

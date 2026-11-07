@@ -15,7 +15,9 @@
 #include "nt/frame.h"
 #include "nt/match.h"
 #include "nt/ninja.h"
+#include "nt/ninja_internal.h"
 #include "nt/rgb.h"
+#include "nt/rgb_internal.h"
 #include "nt/scene.h"
 
 namespace {
@@ -28,6 +30,23 @@ void check(bool ok, const std::string& message) {
     if (!ok) {
         std::cerr << "FAIL: " << message << '\n';
         std::exit(1);
+    }
+}
+
+void testXiayinJinyingSkin() {
+    for (const Color c : {Color{90, 0, 0, 255}, Color{100, 5, 5, 255}, Color{110, 15, 15, 255}})
+        check(rgb::specialPixel(ninja::Red, c.R, c.G, c.B) == detect::StateDark, "Jinying dark-red core");
+    for (const Color c : {Color{111, 0, 0, 255}, Color{100, 16, 0, 255}, Color{100, 0, 16, 255}, Color{0, 0, 0, 255}})
+        check(rgb::specialPixel(ninja::Red, c.R, c.G, c.B) == detect::StateUnknown, "ambiguous red remains unknown");
+    for (const std::string& name : {ninja::SasukeXiayin, ninja::SasukeJinying, std::string("宇智波佐助[须佐能乎]")}) {
+        ninja::AvatarMatch m;
+        m.Name = name;
+        const auto r = ninja::avatarReadout(m);
+        const bool special = name == ninja::SasukeXiayin || name == ninja::SasukeJinying;
+        check(r.Name == name && r.AvatarName == name && r.Slots == (special ? 4 : 0) &&
+                  r.Palette_ == (special ? ninja::Xiayin : ninja::Palette::None) && r.RowOffsetY == (special ? 9 : 0) &&
+                  ninja::avatarVariantPolicy(name) == special,
+              "exact Xiayin skin policy and strict avatar margin");
     }
 }
 
@@ -568,7 +587,8 @@ struct Slot {
 };
 const Slot sB{kBlue, true, false}, sD{kDark, false, false}, sG{kGold, true, true}, sW{kWarm, true, false},
     sWG{kGold, true, false},  // the warm palette reads a gold core as a warm light
-    sP{kPurple, true, false}, sPD{kPurpleDark, false, false}, sR{kRed, true, false}, sRD{kRedDark, false, false};
+    sP{kPurple, true, false}, sPD{kPurpleDark, false, false}, sR{kRed, true, false}, sRD{kRedDark, false, false},
+    sJRD{Color{100, 5, 5, 255}, false, false}; // 烬影绝踪 empty core, distinct from the old dim red.
 
 struct CalibHUD {
     const CalibDevice& d;
@@ -749,7 +769,7 @@ void testRegionCalibrationSpecialRows() {
         {"itachi-title-portrait-box", ninja::ItachiHyakusen, "itachi_hyakusen", true, true, true, true, e, {{sB, sB, sG, sD}, {sD, sD, sD, sD}}},
         {"itachi-title-beads-only", ninja::ItachiHyakusen, "itachi_hyakusen", true, true, true, false, e, {{sG, sG, sG, sD}, {sB, sD, sD, sD}}},
         {"xiayin-purple", ninja::SasukeXiayin, "sasuke_xiayin", false, false, false, false, 9, {{sP, sP, sPD, sPD}, {sP, sP, sP, sP}, {sP, sPD, sPD, sPD}, {sP, sP, sP, sD}}},
-        {"xiayin-red", ninja::SasukeXiayin, "sasuke_xiayin", false, false, false, false, 9, {{sR, sRD, sRD, sRD}, {sR, sR, sR, sRD}, {sRD, sRD, sRD, sRD}, {sR, sR, sRD, sRD}}},
+        {"xiayin-red", ninja::SasukeXiayin, "sasuke_xiayin", false, false, false, false, 9, {{sR, sRD, sRD, sRD}, {sR, sR, sR, sRD}, {sJRD, sJRD, sJRD, sJRD}, {sR, sR, sJRD, sJRD}}},
         {"obito", ninja::Obito, "obito", false, false, false, false, 0, {{sP, sP, sPD, sD}, {sP, sP, sP, sPD}, {sPD, sPD, sPD, sPD}}},
         {"naruto", ninja::Naruto, "naruto", false, false, false, false, 0, {{sR, sR, sRD, sD}, {sR, sR, sR, sR}, {sR, sRD, sRD, sRD}}},
         {"hashirama", ninja::Hashirama, "hashirama", false, false, false, false, 0, {{sW, sW, sB, sW, sD, sD}, {sW, sW, sW, sW, sW, sD}, {sB, sB, sD, sD, sD, sD}, {sW, sWG, sW, sW, sW, sW}}},
@@ -1061,6 +1081,7 @@ void testFrameGeometry() {
 } // namespace
 
 int main() {
+    testXiayinJinyingSkin();
     testEnergyGaugeRow();  // first: independent of the scene/gate checks below
     testRegionCalibration();
     testRegionCalibrationSpecialRows();

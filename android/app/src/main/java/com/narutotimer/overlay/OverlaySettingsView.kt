@@ -63,6 +63,7 @@ class OverlaySettingsView(
 
     private val sideGroup = RadioGroup(context)
     private val remember = CheckBox(context)
+    private val preMatchSide = CheckBox(context)
     private val both = CheckBox(context)
     private val names = EditText(context)
     private val ninja = EditText(context)
@@ -105,6 +106,7 @@ class OverlaySettingsView(
             }
             sideGroup.check(sideGroup.getChildAt(SIDES.indexOf(settings.playerSide).coerceAtLeast(0)).id)
             remember.isChecked = settings.rememberSide
+            preMatchSide.isChecked = settings.preMatchSideRecognition
             both.isChecked = settings.showBothSides
             modeGroup.check(modeGroup.getChildAt(if (settings.overlayMode == "mini") 1 else 0).id)
             setBar(fullOpacity, settings.windowOpacity, FULL_OPACITY_MIN, OPACITY_STEP)
@@ -228,6 +230,11 @@ class OverlaySettingsView(
         both.text = "同时显示两边计时"
         both.setOnCheckedChangeListener { _, checked -> if (!syncing) session.setShowBothSides(checked) }
         Ui.add(p, both, 0f)
+        preMatchSide.text = "开局/换人画面自动认边（可选）"
+        preMatchSide.setOnCheckedChangeListener { _, checked -> if (!syncing) settings.preMatchSideRecognition = checked }
+        Ui.add(p, preMatchSide, 6f)
+        Ui.add(p, Ui.note(context, "默认关闭。开启后请填写并保存完整账号名（含装饰符号）；开局或死亡换人的 VS 底栏只确认完整我方名字，" +
+            "不凭陌生名字反推。手动选左/右始终优先，不影响已有倒计时。"), 2f)
         Ui.add(p, Ui.title(context, "我的名字"), 12f)
         names.hint = "账号名，多个用逗号分隔"
         names.inputType = InputType.TYPE_CLASS_TEXT

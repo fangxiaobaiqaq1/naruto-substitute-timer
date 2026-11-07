@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "nt/hash.h"
+#include "nt/identity.h"
 
 namespace nt::engine {
 
@@ -83,7 +84,19 @@ Gated::Gated(std::shared_ptr<Gate> gate, std::shared_ptr<Engine> inner, SideGues
     }
 }
 
+void Gated::SetPreMatchSideRecognition(bool on) {
+    if (preMatchSideRecognition_ == on) return;
+    preMatchSideRecognition_ = on;
+    dirty_ = true;
+}
+
+bool Gated::NeedsAnalysis(TimeNs at) {
+    return dirty_ || (Guess && namesSnapshot_ != identity::MineNames()) || (Inner && Inner->NeedsAnalysis(at));
+}
+
 Result Gated::AnalyzeAt(const RGBA* img, TimeNs at) {
+    dirty_ = false;
+    if (Guess) namesSnapshot_ = identity::MineNames();
     if (at == 0) {
         at = NowNs();
     }
@@ -146,7 +159,7 @@ Result Gated::AnalyzeAt(const RGBA* img, TimeNs at) {
         clearScene();
     }
     Identity id;
-    if (Guess) {
+    if (Guess && (d.SceneID != "vs" || preMatchSideRecognition_)) {
         id = Guess(img, d.SceneID);
     }
 

@@ -152,4 +152,25 @@ fi
 grep -q 'Required artifact exceeds Gitee 100 MB limit: too-large.apk' "$tmpdir/bad.out"
 [[ "$before" == "$(wc -l < "$log")" ]]
 
-echo 'publish-gitee.sh mock test passed'
+# Exercise the workflow's exact helper without contacting Gitee or persisting credentials.
+python3 - "$script_dir/../../.github/workflows/release.yml" <<'PY'
+import os
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+workflow = Path(sys.argv[1]).read_text()
+line = next(line.strip().removesuffix("\\").strip() for line in workflow.splitlines()
+            if "-c 'credential.helper=!" in line)
+helper = shlex.split(line)[1]
+env = dict(os.environ, GITEE_REPOSITORY="test-owner/repo", GITEE_TOKEN="git-test-token", GIT_TERMINAL_PROMPT="0")
+result = subprocess.run(["git", "-c", "credential.helper=", "-c", helper, "credential", "fill"],
+                        input="protocol=https\nhost=gitee.com\n\n", text=True, capture_output=True, env=env, check=True)
+fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+assert fields["username"] == "test-owner" and fields["password"] == "git-test-token"
+assert all("git-test-token" not in arg for arg in result.args)
+assert '"refs/tags/$TAG:refs/tags/$TAG"' in workflow
+PY
+
+echo 'publish-gitee.sh and workflow credential helper mock tests passed'

@@ -90,13 +90,13 @@ std::array<std::array<std::string, variants>, 2> Texts(const std::vector<Row>& r
     return out;
 }
 
-std::string Compact(const std::string& s) {
+std::string Compact(const std::string& s, bool normalizeBrackets) {
     std::string out;
     out.reserve(s.size());
     for (size_t i = 0, w = 0; i < s.size(); i += w) {
         char32_t r = utf8::DecodeRune(s, i, w);
         if (utf8::IsSpace(r)) continue;
-        switch (r) {
+        if (normalizeBrackets) switch (r) {
             case U'［': case U'【': case U'〔': r = U'['; break;
             case U'］': case U'】': case U'〕': r = U']'; break;
             case U'（': case U'{': r = U'('; break;

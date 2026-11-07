@@ -239,7 +239,9 @@ func (c Config) DebugOn() bool {
 }
 
 type UIConfig struct {
-	AutoTextRecognition       bool    `json:"autoTextRecognition"`
+	AutoTextRecognition bool `json:"autoTextRecognition"`
+	// PreMatchSideRecognition reads VS footer accounts independently of battle-name OCR.
+	PreMatchSideRecognition   bool    `json:"preMatchSideRecognition"`
 	PollIntervalMS            int     `json:"pollIntervalMs"`
 	IdlePollIntervalMS        int     `json:"idlePollIntervalMs"`
 	WindowWidth               int     `json:"windowWidth"`
@@ -371,6 +373,7 @@ func Default() Config {
 			SubstituteTable:           "assets/game/substitutes.json",
 			PlayerSide:                "auto",
 			AutoTextRecognition:       true,
+			PreMatchSideRecognition:   false,
 			RememberSide:              true,
 			AlwaysOnTop:               true,
 			AutoCheckUpdates:          true,

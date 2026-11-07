@@ -47,6 +47,11 @@ class Settings(context: Context) {
         @Synchronized get() = when (val v = prefs.getString(KEY_PLAYER_SIDE, "auto")) { "left", "right" -> v; else -> "auto" }
         set(value) = put(KEY_PLAYER_SIDE) { putString(KEY_PLAYER_SIDE, if (value == "left" || value == "right") value else "auto") }
 
+    /** Optional opening/death-swap VS footer recognition; independent of battle title OCR. */
+    var preMatchSideRecognition: Boolean
+        @Synchronized get() = prefs.getBoolean(KEY_PRE_MATCH_SIDE_RECOGNITION, false)
+        set(value) = put(KEY_PRE_MATCH_SIDE_RECOGNITION) { putBoolean(KEY_PRE_MATCH_SIDE_RECOGNITION, value) }
+
     /** ui.rememberSide */
     var rememberSide: Boolean
         @Synchronized get() = prefs.getBoolean(KEY_REMEMBER_SIDE, true)
@@ -184,6 +189,7 @@ class Settings(context: Context) {
     companion object {
         const val KEY_PLAYER_NAMES = "playerNames"
         const val KEY_PLAYER_SIDE = "playerSide"
+        const val KEY_PRE_MATCH_SIDE_RECOGNITION = "preMatchSideRecognition"
         const val KEY_REMEMBER_SIDE = "rememberSide"
         const val KEY_NINJA_QUERY = "ninjaQuery"
         const val KEY_SHOW_BOTH = "showBothSides"

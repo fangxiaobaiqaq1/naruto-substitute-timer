@@ -177,6 +177,7 @@ struct Completion {
     Rect bounds;
     std::array<Rect, 2> regions;
     std::string profile;
+    std::vector<std::string> names; // exact configuration snapshot, never reread by the worker
     TimeNs at = 0;
     std::array<uint64_t, 2> signatures{};
     std::array<std::string, 2> values;
@@ -283,13 +284,25 @@ Engine::Engine(std::shared_ptr<engine::Engine> inner, const config::Config& cfg,
       known_(std::move(known)),
       worker_(worker),
       layout_(cfg.Layout),
-      mailbox_(std::make_shared<Mailbox>()) {}
+      mailbox_(std::make_shared<Mailbox>()) {
+    if (auto* gated = dynamic_cast<engine::Gated*>(inner_.get()))
+        gated->SetPreMatchSideRecognition(cfg_.UI.PreMatchSideRecognition);
+}
 
 Engine::~Engine() {
     if (cancel_ != nullptr) cancel_->store(true);  // a running job for this engine is no longer wanted
 }
 
 void Engine::invalidate() {
+    // Detach the old mailbox as well as cancelling: a late task cannot publish into
+    // a new generation or keep a static screen busy forever after disable/rename.
+    if (cancel_ != nullptr) cancel_->store(true);
+    cancel_.reset();
+    busy_ = false;
+    busySince_ = 0;
+    mailbox_ = std::make_shared<Mailbox>();
+    heldCompletion_.reset();
+    pollOCR_ = false;
     reported_ = false;
     generation_++;
     haveKey_ = false;
@@ -316,11 +329,45 @@ void Engine::backendFailed(TimeNs at, const std::string& cause) {
 void Engine::SetEnabled(bool enabled) {
     if (enabled_ == enabled) return;
     enabled_ = enabled;
+    dirty_ = true;
+    // FrameLoop turns battle OCR off once a side is known. That is NOT a VS toggle.
+    if (haveKey_ && key_.profile == "vs") return;
     invalidate();
     retryAt_ = 0;
     std::lock_guard<std::mutex> lock(statusMu_);
     lastError_.clear();
-    status_ = enabled ? "waiting" : "off";
+    status_ = enabled || cfg_.UI.PreMatchSideRecognition ? "waiting" : "off";
+}
+
+void Engine::SetPreMatchSideRecognition(bool on) {
+    if (auto* gated = dynamic_cast<engine::Gated*>(inner_.get())) gated->SetPreMatchSideRecognition(on);
+    if (cfg_.UI.PreMatchSideRecognition == on) return;
+    cfg_.UI.PreMatchSideRecognition = on;
+    dirty_ = true;
+    if (!haveKey_ || key_.profile == "vs") {
+        invalidate();
+        retryAt_ = 0;
+        std::lock_guard<std::mutex> lock(statusMu_);
+        lastError_.clear();
+        status_ = enabled_ || on ? "waiting" : "off";
+    }
+}
+
+bool Engine::NeedsAnalysis(TimeNs at) {
+    if (at == 0) at = NowNs();
+    std::string key;
+    configured(names_ ? names_() : std::vector<std::string>{}, key);
+    if (dirty_ || key != namesKey_ || (lastAt_ != 0 && at < lastAt_) ||
+        (pausedAt_ != 0 && at - pausedAt_ > textPauseTTL)) return true;
+    {
+        std::lock_guard<std::mutex> lock(mailbox_->mu);
+        if (mailbox_->done != nullptr) return true; // peek only: AnalyzeAt owns consumption
+    }
+    if (busy_ && cancel_ != nullptr && !cancel_->load() && NowNs() - busySince_ > jobTimeout) return true;
+    if (inner_ != nullptr && inner_->NeedsAnalysis(at)) return true;
+    // Worker may still be winding down an invalidated generation. Do not rescan
+    // every frame while it is busy, nor while waiting for nextAt/backoff.
+    return pollOCR_ && !busy_ && at >= nextAt_ && at >= retryAt_ && worker_ != nullptr && worker_->Idle();
 }
 
 std::string Engine::Status() const {
@@ -387,6 +434,8 @@ void Engine::validateTextPixels(const RGBA* img, const std::array<Rect, 2>& regi
 
 engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
     engine::Result res = inner_->AnalyzeAt(img, at);
+    dirty_ = false;
+    pollOCR_ = false;
     if (at == 0) at = NowNs();
     std::string namesKey;
     const std::vector<std::string> names = configured(names_ ? names_() : std::vector<std::string>{}, namesKey);
@@ -405,31 +454,40 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
     lastAt_ = at;
     // A job past its time is cancelled and counts as a backend failure (Go: 3 s context).
     if (busy_ && cancel_ != nullptr && NowNs() - busySince_ > jobTimeout && !cancel_->load()) {
-        cancel_->store(true);
+        invalidate();
         backendFailed(at, "识别超时");
     }
-    bool active = enabled_ && !names.empty() && img != nullptr &&
-                  (res.LayoutProfile == "duel" || res.LayoutProfile == "camp") && hudReadable(res);
+    const bool vs = cfg_.UI.PreMatchSideRecognition && res.Scene == "vs" && !names.empty();
+    if (res.Scene == "vs" && !cfg_.UI.PreMatchSideRecognition) {
+        res.PlayerSide.clear();
+        res.PlayerName.clear();
+        res.OppName.clear();
+    }
+    const std::string profile = vs ? "vs" : res.LayoutProfile;
+    bool active = !names.empty() && img != nullptr && (vs ||
+                  (enabled_ && (profile == "duel" || profile == "camp") && hudReadable(res)));
     std::array<Rect, 2> regions;
-    if (active) active = layout_.Regions(img, res.LayoutProfile, regions);
+    if (active) active = layout_.Regions(img, profile, regions);
     std::shared_ptr<Completion> done;
     if (!active) {
         const bool paused = pauseText(img, res, at);
         if (!paused && haveKey_) invalidate();
-        // During a hold a reading stays in the mailbox for the first readable frame after it.
-        if (!paused && poll(done)) {
+        // Consume a completion just once during a hold; keep its evidence for the
+        // readable return, not in the mailbox (which would wake every duplicate).
+        if (poll(done)) {
             busy_ = false;
-            if (!done->err.empty() && enabled_) backendFailed(at, done->err);
+            if (paused) heldCompletion_ = done;
+            else if (!done->err.empty() && (enabled_ || cfg_.UI.PreMatchSideRecognition)) backendFailed(at, done->err);
         }
         std::lock_guard<std::mutex> lock(statusMu_);
-        if (!enabled_ || names.empty()) status_ = "off";
+        if ((!enabled_ && !cfg_.UI.PreMatchSideRecognition) || names.empty()) status_ = "off";
         else if (status_ != "unavailable" || at >= retryAt_) status_ = "waiting";
         res.TextStatus = status_;
         return res;
     }
     if (pausedAt_ != 0 && at - pausedAt_ > textPauseTTL) invalidate();
     pausedAt_ = 0;
-    Key key{img->Bounds(), regions, res.LayoutProfile};
+    Key key{img->Bounds(), regions, profile};
     if (!haveKey_ || key_ != key) {
         invalidate();
         key_ = key;
@@ -440,13 +498,16 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
     std::array<uint64_t, 2> signatures{};
     std::array<int, 2> white{};
     validateTextPixels(img, regions, signatures, white);
-    if (poll(done)) {
+    if (heldCompletion_ != nullptr) done = std::exchange(heldCompletion_, nullptr);
+    else poll(done);
+    if (done != nullptr) {
         busy_ = false;
         if (!done->err.empty()) {
             // Backend health outlives scene generations; only text evidence is stale.
             backendFailed(at, done->err);
         } else if (done->generation == generation_ && done->bounds == key_.bounds && done->regions == key_.regions &&
-                   done->profile == key_.profile && at - done->at >= 0 && at - done->at <= resultMaxAge) {
+                   done->profile == key_.profile && done->names == names &&
+                   at - done->at >= 0 && at - done->at <= resultMaxAge) {
             {
                 std::lock_guard<std::mutex> lock(statusMu_);
                 status_ = "pending";
@@ -470,7 +531,8 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
     // side opposite the one complete account that is not mine. See DecideSide / nt/hudtext.h.
     bool used = false;
     if (res.PlayerSide.empty()) {
-        const SideDecision d = DecideSide({sides_[0].account.accepted, sides_[1].account.accepted}, names, known_);
+        const std::array<std::string, 2> accounts{sides_[0].account.accepted, sides_[1].account.accepted};
+        const SideDecision d = vs ? DecideFooterSide(accounts, names) : DecideSide(accounts, names, known_);
         if (d.side >= 0) {
             if (!reported_ && worker_ != nullptr) {
                 reported_ = true;
@@ -495,13 +557,14 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
         else status_ = "waiting";
         status = status_;
     }
-    if ((needs || used) && !busy_ && at >= nextAt_ && at >= retryAt_ && (white[0] >= 12 || white[1] >= 12) &&
-        worker_ != nullptr) {
+    pollOCR_ = (needs || used) && (white[0] >= 12 || white[1] >= 12);
+    if (pollOCR_ && !busy_ && at >= nextAt_ && at >= retryAt_ && worker_ != nullptr && worker_->Idle()) {
         auto job = std::make_shared<Completion>();
         job->generation = generation_;
         job->bounds = key_.bounds;
         job->regions = regions;
         job->profile = key_.profile;
+        job->names = names;
         job->at = at;
         job->signatures = signatures;
         auto strips = std::make_shared<std::array<RGBA, 2>>();
@@ -516,7 +579,10 @@ engine::Result Engine::AnalyzeAt(const RGBA* img, TimeNs at) {
                     job->err = loadError.empty() ? std::string("本机文字识别模型不可用") : loadError;
                 } else {
                     ReadResult r;
-                    if (!ReadAccounts(*recognizer, *strips, job->regions, r, cancel.get())) {
+                    const bool ok = job->profile == "vs"
+                        ? ReadFooterAccounts(*recognizer, *strips, job->regions, job->names, r, cancel.get())
+                        : ReadAccounts(*recognizer, *strips, job->regions, r, cancel.get());
+                    if (!ok) {
                         job->err = r.err.empty() ? std::string("识别失败") : r.err;
                     } else {
                         job->values = r.values;

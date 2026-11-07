@@ -84,6 +84,8 @@ object NativeCore {
     @JvmStatic external fun nativeSetTextModel(assets: AssetManager, path: String): Boolean
     /** 文字认边开关（只存一个原子量，下一帧生效，不等正在分析的一帧）。 */
     @JvmStatic external fun nativeSetTextRecognition(on: Boolean)
+    /** VS footer + image recognition (default off), independent of battle OCR. Call off the UI/session lock. */
+    @JvmStatic external fun nativeSetPreMatchSideRecognition(on: Boolean)
     /** "<状态>\n<原因>\n<模型已加载 0/1>"，没有识别模型 = null。用 [textStatus]。 */
     @JvmStatic external fun nativeTextStatus(): String?
     /** 立即释放识别模型（下次需要时再读）。 */

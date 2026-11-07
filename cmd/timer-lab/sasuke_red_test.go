@@ -16,6 +16,54 @@ import (
 	"narutotimer/internal/ninja"
 )
 
+func TestSasukeJinyingScreenshotAndSyntheticDropThroughPipeline(t *testing.T) {
+	src := purpleEvidence(t, "../../inbox/regressions/camp-sasuke-jinying-20261106/game.png")
+	cfg := config.Default()
+	cfg.Scene.Manifest = filepath.Join("../..", cfg.Scene.Manifest)
+	cfg.Tracking.EnterFightFrames = 1
+	cfg.Tracking.MinimumConfirmFrames = 2
+	eng, err := factory.New(factory.FromApp(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := newReplayTracker(cfg, ninja.DefaultCooldown)
+	base := time.Unix(1700000000, 0)
+	analyze := func(img *image.RGBA, ms, right int) frame.Frame {
+		at := base.Add(time.Duration(ms) * time.Millisecond)
+		f := frame.AnalyzeImage(img, eng, factory.FromApp(cfg).Mode, at, at, "synthetic-jinying-drop")
+		l, r := knownCount(f.Beads, 'L', f.LeftSlots), knownCount(f.Beads, 'R', f.RightSlots)
+		if f.Err != nil || !f.Fighting || f.Hold || f.LayoutProfile != "camp" || f.RightNinja != ninja.SasukeXiayin || l == nil || *l != 4 || r == nil || *r != right {
+			t.Fatalf("want camp 4/%d: %+v", right, f)
+		}
+		return f
+	}
+	first := analyze(src, 0, 2)
+	if events := tracker.observe(first); len(events) != 0 {
+		t.Fatal("still image invented substitute")
+	}
+	// Paint R2 as this skin's empty core: synthetic 2→1, not a captured event.
+	covered := image.NewRGBA(src.Bounds())
+	draw.Draw(covered, covered.Bounds(), src, src.Bounds().Min, draw.Src)
+	for _, b := range first.Beads {
+		if b.Label == "R2" {
+			draw.Draw(covered, image.Rect(b.X-6, b.Y-8, b.X+7, b.Y+9), image.NewUniform(color.RGBA{100, 5, 5, 255}), image.Point{}, draw.Src)
+		}
+	}
+	var events []replayEvent
+	for _, ms := range []int{20, 40, 60, 80} {
+		f := analyze(covered, ms, 1)
+		f.Duplicate = ms == 40 || ms == 80
+		got := tracker.observe(f)
+		if ms != 60 && len(got) != 0 {
+			t.Fatalf("early/repeated confirmation at %d: %+v", ms, got)
+		}
+		events = append(events, got...)
+	}
+	if len(events) != 1 || events[0].side != "right" || !events[0].firstObserved.Equal(base.Add(20*time.Millisecond)) {
+		t.Fatalf("wrong red-skin substitute: %+v", events)
+	}
+}
+
 func TestSasukeRedScreenshotAndSyntheticDropThroughPipeline(t *testing.T) {
 	src := purpleEvidence(t, "../../inbox/regressions/duel-sasuke-red-20260916/game.png")
 	cfg := config.Default()

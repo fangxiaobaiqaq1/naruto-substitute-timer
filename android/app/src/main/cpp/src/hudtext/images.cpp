@@ -22,6 +22,7 @@ bool NameLayout::Regions(const RGBA* img, const std::string& profile, std::array
     if (!ok_ || img == nullptr) return false;
     auto [ca, ok] = detect::ResolveContentArea(img, mode_, cfg_.ReferenceWidth, cfg_.ReferenceHeight, cfg_.AutoAspectTolerance);
     if (!ok) return false;
+    if (profile == "vs") return VSNameRegions(ca, img->Bounds(), out);
     const std::vector<detect::BeadPosition> positions = layout_->PositionsInImage(profile, img, ca);
     if (cfg_.BeadsPerSide < 1 || static_cast<int>(positions.size()) != 2 * cfg_.BeadsPerSide) return false;
     // OCR offsets must use the same fitted HUD scale and safe-area anchors.

@@ -34,6 +34,7 @@ inline const std::string& Madara = *new std::string("宇智波斑[神驹佑将]"
 inline const std::string& MadaraLegacyAlias = *new std::string("宇智波斑[神驹佑祥]");
 inline const std::string& Obito = *new std::string("宇智波带土[十尾人柱力]");
 inline const std::string& SasukeXiayin = *new std::string("宇智波佐助[侠隐江湖]");
+inline const std::string& SasukeJinying = *new std::string("宇智波佐助[烬影绝踪]"); // 侠隐红色 HUD 皮肤（924641）。
 inline const std::string& Naruto = *new std::string("漩涡鸣人[暴怒·第六尾]");
 inline const std::string& ItachiHyakusen = *new std::string("宇智波鼬[百战]");
 inline const std::string& MinatoKyubi = *new std::string("波风水门[九喇嘛连结]");

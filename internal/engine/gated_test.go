@@ -76,6 +76,24 @@ func TestGatedNamedHoldSceneDoesNotFight(t *testing.T) {
 	}
 }
 
+func TestGatedVSIdentityIsOptionalAndNeverStartsRound(t *testing.T) {
+	calls := 0
+	g := NewGatedWithGuess(stubGate{d: GateDecision{Kind: GateUncertain, SceneID: "vs", Confidence: .99}},
+		&stubInner{name: "rgb"}, func(*image.RGBA, string) Identity {
+			calls++
+			return Identity{Side: "left", Mine: "my-account"}
+		}).(*Gated)
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for _, on := range []bool{false, true, false} {
+		g.SetPreMatchSideRecognition(on)
+		before := calls
+		got := g.Analyze(img)
+		if (got.PlayerSide == "left") != on || (calls > before) != on || got.Fighting || got.RoundOpening || !got.Uncertain || got.Scene != "vs" {
+			t.Fatalf("enabled=%v: %+v calls=%d", on, got, calls-before)
+		}
+	}
+}
+
 func TestGatedNotFightSkipsBeads(t *testing.T) {
 	inner := &stubInner{name: "rgb", beads: 4}
 	g := NewGated(stubGate{d: GateDecision{Kind: GateNotFight, SceneID: "lobby", Confidence: 0.9}}, inner)

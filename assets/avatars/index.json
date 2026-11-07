@@ -1,13 +1,13 @@
 {
   "sourceRoot": "<source-corpus>",
   "sourceIndex": "avatars_index.json",
-  "sourceIndexSha256": "c8df185355126c2981d713f46c0918a53d26e40707147c81da8864ff5af0293c",
+  "sourceIndexSha256": "427b359eb86da549535ae419c8e9496e69d9ff58e0d576655c9968c01109e1d3",
   "sourceCSV": "avatars_index.csv",
-  "sourceCSVSha256": "7266e797189f3d0c0f724b2b2a6da914af7be1efaab7c6875469f1d678cb6ae4",
+  "sourceCSVSha256": "24b111da3a377d1ab9f1f3a3fe270980faa3dd1c1cf7484decaf0fdfaed180df",
   "sourceChecksums": "CHECKSUMS.sha256",
-  "sourceChecksumsSha256": "ad2224609eae13f9a693be36568fee1f5f5d047ff3da14e5e8f7736704b1784f",
-  "sourceGeneratedAt": "2026-09-23 20:54:47",
-  "sourceScope": "Official station lists (all released ninjas + all skins) plus a bounded sweep of the whole 5-digit ninja id space (90000-99999) and the whole 92xxxx skin id space (920000-929999) against the public detail endpoints. No authentication, cookies, or private APIs.",
+  "sourceChecksumsSha256": "821532904f3644c0b3ee8b87e0243b84355e5c36b6d6ae3d3cea08fcc51db9ad",
+  "sourceGeneratedAt": "2026-11-06T14:48:47Z",
+  "sourceScope": "2026-09-23 official snapshot retained; only ninja 90316 avatar and detail refreshed on 2026-11-06 from its public official detail URL and the exact lbtx URL. No roster refresh or new ID sweep. Original snapshot scope: Official station lists (all released ninjas + all skins) plus a bounded sweep of the whole 5-digit ninja id space (90000-99999) and the whole 92xxxx skin id space (920000-929999) against the public detail endpoints. No authentication, cookies, or private APIs.",
   "selection": "base rank A/S; skins whose baseNinjaId is a selected A/S base",
   "fullCorpusEntries": 529,
   "selectedBaseEntries": 183,
@@ -1726,9 +1726,9 @@
       "canonicalVariant": "九喇嘛连结",
       "canonicalName": "波风水门[九喇嘛连结]",
       "metadataPath": "details/metadata/ninja/90316.json",
-      "metadataSha256": "f0d325356465bf1ca0d6109aa3c22d80d51371ef117fe314bd1c3268bf1fe235",
-      "sha256": "25615699dd7617e738eb43b160927de6ea2095909876f1819a61d3776a1de478",
-      "bytes": 16567
+      "metadataSha256": "663b486bea9d4a11de6ab9f9e09a0564dec23c1b94acfc98cf2a37db8031d81c",
+      "sha256": "50cfa25a2fdaa9248c9a8ae1776de95fdfe3ae1d1ac2f2054ed871cc1308035a",
+      "bytes": 10661
     },
     {
       "id": "90317",

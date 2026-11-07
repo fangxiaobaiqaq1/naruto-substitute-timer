@@ -56,7 +56,11 @@ func New(cfg Config) (engine.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return engine.NewGatedWithGuess(gate, inner, adaptGuesser(cfg.App)), nil
+	gated := engine.NewGatedWithGuess(gate, inner, adaptGuesser(cfg.App))
+	if control, ok := gated.(interface{ SetPreMatchSideRecognition(bool) }); ok {
+		control.SetPreMatchSideRecognition(cfg.App.UI.PreMatchSideRecognition)
+	}
+	return gated, nil
 }
 
 func adaptGuesser(cfg config.Config) engine.SideGuesser {

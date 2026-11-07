@@ -48,6 +48,8 @@ class Engine {
 public:
     virtual ~Engine() = default;
     virtual Result AnalyzeAt(const RGBA* img, TimeNs at) = 0;
+    // Async/configuration changes can invalidate analysis, never the capture fingerprint.
+    virtual bool NeedsAnalysis(TimeNs) { return false; }
     Result Analyze(const RGBA* img) { return AnalyzeAt(img, NowNs()); }
 };
 
@@ -190,6 +192,8 @@ class Gated final : public Engine {
 public:
     Gated(std::shared_ptr<Gate> gate, std::shared_ptr<Engine> inner, SideGuesser guess);
     Result AnalyzeAt(const RGBA* img, TimeNs at) override;
+    bool NeedsAnalysis(TimeNs at) override;
+    void SetPreMatchSideRecognition(bool on);
 
     std::shared_ptr<Gate> Gate_;
     std::shared_ptr<Engine> Inner;
@@ -200,6 +204,9 @@ private:
     Result analyzeInner(const RGBA* img, TimeNs at);
     bool supportsCurrent(const RGBA* img, const Result& res);
 
+    // Legacy low-level constructor stays enabled; factory explicitly applies cfg (default off).
+    bool preMatchSideRecognition_ = true, dirty_ = false;
+    std::vector<std::string> namesSnapshot_;
     std::string name_;
     GateDecision lastFight_;
     TimeNs lastAt_ = 0;

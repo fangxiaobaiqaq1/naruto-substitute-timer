@@ -4,6 +4,7 @@
 # the Windows OCR path on the same frames: android/tools/ocrcheck (Go, needs an ONNX Runtime
 # library for this host). No device, Gradle or network.
 # Run: android/tools/ocrhost/run.sh [--names 白方小] [--diagnose] [--interval 250] <png or dir>...
+# VS static screen: --pre-match --battle-text-off --names 白方小 --repeat 6 --interval 400 <opening.png>
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

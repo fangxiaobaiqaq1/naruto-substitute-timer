@@ -181,6 +181,8 @@ android/
 - 线程：`hudtext::Worker` 一个常驻线程，一次一个任务（每个任务另起 1 个线程分行）；模型第一次需要时从 AssetManager
   读，空闲 20 s 释放（`nativeReleaseTextModel` 立即释放）。分析线程只做裁条、像素签名和字形核验，从不等待识别。
 - Kotlin 每帧 `nativeSetTextRecognition(session.wantsTextRecognition())`：只在「自动认边」且我方未知时读。
+- 可选 `Settings.preMatchSideRecognition` / `config.UI.PreMatchSideRecognition`（默认 false）：JNI `nativeSetPreMatchSideRecognition(on)`（`(Z)V`）同步到 `hudtext::Engine::SetPreMatchSideRecognition` 与 `Gated` 的 VS 图片认边开关。它独立于战斗顶部 OCR；只在已确认 `scene == "vs"` 读取底部账号，三人开局和单人死亡换人均使用相同底栏，不新增开局事件、不修改 Hold/SideClock。新任务绑定配置账号快照，只允许完整我方账号三视图至少两票、两次不同采集时间、当前整条底部账号 ROI 的白字签名（不能用只覆盖短账号的局部 proof，否则追加后缀仍会误认）；不凭陌生装饰词反推对方，不用部分前缀。底部 ROI 使用 960×540 参考的左右/底部锚点（左 `.11,.905,.08,.05`，右 `.828,.905,.085,.05`）；不跟随战斗豆/头像校准。
+- `engine::Engine::NeedsAnalysis(TimeNs)` 默认 false，`hudtext::Engine` 在启停/账号变化、异步完成、确认/重试到期时要求重分析。`DedupedAnalysis` 此时不复用旧识别，但交付层的像素指纹和 `Duplicate` 不变；可出现 `Reused=false && Duplicate=true`，不能因此给豆变化增加确认票。关闭 VS 开关要使缓存输出失效，不能以重建 Pipeline/ResetDelivery 冒充新采集。Session 的自动侧别缓存须记录是否来自 VS；关闭开关立即清除该来源的缓存，保留战斗来源与手动侧别，不重置时钟。
 
 ### kt-tracker
 | Go | 目标 |

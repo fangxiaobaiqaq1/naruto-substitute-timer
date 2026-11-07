@@ -83,6 +83,7 @@ func main() {
 		// Live region calibration (docs/区域校准.md): new boxes apply from the next frame.
 		ui.WithCalibrationApply(eng.SetCalibration),
 		ui.WithTextRecognitionControl(eng.SetEnabled),
+		ui.WithPreMatchSideRecognitionControl(eng.SetPreMatchSideRecognition),
 		ui.WithCaptureConfigSelection(controlCapture),
 		ui.WithCaptureState(captureState),
 		ui.WithSupportContext(executable, cfg.Debug.Directory),

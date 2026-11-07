@@ -18,7 +18,7 @@ import (
 
 func TestEmbeddedASAvatarCatalogIsBoundedAndValid(t *testing.T) {
 	stats, err := AvatarStats()
-	if err != nil || stats.Entries != 242 || stats.Base != 183 || stats.Skins != 59 || stats.Bytes != 3009250 {
+	if err != nil || stats.Entries != 242 || stats.Base != 183 || stats.Skins != 59 || stats.Bytes != 3003344 {
 		t.Fatalf("embedded stats=%+v err=%v", stats, err)
 	}
 	c, err := loadEmbeddedAvatarCatalog()
@@ -350,6 +350,36 @@ func TestMinatoKyubiOffsetRequiresExactCurrentAvatar(t *testing.T) {
 	}
 	if !avatarVariantPolicy(MinatoKyubi) {
 		t.Fatal("a geometry policy must not use the relaxed avatar margin")
+	}
+}
+
+func TestSasukeJinyingAvatarUsesXiayinPolicy(t *testing.T) {
+	all, err := loadEmbeddedAvatarCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"924641", "90464", "90059", "90097", "90274", "90313", "90495"} {
+		e := all.byID[id]
+		portrait, _, err := image.Decode(bytes.NewReader(testAvatarPNG(t, id)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		img := image.NewRGBA(portrait.Bounds())
+		draw.Draw(img, img.Bounds(), portrait, portrait.Bounds().Min, draw.Src)
+		r := &Reader{avatars: &avatarCatalog{entries: []*avatarEntry{e}, byID: map[string]*avatarEntry{id: e}}}
+		var tracker AvatarTracker
+		got := r.ResolveEvidence(img, image.Rectangle{}, img.Bounds(), 1, Readout{}, &tracker, time.Unix(1, 0))
+		want := Readout{Name: e.name, AvatarName: e.name, AvatarScore: got.AvatarScore}
+		special := id == "924641" || id == "90464"
+		if special {
+			want.Slots, want.Palette, want.RowOffsetY = 4, Xiayin, 9
+		}
+		if got != want || avatarVariantPolicy(e.name) != special {
+			t.Fatalf("%s: got %+v, want %+v, strict policy=%v", id, got, want, avatarVariantPolicy(e.name))
+		}
+		if id == "924641" && (e.name != "宇智波佐助[烬影绝踪]" || e.baseName != "宇智波佐助") {
+			t.Fatalf("unexpected skin catalog mapping: %+v", e)
+		}
 	}
 }
 

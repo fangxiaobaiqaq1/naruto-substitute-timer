@@ -60,6 +60,7 @@ type session struct {
 	done                  chan struct{}
 	stopOnce              sync.Once
 	textControl           func(bool)
+	preMatchSideControl   func(bool)
 	textStatus, textError string
 	textStatusLabel       *widget.Label
 	cfg                   config.Config
@@ -97,6 +98,7 @@ type session struct {
 	side                string
 	autoIdentity        identity.Readout
 	autoIdentityAt      time.Time
+	autoIdentityFromVS  bool
 	myName              string
 	oppName             string
 	leftNinja           string
@@ -199,6 +201,12 @@ type Option func(*session)
 
 func WithTextRecognitionControl(set func(bool)) Option {
 	return func(s *session) { s.textControl = set }
+}
+
+// WithPreMatchSideRecognitionControl controls VS account recognition independently
+// of battle-name OCR, including when WithTextRecognitionControl is disabled.
+func WithPreMatchSideRecognitionControl(set func(bool)) Option {
+	return func(s *session) { s.preMatchSideControl = set }
 }
 
 func WithCaptureState(state func() frame.CaptureState) Option {
@@ -1140,6 +1148,11 @@ func (s *session) maybeAutoSide(f frame.Frame) {
 	if f.Err != nil {
 		return
 	}
+	// A VS result may already be in flight when the user disables the option.
+	// Reject it before caching identity as well as before changing the live side.
+	if f.Scene == "vs" && !s.cfg.UI.PreMatchSideRecognition {
+		return
+	}
 	if f.Scene != "" && f.Scene != "fight" && f.Scene != "vs" {
 		s.clearAutoIdentity()
 		return
@@ -1162,6 +1175,7 @@ func (s *session) maybeAutoSide(f frame.Frame) {
 	}
 	s.autoIdentity = identity.Readout{Side: f.PlayerSide, Mine: f.PlayerName, Opp: f.OppName}
 	s.autoIdentityAt = time.Now()
+	s.autoIdentityFromVS = f.Scene == "vs"
 	// Remember the latest recognition even under a manual lock so switching back
 	// to auto can take effect immediately. It must never override that lock.
 	if manualSide(s.cfg.UI.PlayerSide) {
