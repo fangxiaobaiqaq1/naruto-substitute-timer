@@ -7,13 +7,19 @@ on:
         description: Existing published stable GitHub release tag to mirror
         required: true
         type: string
+      runner:
+        description: Use the one-shot runner only when a maintainer has prepared it
+        type: choice
+        default: ubuntu-24.04
+        options: [ubuntu-24.04, gitee-mirror-once]
 
 permissions:
   contents: read
 
 jobs:
   mirror:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
+    timeout-minutes: 30
     env:
       TAG: ${{ inputs.tag }}
     steps:
@@ -39,13 +45,22 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh api "repos/$GH_REPO/releases/tags/$TAG" > "$RUNNER_TEMP/mirror-gitee/release.json"
+          auth_header="$RUNNER_TEMP/mirror-gitee/github.header"
+          trap 'rm -f "$auth_header"' EXIT
+          (umask 077 && printf 'Authorization: Bearer %s\n' "$GH_TOKEN" > "$auth_header")
+          curl --fail --silent --show-error --retry 3 --connect-timeout 10 --max-time 120 \
+            --header "@$auth_header" --header 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$GH_REPO/releases/tags/$TAG" > "$RUNNER_TEMP/mirror-gitee/release.json"
           jq -e --arg tag "$TAG" '
             .tag_name == $tag and .draft == false and .prerelease == false and .published_at != null
           ' "$RUNNER_TEMP/mirror-gitee/release.json" >/dev/null || { echo "::error::Release must be published and stable"; exit 1; }
-          gh release download "$TAG" --dir "$RUNNER_TEMP/mirror-gitee/assets" \
-            --pattern timer-app.exe --pattern naruto-timer-universal.apk \
-            --pattern "naruto-timer-$TAG-windows-x64.zip" --pattern SHA256SUMS.txt
+          # Public release downloads need no token; never send the API header to the CDN.
+          for name in timer-app.exe naruto-timer-universal.apk "naruto-timer-$TAG-windows-x64.zip" SHA256SUMS.txt; do
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              --retry 3 --connect-timeout 10 --max-time 300 --max-filesize 268435456 \
+              --output "$RUNNER_TEMP/mirror-gitee/assets/$name" \
+              "https://github.com/$GH_REPO/releases/download/$TAG/$name"
+          done
       - name: Verify GitHub digests and checksum manifest
         shell: bash
         working-directory: ${{ runner.temp }}/mirror-gitee/assets

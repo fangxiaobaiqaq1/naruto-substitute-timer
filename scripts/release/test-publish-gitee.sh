@@ -173,6 +173,12 @@ import textwrap
 from pathlib import Path
 
 workflow = Path(sys.argv[1]).read_text()
+download = workflow.split("      - name: Download published GitHub assets\n", 1)[1].split("      - name: Verify GitHub digests", 1)[0]
+api, public_downloads = download.split("          for name in ", 1)
+assert '(umask 077' in api and '--header "@$auth_header"' in api
+assert '--header' not in public_downloads and '$GH_TOKEN' not in public_downloads
+assert "--proto '=https' --proto-redir '=https'" in public_downloads
+assert 'options: [ubuntu-24.04, gitee-mirror-once]' in workflow
 verify = workflow.split("      - name: Verify GitHub digests and checksum manifest\n", 1)[1]
 verify = textwrap.dedent(verify.split("        run: |\n", 1)[1].split("      - name: Publish Gitee release\n", 1)[0])
 root = Path(sys.argv[2])
