@@ -1,10 +1,21 @@
-# 火影忍者手游替身计时器
+# 火影忍者手游替身计时器 | Naruto Mobile Substitution Timer
 
-Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
+**免费开源的火影忍者手游替身 CD 计时工具**：通过本地图像识别检测替身豆变化，在悬浮窗显示对方替身冷却倒计时，支持决斗场和训练场。提供可直接使用的 **Windows EXE / Android APK**，以及可供二次开发的完整源码，不只是算法演示。
 
-官网（下载、教程）：https://hy.312166.xyz · **BUG 反馈 QQ 群：1109044204**。遇到 MuMu SDK、截图或多开实例问题时，请在「诊断」中导出“支持诊断包（ZIP）”后反馈。
+**Windows 10/11 x64（MuMu / 雷电 LDPlayer）· Android 12+（手机 / 模拟器）· Go/Fyne + Kotlin/C++ · 原创代码 MIT**
 
-识别游戏画面的替身豆，在悬浮窗显示对方替身倒计时。模型、忍者资料、场景模板和 OCR 运行依赖均已内置。
+An open-source substitution cooldown timer and tracker for **Tencent Naruto Mobile**. Detects substitution charges from screen images and displays a countdown overlay on Windows (MuMu / LDPlayer) and Android 12+. Includes local OCR for player-side detection, ready-to-run EXE/APK downloads, and Go/Fyne + Kotlin/C++ source code. Original code is MIT-licensed; bundled third-party assets have separate terms.
+
+[下载最新版](https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest) · [官网与教程](https://hy.312166.xyz) · [Gitee 镜像](https://gitee.com/xiaobaiqaq/naruto-substitute-timer) · [使用说明](docs/使用说明.md) · [复用与二次开发](#复用与二次开发)
+
+## 已实现的功能
+
+- **替身识别与自动计时**：识别左右替身豆变化，显示对方或两边替身 CD；画面遮挡、证据不足时显示未知，不凭旧画面猜测替身。
+- **OCR 自动认边**：识别游戏账号名判断我方左右位置，也支持手动换边；模型、忍者资料、场景模板和 OCR 运行依赖均已内置。
+- **悬浮窗与分辨率适配**：完整 / 迷你计时浮窗，可调整位置、大小和透明度；支持豆与头像区域校准，校准方案可在电脑和手机之间导入导出。
+- **本地屏幕识别**：不上传截图，不读取游戏内存，不注入或修改游戏；Android 版无需 Root。
+
+**BUG 反馈 QQ 群：1109044204**。遇到 MuMu SDK、截图或多开实例问题时，请在「诊断」中导出“支持诊断包（ZIP）”后反馈。
 
 ## 下载与使用
 
@@ -14,13 +25,15 @@ Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 - **timer-app.exe**：便携版，放在可写目录直接运行。
 - **完整 ZIP**：附带诊断工具和第三方许可。
 
-启动 MuMu 或雷电与火影忍者，然后打开计时器：
+**Android：** 安装 APK 后，按 App 指引开启无障碍服务 → 启动悬浮计时 → 授权录屏识别（推荐）；详见 [手机版使用说明](docs/使用说明.md#手机版android)。
+
+**Windows：** 启动 MuMu 或雷电与火影忍者，然后打开计时器：
 
 1. 在「设置 → 常规」选择我方在左或右；也可填写账号名使用自动认边。若我方名字被特效遮住，另一边已精确确认的非我方账号会作为对面证据，从而推断我方在另一侧；证据不足时不猜边。
 2. 默认自动寻找运行游戏的模拟器实例。MuMu 继续使用原生 SDK；雷电使用安装目录中的 `ldconsole.exe` + `adb.exe`，实例身份是“安装目录 + 多开编号”，ADB serial 默认是 `127.0.0.1:5555 + 实例编号`。多开或需要指定时，在「设置 → 模拟器」选择对应 provider 和实例后保存并应用。
 3. 进入对局后自动识别豆数并计时。训练场也可使用；看不清时显示未知，不凭旧画面猜测替身。
 
-需要已安装且正在运行的受支持 MuMu 或雷电；雷电无需额外 SDK，只需使用本机安装目录中的 `ldconsole.exe` 和 `adb.exe`。不需要 Go、Python 或额外安装 OCR/VC 运行库。软件未签名，Windows 仍可能显示下载信誉提示。
+Windows 版需要已安装且正在运行的受支持 MuMu 或雷电；雷电无需额外 SDK，只需使用本机安装目录中的 `ldconsole.exe` 和 `adb.exe`。不需要 Go、Python 或额外安装 OCR/VC 运行库。软件未签名，Windows 仍可能显示下载信誉提示。
 
 ## 更新与版本
 
@@ -39,6 +52,22 @@ Windows 10/11 x64 · MuMu / 雷电(LDPlayer) · 本地视觉识别 · MIT
 
 详见 [使用说明](docs/使用说明.md)、[诊断说明](docs/诊断说明.md) 和 [Android 原生开发](docs/安卓原生开发.md)。
 
+## 复用与二次开发
+
+如果你要实现「火影替身计时器」「替身 CD 识别」「模拟器截图识别 + 悬浮窗」或「Android 录屏识别计时」，本仓库已有从画面采集、识别到计时显示的完整实现，可先从以下入口评估复用：
+
+| 要解决的问题 | 已有实现 / 文档 |
+| --- | --- |
+| Windows 计时器与悬浮窗（Go / Fyne） | [`cmd/timer-app`](cmd/timer-app)、[`internal/ui`](internal/ui) |
+| RGB 像素识别 / NCC 模板匹配 / 场景识别 | [`internal/engine/rgb`](internal/engine/rgb)、[`internal/match`](internal/match)、[`internal/scene`](internal/scene) |
+| 替身事件与冷却计时状态 | [`internal/app/timer.go`](internal/app/timer.go)、[`internal/ui/run.go`](internal/ui/run.go) |
+| 本地 OCR 账号识别与自动认边 | [`internal/ocr`](internal/ocr)、[`internal/hudtext`](internal/hudtext) |
+| MuMu / 雷电截图采集与多开实例接入 | [`internal/capture`](internal/capture)、[模拟器使用说明](docs/使用说明.md#模拟器与多开)、[雷电适配](docs/leidian-adapter.md) |
+| Android 录屏采集、C++ 识别与原生悬浮窗 | [`android`](android)、[Android 原生开发](docs/安卓原生开发.md) |
+| 不同分辨率下的豆 / 头像区域校准 | [区域校准](docs/区域校准.md) |
+
+这是完整应用，**不是可直接 `go get` 引入的公共 SDK**；Go 核心实现位于 `internal/`，移植时需按目标场景验证采集接口、布局、模板和识别阈值。原创代码可按 MIT 许可复用，游戏素材、OCR 模型等须分别遵守 [第三方声明](THIRD_PARTY_NOTICES.md)，不应将整包资源视为 MIT 授权。
+
 ## 开发
 
 Windows 原生构建的验收路径需要 Go 1.26.10（`go.mod` 的 `toolchain`；旧的 Go 1.26.x 会自动下载它）、PowerShell 和 Fyne 所需的 Windows x64 C/C++ 工具链（cgo）。在 Developer PowerShell 中：
@@ -54,4 +83,4 @@ $env:TIMER_VERSION = "v0.3.1"
 
 ## 许可
 
-原创代码为 [MIT](LICENSE)。游戏素材、OCR 模型和微软运行库保留各自权利，见 [第三方声明](THIRD_PARTY_NOTICES.md)。程序仅处理模拟器画面，不读取游戏内存，不注入或修改游戏。
+原创代码为 [MIT](LICENSE)。游戏素材、OCR 模型和微软运行库保留各自权利，见 [第三方声明](THIRD_PARTY_NOTICES.md)。程序仅处理游戏画面，不读取游戏内存，不注入或修改游戏。
