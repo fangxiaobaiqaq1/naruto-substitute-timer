@@ -6,7 +6,9 @@
 
 An open-source substitution cooldown timer and tracker for **Tencent Naruto Mobile**. Detects substitution charges from screen images and displays a countdown overlay on Windows (MuMu / LDPlayer) and Android 12+. Includes local OCR for player-side detection, ready-to-run EXE/APK downloads, and Go/Fyne + Kotlin/C++ source code. Original code is MIT-licensed; bundled third-party assets have separate terms.
 
-[下载最新版](https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest) · [官网与教程](https://hy.312166.xyz) · [Gitee 镜像](https://gitee.com/xiaobaiqaq/naruto-substitute-timer) · [使用说明](docs/使用说明.md) · [复用与二次开发](#复用与二次开发)
+[下载最新版](https://github.com/fangxiaobaiqaq1/naruto-substitute-timer/releases/latest) · [官网与教程](https://hy.312166.xyz) · [Gitee 镜像](https://gitee.com/xiaobaiqaq/naruto-substitute-timer) · [使用说明](docs/使用说明.md) · **[详细项目索引](docs/INDEX.md)** · [复用与二次开发](#复用与二次开发)
+
+**索引直达：** [搜索词与功能](docs/INDEX.md#按搜索词找功能) · [Windows 源码](docs/INDEX.md#windows-源码索引) · [Android 源码](docs/INDEX.md#android-源码索引) · [开发测试与发布](docs/INDEX.md#开发测试与发布) · [平台与复用边界](docs/INDEX.md#平台支持与复用边界)
 
 ## 已实现的功能
 
@@ -54,7 +56,7 @@ Windows 版需要已安装且正在运行的受支持 MuMu 或雷电；雷电无
 
 ## 复用与二次开发
 
-如果你要实现「火影替身计时器」「替身 CD 识别」「模拟器截图识别 + 悬浮窗」或「Android 录屏识别计时」，本仓库已有从画面采集、识别到计时显示的完整实现，可先从以下入口评估复用：
+如果你要实现「火影替身计时器」「替身 CD 识别」「模拟器截图识别 + 悬浮窗」或「Android 录屏识别计时」，本仓库已有从画面采集、识别到计时显示的完整实现，可先从以下入口评估复用。更详细的模块职责、命令行工具、测试入口和专题文档见 **[项目索引](docs/INDEX.md)**。
 
 | 要解决的问题 | 已有实现 / 文档 |
 | --- | --- |
