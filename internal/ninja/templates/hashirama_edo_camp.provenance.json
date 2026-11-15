@@ -1,0 +1,14 @@
+{
+  "name": "千手柱间[秽土转生]",
+  "scope": "Exact full-title identity; six red/blue slots on the unshifted row, independently verified in two user HUD screenshots. No account or cooldown inference.",
+  "source": "user-provided camp screenshots received 2026-11-14, inbox/regressions/hashirama-edo-20261114/red.png and blue-three.png",
+  "sourceSHA256": "d15c87ed3bb49b42d77013dca3f71278f7fbf7fe2ddcbdbd2a4e53df0f7108bf",
+  "secondSourceSHA256": "aa5ef3b4b48401091cabe0c39d36c05d71d9c78f6944d79b17c0e60b3a043585",
+  "sourceSize": [1266, 712],
+  "referenceSize": [960, 540],
+  "boxInReference": [99, 20, 248, 41],
+  "template": "hashirama_edo_camp.png",
+  "templateSHA256": "0fcec79293f3e5d7c7f95186841e01c5256af37ca056fc5b6958174d8ff8a215",
+  "resampling": "Pillow BILINEAR full-frame resize of red.png to 960x540, then crop; no font synthesis or pixel editing",
+  "regression": "internal/engine/rgb/testdata/hashirama-edo contains the original top 112 rows, unscaled. Red frame left 5/6 right 6/6; blue-three frame left 3/6 right 6/6. Separate snapshots, not a measured substitute-event sequence."
+}

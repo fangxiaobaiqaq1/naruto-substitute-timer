@@ -843,7 +843,7 @@ type stageEntry struct {
 // by the relaxed same-role margin path.
 func avatarVariantPolicy(name string) bool {
 	switch normalizeAvatarName(canonicalAvatarName(name)) {
-	case normalizeAvatarName(Obito), normalizeAvatarName(SasukeXiayin), normalizeAvatarName(SasukeJinying), normalizeAvatarName(ItachiHyakusen), normalizeAvatarName(MinatoKyubi):
+	case normalizeAvatarName(HashiramaEdo), normalizeAvatarName(Obito), normalizeAvatarName(SasukeXiayin), normalizeAvatarName(SasukeJinying), normalizeAvatarName(ItachiHyakusen), normalizeAvatarName(MinatoKyubi), normalizeAvatarName(TsunadeYokai):
 		return true
 	}
 	return false

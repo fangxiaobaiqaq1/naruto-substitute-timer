@@ -14,9 +14,9 @@ import (
 
 // These are portable template regressions. They replay the reviewed native
 // title strips, which stay confined to the embedded package, at several content
-// widths and on both sides. They prove title recognition only, never a gameplay
-// property inferred from the names.
-func TestReviewedTargetTitlesRecognizeWithoutGameplayInference(t *testing.T) {
+// widths and on both sides. Slot/palette rules below are separately reviewed
+// from HUD pixels, never guessed from the character's name.
+func TestReviewedTargetTitlesUseReviewedHUDPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		file, source string
 		name         string
@@ -80,12 +80,15 @@ func TestReviewedTargetTitlesRecognizeWithoutGameplayInference(t *testing.T) {
 						}
 						var tracker Tracker
 						got := tracker.Read(reader, img, roi, scale, time.Unix(100, 0))
-						wantOffset, wantSlots := float64(0), 0
+						wantOffset, wantSlots, wantPalette := float64(0), 0, Palette("")
 						if tc.name == MinatoKyubi {
 							// Ordinary four slots/palette; only the energy row moves.
 							wantOffset, wantSlots = EnergyGaugeRowOffset, 4
+						} else if tc.name == HashiramaEdo {
+							// Two 2026-11-14 screenshots independently establish six red/blue slots.
+							wantSlots, wantPalette = 6, Warm
 						}
-						if got.Name != tc.name || got.Slots != wantSlots || got.Palette != "" || got.RowOffsetY != wantOffset || got.Unverified {
+						if got.Name != tc.name || got.Slots != wantSlots || got.Palette != wantPalette || got.RowOffsetY != wantOffset || got.Unverified {
 							t.Fatalf("readout=%+v, want offset=%v slots=%d", got, wantOffset, wantSlots)
 						}
 						if ShortLabel(got.Name) == got.Name {
@@ -94,15 +97,15 @@ func TestReviewedTargetTitlesRecognizeWithoutGameplayInference(t *testing.T) {
 
 						// Destroying half the current lettering must not keep the identity.
 						// The reader sees nothing; the tracker may only keep a verified
-						// four-slot row as an unverified geometry hint for at most 1s,
-						// exactly like the other four-slot specials (Minato's row).
+						// slot topology as an unverified geometry hint for at most 1s;
+						// it cannot retain the name or supply old bean votes.
 						draw.Draw(img, image.Rect(box.Min.X+box.Dx()/2, box.Min.Y, box.Max.X, box.Max.Y), image.Black, image.Point{}, draw.Src)
 						if got := reader.Read(img, roi, scale); got != (Readout{}) {
 							t.Fatalf("partial title was read: %+v", got)
 						}
 						want := Readout{}
 						if wantSlots > 0 {
-							want = Readout{Slots: wantSlots, RowOffsetY: wantOffset, Unverified: true}
+							want = Readout{Slots: wantSlots, RowOffsetY: wantOffset, Unverified: true, PaletteHint: wantPalette}
 						}
 						got = tracker.Read(reader, img, roi, scale, time.Unix(100, 0).Add(16*time.Millisecond))
 						if got != want {

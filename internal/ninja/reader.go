@@ -24,7 +24,7 @@ import (
 //go:embed templates/obito.png templates/obito_current.png templates/naruto.png templates/naruto_right.png
 //go:embed templates/sasuke_xiayin.png templates/sasuke_xiayin_duel.png
 //go:embed templates/itachi_hyakusen.png templates/itachi_hyakusen_mumu.png templates/itachi_hyakusen_portrait.png
-//go:embed templates/minato_kyubi.png templates/hashirama_edo.png templates/naruto_student.png
+//go:embed templates/minato_kyubi.png templates/hashirama_edo.png templates/hashirama_edo_camp.png templates/naruto_student.png
 var templates embed.FS
 
 type Palette string
@@ -164,15 +164,17 @@ func NewReaderWithAvatars(options AvatarOptions) *Reader {
 		{"obito_current", Obito, 4, Purple, 0, false},
 		{"sasuke_xiayin", SasukeXiayin, 4, Xiayin, 9, false},
 		{"sasuke_xiayin_duel", SasukeXiayin, 4, Xiayin, 9, false},
-		// User-provided native captures. These full-title templates establish
-		// a display identity; they retain the ordinary four-slot/default-color
-		// policy. Minato is the reviewed energy-gauge row-offset exception;
-		// four slots let the tracker keep that row through brief title gaps.
+		// Reviewed energy-gauge titles retain four slots/default colors.
+		// Their slot geometry lets the tracker keep the shifted row through
+		// brief title gaps without keeping the identity or old bean votes.
 		{"itachi_hyakusen", ItachiHyakusen, 4, "", EnergyGaugeRowOffset, true},
 		// MuMu 1280x720 capture requires independent character HUD portrait evidence.
 		{"itachi_hyakusen_mumu", ItachiHyakusen, 4, "", EnergyGaugeRowOffset, true},
 		{"minato_kyubi", MinatoKyubi, 4, "", EnergyGaugeRowOffset, false},
-		{"hashirama_edo", HashiramaEdo, 0, "", 0, false},
+		// Reviewed 2026-11-14 HUD: Edo Hashirama also has six red/blue slots,
+		// on the ordinary row. Keep both the old duel and current camp lettering.
+		{"hashirama_edo", HashiramaEdo, 6, Warm, 0, false},
+		{"hashirama_edo_camp", HashiramaEdo, 6, Warm, 0, false},
 		{"naruto_student", NarutoStudent, 0, "", 0, false},
 	} {
 		data, err := templates.ReadFile("templates/" + spec.file + ".png")
@@ -427,6 +429,9 @@ func avatarReadout(m AvatarMatch) Readout {
 	name := canonicalAvatarName(m.Name)
 	out := Readout{Name: name, AvatarName: name, AvatarScore: m.Score}
 	switch normalizeAvatarName(name) {
+	case normalizeAvatarName(HashiramaEdo):
+		// Exact catalog variant 90102, not the base Hashirama or another skin.
+		out.Slots, out.Palette = 6, Warm
 	case normalizeAvatarName(Obito):
 		out.Slots, out.Palette = 4, Purple
 	case normalizeAvatarName(SasukeXiayin), normalizeAvatarName(SasukeJinying):
@@ -439,6 +444,10 @@ func avatarReadout(m AvatarMatch) Readout {
 	case normalizeAvatarName(MinatoKyubi):
 		// Catalog ID 90316 is exactly 波风水门[九喇嘛连结]: same energy row.
 		out.Slots, out.RowOffsetY = 4, EnergyGaugeRowOffset
+	case normalizeAvatarName(TsunadeYokai):
+		// Reviewed 90475 HUD: the red gauge sits above four ordinary beans.
+		// Their row is 9px lower at 960x540, not Minato's 13px offset.
+		out.Slots, out.RowOffsetY = 4, 9
 	}
 	return out
 }

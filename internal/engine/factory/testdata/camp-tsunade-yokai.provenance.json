@@ -1,0 +1,15 @@
+{
+  "source": "user screenshot received 2026-11-14; copied from the image attachment without recompression",
+  "file": "camp-tsunade-yokai.jpg",
+  "sha256": "fbad6192ac8686a4b1a361a6cf9b248e240e8da94486b74019d8d411f27dd31e",
+  "reportedOriginalSize": [2560, 1600],
+  "receivedSize": [2000, 1250],
+  "contentArea": [0, 62, 2000, 1125],
+  "hud": {
+    "left": "药师兜[侠隐江湖], ordinary row, four available gold beans",
+    "right": "纲手[妖怪奇谭], exact portrait 90475, four available gold beans, red energy gauge above the row",
+    "rightRowOffsetAt960x540": 9
+  },
+  "scope": "Static scene/identity/bean regression. Resizes and painted empty cores are synthetic, not extra native captures or measured substitute events. No account names are shown.",
+  "changes": "Default pixel-backed auto content bounds (explicit stretch preserved); raw-camp-key ROI width 0.03875 to 0.058125 at unchanged threshold 0.87; exact TsunadeYokai avatar uses four ordinary-color slots at +9px. No broad red-gauge fallback or cooldown change."
+}

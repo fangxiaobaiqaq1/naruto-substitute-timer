@@ -1,5 +1,5 @@
 {
-  "scope": "Exact full-title display recognition only; no slot, palette, account, cooldown, or gameplay-rule inference.",
+  "scope": "Original 2026-09-21 evidence establishes exact full-title identity only. The six-slot Warm policy is separately verified by the 2026-11-14 HUDs in hashirama_edo_camp.provenance.json; no account or cooldown inference.",
   "name": "千手柱间[秽土转生]",
   "source": "user-provided duel screenshot 2026-09-21, 91bbfb754b95c206a18c413529345896_720.png",
   "sourceSHA256": "ddb0afd8244de926a68aee867631405387b89fb31ec16628a7d16c1375f11911",

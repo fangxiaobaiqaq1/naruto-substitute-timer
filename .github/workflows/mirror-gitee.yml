@@ -93,10 +93,11 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GITEE_TOKEN" || { echo "::error::GITEE_TOKEN is required to publish the mirrored release"; exit 1; }
-          # Same tag-only, non-force push as release.yml; credentials stay in this step.
+          # Same release branch/tag, non-force push as release.yml; credentials stay here.
           git -c credential.helper= \
             -c 'credential.helper=!f() { if [ "$1" = get ]; then printf "username=%s\npassword=%s\n" "${GITEE_REPOSITORY%%/*}" "$GITEE_TOKEN"; fi; }; f' \
-            push "https://gitee.com/$GITEE_REPOSITORY.git" "refs/tags/$TAG:refs/tags/$TAG"
+            push "https://gitee.com/$GITEE_REPOSITORY.git" \
+              "$GITEE_TARGET_COMMITISH:refs/heads/$TAG" "refs/tags/$TAG:refs/tags/$TAG"
           assets="$RUNNER_TEMP/mirror-gitee/assets"
           scripts/release/publish-gitee.sh "$TAG" "$RUNNER_TEMP/mirror-gitee/notes.md" \
             "$assets/naruto-timer-universal.apk" "$assets/timer-app.exe" \

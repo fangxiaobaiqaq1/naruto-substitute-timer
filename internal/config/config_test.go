@@ -16,6 +16,22 @@ func TestDefaultValid(t *testing.T) {
 	}
 }
 
+func TestAutoContentDefaultPreservesExplicitModes(t *testing.T) {
+	if Default().Layout.ContentMode != "auto" {
+		t.Fatal("default must allow pixel-backed black-bar detection")
+	}
+	for _, mode := range []string{"auto", "stretch", "letterbox"} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(`{"schemaVersion":1,"layout":{"contentMode":"`+mode+`"}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Load(path)
+		if err != nil || got.Layout.ContentMode != mode {
+			t.Fatalf("explicit %q overwritten: mode=%q err=%v", mode, got.Layout.ContentMode, err)
+		}
+	}
+}
+
 func TestUpdateSourceValidationAndLegacyDefault(t *testing.T) {
 	cfg := Default()
 	cfg.UI.UpdateSource = "github"

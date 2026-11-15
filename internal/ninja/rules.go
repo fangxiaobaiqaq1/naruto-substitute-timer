@@ -23,6 +23,7 @@ const (
 	ItachiHyakusen    = "宇智波鼬[百战]"
 	MinatoKyubi       = "波风水门[九喇嘛连结]"
 	HashiramaEdo      = "千手柱间[秽土转生]"
+	TsunadeYokai      = "纲手[妖怪奇谭]"
 	// HanzoEdo can substitute on its own like FifthMizukage: 15 s and 10 s.
 	HanzoEdo = "半藏[秽土转生]"
 	// EnergyGaugeRowOffset is measured from reviewed native HUDs. The energy

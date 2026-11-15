@@ -39,6 +39,7 @@ inline const std::string& Naruto = *new std::string("漩涡鸣人[暴怒·第六
 inline const std::string& ItachiHyakusen = *new std::string("宇智波鼬[百战]");
 inline const std::string& MinatoKyubi = *new std::string("波风水门[九喇嘛连结]");
 inline const std::string& HashiramaEdo = *new std::string("千手柱间[秽土转生]");
+inline const std::string& TsunadeYokai = *new std::string("纲手[妖怪奇谭]");
 // Substitutes on its own like FifthMizukage: 15 s and 10 s.
 inline const std::string& HanzoEdo = *new std::string("半藏[秽土转生]");
 // EnergyGaugeRowOffset is measured from reviewed native HUDs. The energy

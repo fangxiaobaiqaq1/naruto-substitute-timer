@@ -221,7 +221,45 @@ for path in sys.argv[1:]:
     fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
     assert fields["username"] == "test-owner" and fields["password"] == "git-test-token"
     assert all("git-test-token" not in arg for arg in result.args)
-    assert '"refs/tags/$TAG:refs/tags/$TAG"' in workflow
+    assert '"$GITEE_TARGET_COMMITISH:refs/heads/$TAG" "refs/tags/$TAG:refs/tags/$TAG"' in workflow
 PY
 
-echo 'publish-gitee.sh, mirror validation and workflow credential helper mock tests passed'
+# A release branch and tag may share a name: metadata and every checkout must
+# use the tag's immutable commit, even if that branch has since moved ahead.
+python3 - "$script_dir/../../.github/workflows/release.yml" "$tmpdir" <<'PY'
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+workflow = Path(sys.argv[1]).read_text()
+assert workflow.count('ref: ${{ needs.metadata.outputs.commit }}') == 4
+assert 'ref: ${{ needs.metadata.outputs.tag }}' not in workflow
+metadata = workflow.split('      - id: release\n', 1)[1].split('  android:\n', 1)[0]
+metadata = textwrap.dedent(metadata.split('        run: |\n', 1)[1].split('\n  # Gradle', 1)[0])
+repo = Path(sys.argv[2]) / 'same-name-refs'
+repo.mkdir()
+def git(*args):
+    return subprocess.check_output(['git', '-c', 'user.name=Release Test', '-c',
+                                    'user.email=release-test@example.invalid', *args],
+                                   cwd=repo, stderr=subprocess.DEVNULL, text=True).strip()
+git('init', '-q')
+(repo / 'docs').mkdir()
+notes = repo / 'docs/release-v0.3.2.md'
+notes.write_text('tag release notes\n')
+git('add', 'docs')
+git('commit', '-qm', 'release tag')
+tag_commit = git('rev-parse', 'HEAD')
+git('tag', 'v0.3.2')
+git('checkout', '-qb', 'v0.3.2')
+notes.unlink()
+git('commit', '-qam', 'branch diverged')
+output = repo / 'output'
+subprocess.run(['bash', '-c', metadata], cwd=repo, check=True,
+               env=dict(os.environ, INPUT_TAG='v0.3.2', PUSH_TAG='ignored', GITHUB_OUTPUT=str(output)))
+assert f'commit={tag_commit}\n' in output.read_text()
+assert tag_commit != git('rev-parse', 'HEAD')
+PY
+
+echo 'publish-gitee.sh, mirror, credential helper and same-name release ref tests passed'

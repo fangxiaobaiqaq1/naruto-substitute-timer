@@ -54,12 +54,14 @@ jobs:
           tag="${INPUT_TAG:-$PUSH_TAG}"
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must look like v0.2.9"; exit 1; }
           notes="docs/release-${tag}.md"
-          git show "$tag:$notes" >/dev/null 2>&1 || { echo "::error::missing $notes in $tag"; exit 1; }
-          git rev-parse "$tag^{commit}" >/dev/null
+          # A branch may have the same name. Resolve the tag once and build
+          # that immutable commit in every job, never an unqualified ref.
+          commit="$(git rev-parse --verify "refs/tags/$tag^{commit}")"
+          git show "$commit:$notes" >/dev/null 2>&1 || { echo "::error::missing $notes in $tag"; exit 1; }
           {
             echo "tag=$tag"
             echo "notes=$notes"
-            echo "commit=$(git rev-parse "$tag^{commit}")"
+            echo "commit=$commit"
           } >> "$GITHUB_OUTPUT"
 
   # Gradle, its plugins and their dependencies run here, so this job has no
@@ -72,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.commit }}
           persist-credentials: false
       - name: Verify Gradle wrapper
         shell: bash
@@ -196,7 +198,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.commit }}
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
@@ -251,7 +253,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.commit }}
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -307,7 +309,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.metadata.outputs.tag }}
+          ref: ${{ needs.metadata.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -324,12 +326,13 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GITEE_TOKEN" || { echo "::error::GITEE_TOKEN is required to publish the mirrored release"; exit 1; }
-          # The release API's target commit must exist on Gitee. Push only the
-          # release tag and its history: never force a tag or overwrite a branch.
+          # Sync only this release's same-name branch/tag and their history.
+          # Never force either ref or touch the repository's default branch.
           # Credentials stay in this step's environment, not a URL or git config.
           git -c credential.helper= \
             -c 'credential.helper=!f() { if [ "$1" = get ]; then printf "username=%s\npassword=%s\n" "${GITEE_REPOSITORY%%/*}" "$GITEE_TOKEN"; fi; }; f' \
-            push "https://gitee.com/$GITEE_REPOSITORY.git" "refs/tags/$TAG:refs/tags/$TAG"
+            push "https://gitee.com/$GITEE_REPOSITORY.git" \
+              "$GITEE_TARGET_COMMITISH:refs/heads/$TAG" "refs/tags/$TAG:refs/tags/$TAG"
           rm -rf release-assets/windows release-assets/RELEASE_TAG
           (
             cd release-assets

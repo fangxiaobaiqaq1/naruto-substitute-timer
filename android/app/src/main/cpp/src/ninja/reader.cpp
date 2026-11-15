@@ -96,15 +96,17 @@ std::shared_ptr<Reader> Reader::NewReader() {
         {"obito_current", &Obito, 4, Purple, 0, false},
         {"sasuke_xiayin", &SasukeXiayin, 4, Xiayin, 9, false},
         {"sasuke_xiayin_duel", &SasukeXiayin, 4, Xiayin, 9, false},
-        // User-provided native captures. These full-title templates establish
-        // a display identity; they retain the ordinary four-slot/default-color
-        // policy. Minato is the reviewed energy-gauge row-offset exception;
-        // four slots let the tracker keep that row through brief title gaps.
+        // Reviewed energy-gauge titles retain four slots/default colors.
+        // Their slot geometry keeps the shifted row through brief title gaps,
+        // never the identity or old bean votes.
         {"itachi_hyakusen", &ItachiHyakusen, 4, Palette::None, EnergyGaugeRowOffset, true},
         // MuMu 1280x720 capture requires independent character HUD portrait evidence.
         {"itachi_hyakusen_mumu", &ItachiHyakusen, 4, Palette::None, EnergyGaugeRowOffset, true},
         {"minato_kyubi", &MinatoKyubi, 4, Palette::None, EnergyGaugeRowOffset, false},
-        {"hashirama_edo", &HashiramaEdo, 0, Palette::None, 0, false},
+        // Reviewed 2026-11-14 HUD: six red/blue slots on the ordinary row.
+        // Keep both the old duel and current camp lettering, as on Go.
+        {"hashirama_edo", &HashiramaEdo, 6, Warm, 0, false},
+        {"hashirama_edo_camp", &HashiramaEdo, 6, Warm, 0, false},
         {"naruto_student", &NarutoStudent, 0, Palette::None, 0, false},
     };
     AssetStore& store = AssetStore::Instance();
@@ -368,7 +370,11 @@ Readout avatarReadout(const AvatarMatch& m) {
     out.AvatarName = name;
     out.AvatarScore = m.Score;
     const std::string key = normalizeAvatarName(name);
-    if (key == normalizeAvatarName(Obito)) {
+    if (key == normalizeAvatarName(HashiramaEdo)) {
+        // Exact catalog variant 90102, not the base Hashirama or another skin.
+        out.Slots = 6;
+        out.Palette_ = Warm;
+    } else if (key == normalizeAvatarName(Obito)) {
         out.Slots = 4;
         out.Palette_ = Purple;
     } else if (key == normalizeAvatarName(SasukeXiayin) || key == normalizeAvatarName(SasukeJinying)) {
@@ -385,6 +391,11 @@ Readout avatarReadout(const AvatarMatch& m) {
         // Catalog ID 90316 is exactly 波风水门[九喇嘛连结]: same energy row.
         out.Slots = 4;
         out.RowOffsetY = EnergyGaugeRowOffset;
+    } else if (key == normalizeAvatarName(TsunadeYokai)) {
+        // Reviewed 90475 HUD: four ordinary beans below the red gauge.
+        // 9px at 960x540, not Minato's 13px offset.
+        out.Slots = 4;
+        out.RowOffsetY = 9;
     }
     return out;
 }
