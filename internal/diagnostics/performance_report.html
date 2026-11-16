@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>独立性能报告</title>
+<style>
+:root{color-scheme:light dark;--bg:#f3f6fc;--card:#fff;--text:#17243c;--muted:#57667e;--line:#dde5f1;--accent:#356be8;--warn:#936000;--warnbg:#fff6dd;--shadow:0 7px 26px #193a6b09}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.65 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1480px;margin:auto;padding:32px 24px 64px}h1{font-size:32px;letter-spacing:.04em;margin:10px 0}h2{font-size:21px;margin:0 0 14px}h3{font-size:15px;margin:0 0 12px}p{margin:8px 0}a{color:var(--accent)}.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.15em}.muted,small{color:var(--muted)}.badge{display:inline-block;padding:3px 11px;border-radius:16px;background:var(--line);font-size:12px;margin-right:8px}.warning{background:var(--warnbg);color:var(--warn);padding:14px 18px;border-radius:12px;margin:16px 0}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:14px;margin:22px 0}.card,section,.chart{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}.card{padding:18px}.big{font-size:25px;font-weight:700;line-height:1.5}.card .muted{font-size:12px}section{padding:22px;margin:20px 0}.facts{display:flex;gap:12px 28px;flex-wrap:wrap}.facts span{max-width:100%;overflow-wrap:anywhere}.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr));gap:16px}.chart{padding:16px;min-width:0}canvas{display:block;width:100%;height:240px;touch-action:pan-y}.legend{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;color:var(--muted)}.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}.tooltip{min-height:42px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}.scroll{overflow:auto;max-height:660px;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;text-align:left;font-size:12px;white-space:nowrap}th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{position:sticky;top:0;background:var(--card);z-index:1;color:var(--muted);font-weight:600}td.wrap{white-space:normal;min-width:220px;max-width:500px;overflow-wrap:anywhere}tr:last-child td{border-bottom:0}tr:hover td{background:var(--bg)}code{font-size:12px;overflow-wrap:anywhere}.notes li{margin:9px 0;overflow-wrap:anywhere}summary{cursor:pointer;font-weight:600}details{margin-top:14px}.events{max-height:380px;overflow:auto}.empty{color:var(--muted);padding:12px}.links{display:flex;gap:16px;flex-wrap:wrap}.foot{margin-top:28px;color:var(--muted);font-size:12px}@media(prefers-color-scheme:dark){:root{--bg:#101725;--card:#172235;--text:#e2eaf7;--muted:#a8b8d0;--line:#2a3b54;--accent:#91b2ff;--warn:#f9cf7e;--warnbg:#382f20;--shadow:none}}@media(max-width:650px){main{padding:20px 12px 40px}section{padding:16px}h1{font-size:26px}}
+</style>
+</head>
+<body><main>
+<header>
+<div class="eyebrow">PERFORMANCE / OFFLINE SNAPSHOT</div>
+<h1>独立性能报告</h1>
+<p class="muted">{{.Metadata.Version}} · {{clock .Summary.StartedAt}} · 不依赖网络、CDN 或本地服务</p>
+<p><span class="badge">{{if .Summary.Active}}采集中 · 固定前缀快照{{else}}已停止会话{{end}}</span><span class="badge">CPU 按全逻辑核归一</span><span class="badge">缺失 ≠ 0</span></p>
+</header>
+{{if .Summary.Insufficient}}<div class="warning"><strong>样本不足：</strong>当前快照仅 {{.Summary.Samples}} 个样本。允许导出空快照，但不能据此判断趋势、稳定性或泄漏。</div>{{end}}
+{{if .ShortSessionWarning}}<div class="warning">{{.ShortSessionWarning}}</div>{{end}}
+{{if .Summary.RecorderError}}<div class="warning">记录器报告过错误。为避免泄露本地用户名/路径，不导出错误原文；请结合采集可用性、停止原因与缺失区间判断。</div>{{end}}
+<div class="cards">
+<div class="card"><div class="muted">一致快照</div><div class="big">{{.Summary.Samples}} <small>样本</small></div><div class="muted">{{size .Summary.TimelineBytes}} · 仅指定前缀</div></div>
+<div class="card"><div class="muted">采样缺失区间</div><div class="big">{{len .Summary.Gaps}}</div><div class="muted">期望间隔 {{.Summary.ExpectedIntervalS}} 秒；不插值</div></div>
+{{range .Summary.Metrics}}{{if or (eq .Key "main_cpu_percent") (eq .Key "tree_cpu_percent") (eq .Key "go_heap_alloc_bytes") (eq .Key "ui_queue_ms")}}
+<div class="card"><div class="muted">{{.Label}}</div><div class="big">{{human .Peak .Unit}}{{if and (ne .Unit "bytes") (ne .Unit "bytes/s")}} <small>{{.Unit}}</small>{{end}}</div><div class="muted">峰值 · P95 {{human .P95 .Unit}} · 有效 {{.Count}}</div></div>
+{{end}}{{end}}
+</div>
+<section><h2>会话与环境</h2>
+<div class="facts"><span>会话开始：{{clock .Summary.StartedAt}}</span><span>首次观测：{{clock .Summary.FirstAt}}</span><span>最后观测：{{clock .Summary.LastAt}}</span><span>会话结束：{{if .Summary.EndedAt}}{{clock .Summary.EndedAt}}{{else if .Summary.Active}}尚未结束（本次快照）{{else}}未提供{{end}}</span><span>观测时长：{{if .ObservedSeconds}}{{number .ObservedSeconds}} 秒{{else}}不可用{{end}}</span></div>
+<p class="muted">观测时长 = 最后观测 elapsed_s − 首次观测 elapsed_s，含其中的采样缺口，不等于会话墙钟总时长；上述时间均显示时区。</p>
+<div class="facts"><span>系统：{{.Metadata.System.OS}} {{.Metadata.System.OSVersion}}</span><span>架构：{{.Metadata.System.NativeArch}} / {{.Metadata.System.ProcessArch}}</span><span>CPU：{{.Metadata.System.CPUName}}</span><span>逻辑核：{{if gt .Metadata.System.LogicalCPUs 0}}{{.Metadata.System.LogicalCPUs}}{{else}}不可用{{end}}</span><span>物理内存：{{if gt .Metadata.System.TotalRAMBytes 0}}{{size .Metadata.System.TotalRAMBytes}}{{else}}不可用{{end}}</span><span>Go：{{.Metadata.GoVersion}}</span><span>主进程 PID：{{.Metadata.RootPID}}</span><span>停止原因：{{if .Summary.StopReason}}{{.Summary.StopReason}}{{else}}未提供{{end}}</span><span>采集后端：{{.Metadata.Settings.CaptureProvider}}</span><span>采集轮询：{{.Metadata.Settings.PollMS}} ms</span></div>
+<p>可选 profiles 采集请求：{{if .Metadata.ProfilesRequested}}已启用（profiles_requested=true）{{else}}未请求（profiles_requested=false）{{end}}；请求不等于采集已完成，实际打包结果见下表。</p>
+<details open><summary>构建标识（白名单）</summary><div class="facts">{{range $key, $value := .Metadata.Build}}<span><code>{{$key}}</code>：{{$value}}</span>{{else}}<span class="muted">未提供白名单构建标识。</span>{{end}}</div></details>
+{{range .Metadata.System.GPUs}}<p class="muted">GPU：{{.Name}} · 驱动 {{.Driver}} · 临时适配器 {{.Adapter}}</p>{{end}}
+{{range .Metadata.Notes}}<p class="muted">{{.}}</p>{{end}}
+<p class="muted">进程 CPU% = CPU 时间增量 / counter_interval_seconds / 逻辑核数 × 100；coreEquivalent = CPU% × 逻辑核数 / 100。进程树工作集合计可能重复共享页；ORT 等原生内存不在 Go heap 中。</p>
+</section>
+<section><h2>时间曲线</h2><p class="muted">横轴为会话 elapsed_s；纵轴单位见标题。缩减时保留桶内首末与最小/最大值（非均值抹峰）。缺失处断线；含缺失的缩减桶仅展示极值散点。红色短线标记卡顿，背景阴影标记采样缺口。悬停查看最近的保留点，精确数据见原始文件。collector_ms 仅含原生/运行时采集与统计，不含序列化、写盘和导出，不能视为总监控开销。</p><noscript><div class="warning">JavaScript 未启用：下方静态汇总、进程表和可用性仍可阅读；曲线需要启用内置脚本。</div></noscript><div id="charts" class="charts"></div></section>
+<section><h2>全量指标汇总</h2><p class="muted">有效样本等权；P50/P95/P99 使用最近秩。首/末为该指标有效观测的首/末；趋势为每分钟线性回归斜率，分钟桶统计另见 summary.json。未知指标仍保留原键。bytes / bytes/s 仅在显示时按 1024 换算为 KiB/MiB/GiB 等；JSON/CSV 保留原始数值和单位。趋势列为显示单位/分钟。内存增长只提示排查线索，不能判定泄漏。</p>
+<div class="scroll"><table><thead><tr><th>指标 / 原始单位</th><th>有效 / 缺失</th><th>首</th><th>末</th><th>峰值</th><th>均值</th><th>P50</th><th>P95</th><th>P99</th><th>首末差</th><th>趋势 / 分钟</th></tr></thead><tbody>
+{{range .Summary.Metrics}}<tr><td class="wrap">{{.Label}} <small>{{.Unit}}</small><br><code>{{.Key}}</code></td><td>{{.Count}} / {{.Missing}}</td><td>{{human .First .Unit}}</td><td>{{human .Last .Unit}}</td><td>{{human .Peak .Unit}}</td><td>{{human .Mean .Unit}}</td><td>{{human .P50 .Unit}}</td><td>{{human .P95 .Unit}}</td><td>{{human .P99 .Unit}}</td><td>{{human .Change .Unit}}</td><td>{{human .TrendPerMinute .Unit}}</td></tr>{{end}}
+</tbody></table></div></section>
+<section><h2>已观测进程树</h2><p class="muted">按 PID + StartID 区分重启，不枚举其他应用。以下数值为各指标独立峰值，不保证同时发生；均值/首末/原始键见 summary.json，所有进程原始观测与 GPU 引擎见 samples.jsonl。内存和 IO 在页面上自动换算单位，原始单位分别为 bytes 和 bytes/s。进程 CPU/IO 速率采用各自的 counter_interval_seconds；实际读取时刻见原始进程 counter_at，counter_age_ms 表示时效。样本级 at/interval_s 不代替该时间窗，也不用于重算速率。缺失不是 0。</p>
+<div class="scroll"><table><thead><tr><th>PID / PPID · 进程</th><th>身份 / 观测秒</th><th>CPU %</th><th>核等效</th><th>工作集</th><th>私有提交</th><th>私有驻留（Linux）</th><th>GPU %</th><th>专用 / 共享显存</th><th>IO 读 / 写</th><th>线程 / 句柄 / FD</th></tr></thead><tbody>
+{{range .Processes}}<tr><td class="wrap">{{.PID}} / {{.Parent}} · {{.Name}}</td><td class="wrap"><code>{{if .StartID}}{{.StartID}}{{else}}身份未知（不能排除 PID 复用）{{end}}</code><br>{{.FirstS}} → {{.LastS}} s · {{.Samples}} 样本</td><td>{{number .CPU}}</td><td>{{number .Cores}}</td><td>{{human .WorkingSet "bytes"}}</td><td>{{human .Private "bytes"}}</td><td>{{human .PrivateResident "bytes"}}</td><td>{{number .GPU}}</td><td>{{human .VRAM "bytes"}} / {{human .GPUShared "bytes"}}</td><td>{{human .IORead "bytes/s"}} / {{human .IOWrite "bytes/s"}}</td><td>{{number .Threads}} / {{number .Handles}} / {{number .FDs}}</td></tr>{{else}}<tr><td colspan="11" class="empty">未观测到进程数据。</td></tr>{{end}}
+</tbody></table></div><p class="muted">汇总上限导致省略 {{.Summary.OmittedProcessObservations}} 次进程观测；原始样本完整保留。</p></section>
+<section><h2>采样缺失与事件</h2>
+<details {{if .Summary.Gaps}}open{{end}}><summary>缺失区间 · {{len .Summary.Gaps}}</summary><div class="events"><ul>{{range .Summary.Gaps}}<li>{{.FromS}} → {{.ToS}} 秒：估计缺失 {{.EstimatedMissing}} 个采样位置</li>{{else}}<li>当前前缀未检测到明显采样间隙；不代表所有指标均可用，也不推断活跃尾部。</li>{{end}}</ul></div></details>
+<details open><summary>baseline / counter reset / 卡顿 · {{len .Summary.Events}} 项</summary><p class="muted">展示前 200 项；完整事件在 summary.json。进程新出现、重启或重新观测建立基线，不跨身份计算累计计数器增量。</p><div class="events"><table><thead><tr><th>elapsed_s</th><th>标记</th></tr></thead><tbody>{{range .Events}}<tr><td>{{.ElapsedS}}</td><td class="wrap">{{range .Markers}}<div>{{.}}</div>{{end}}</td></tr>{{else}}<tr><td colspan="2">无可展示事件。</td></tr>{{end}}</tbody></table></div></details>
+<details open><summary>待落盘标记 · {{len .Summary.PendingMarkers}} 项（已接受，尚未进入本次前缀）</summary><p class="muted">可能包含刚点击的卡顿标记或导出开始/结束。以下仅保留状态快照中的标记文本，不推测采样时刻，不追加到 samples.jsonl / CSV，不参与指标统计或曲线。</p><ul>{{range .Summary.PendingMarkers}}<li>{{.}}</li>{{else}}<li class="muted">无待落盘标记。</li>{{end}}</ul></details>
+</section>
+<section><h2>可用性与可选 profile</h2><p class="muted">每项指标的缺失次数见汇总。下表是采集器明确提供的原因；没有原因不等于可用。状态和文件是否实际包含分别展示；只有 profiles_requested=true 且该文件 status=ok 才会检查并打包，不会因为恰好存在同名文件而绕过。</p>
+<div class="scroll"><table><thead><tr><th>范围 / 指标</th><th>原因</th><th>次数</th><th>首 / 末秒</th></tr></thead><tbody>{{range .Summary.Unavailable}}<tr><td>{{.Scope}} / {{.Metric}}</td><td class="wrap">{{.Reason}}</td><td>{{.Count}}</td><td>{{.FirstS}} / {{.LastS}}</td></tr>{{else}}<tr><td colspan="4">采集器未提供不可用原因；请同时检查缺失样本列。</td></tr>{{end}}</tbody></table></div>
+<p class="muted">可用性原因汇总省略 {{.Summary.OmittedReasons}} 次观测；原始样本完整保留。</p>
+<ul>{{range $key, $value := .Summary.ProfileStatus}}<li>采集状态 <code>{{$key}}</code>：{{$value}}</li>{{else}}<li>未提供 profile 采集状态（可能未启用）。</li>{{end}}</ul>
+<div class="scroll"><table><thead><tr><th>固定允许文件</th><th>导出结果</th><th>采集 status</th><th>导出大小</th></tr></thead><tbody>{{range .Summary.Profiles}}<tr><td>{{.Name}}</td><td class="wrap">{{.Result}}</td><td class="wrap">{{if .Status}}{{.Status}}{{else}}未提供{{end}}</td><td>{{size .Bytes}}</td></tr>{{end}}</tbody></table></div>
+</section>
+<section><h2>口径与限制</h2><ul class="notes">{{range .Summary.Notes}}<li>{{.}}</li>{{end}}</ul></section>
+<section><h2>完整原始数据</h2><p class="muted">请先解压整个 ZIP。HTML 的图表数据与样式均已内置；以下文件保留完整采样前缀和统计，可脱离本页面分析。CSV 遵循标准引号/换行规则；数值单位与列名对应 metadata / summary 的指标定义。</p><div class="links"><a href="samples.jsonl" download>samples.jsonl</a><a href="samples.csv" download>samples.csv</a><a href="metadata.json" download>metadata.json</a><a href="summary.json" download>summary.json</a><a href="report.md" download>report.md</a></div></section>
+<div class="foot">生成时间 {{clock .Summary.GeneratedAt}} · 独立性能报告 · 不含旧全量诊断或截图</div>
+</main>
+<script id="performance-chart-data" type="application/json">{{.ChartJSON}}</script>
+<script>
+(function(){
+'use strict';
+const payload=JSON.parse(document.getElementById('performance-chart-data').textContent);
+const groups=new Map(), colors=['#4b83f5','#e89036','#26ad95','#a57bec','#dc668e'];
+for(const s of payload.charts){if(!groups.has(s.group))groups.set(s.group,[]);groups.get(s.group).push(s);}
+function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;}
+function fmt(n,unit){if(n===null||n===undefined)return '不可用';if(unit==='bytes'||unit==='bytes/s'){const suffix=unit==='bytes/s'?'/s':'';let v=n,i=0;const units=['B','KiB','MiB','GiB','TiB'];while(Math.abs(v)>=1024&&i<units.length-1){v/=1024;i++;}return v.toFixed(2)+' '+units[i]+suffix;}return Number(n).toLocaleString('zh-CN',{maximumFractionDigits:3});}
+for(const [title,series] of groups){
+ const card=el('div','chart'),heading=el('h3','',title),canvas=el('canvas'),legend=el('div','legend'),tip=el('div','tooltip','横轴：会话秒数 · 红色标记：卡顿');
+ canvas.setAttribute('role','img');canvas.setAttribute('aria-label',title+'；完整数值见汇总与 CSV');
+ card.append(heading,canvas,legend,tip);document.getElementById('charts').append(card);
+ const valid=series.map(s=>(s.points||[]).filter(p=>p[0]!==null&&p[1]!==null));
+ series.forEach((s,i)=>{const item=el('span'),dot=el('i');dot.style.backgroundColor=colors[i%colors.length];item.append(dot,document.createTextNode(s.label+(valid[i].length?'':' · 不可用')));legend.append(item);});
+ let left=64,right=14,top=18,bottom=30,width=500,height=240,tmax=1,vmin=0,vmax=1;
+ function draw(){
+  width=Math.max(240,canvas.getBoundingClientRect().width);const ratio=window.devicePixelRatio||1;canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);const c=canvas.getContext('2d');if(!c)return;c.scale(ratio,ratio);
+  let found=false;tmax=Math.max(1,payload.end_s||0);vmin=0;vmax=0;for(const ps of valid)for(const p of ps){found=true;tmax=Math.max(tmax,p[0]);vmax=Math.max(vmax,p[1]);vmin=Math.min(vmin,p[1]);}if(vmax===vmin)vmax=vmin+1;
+  const css=getComputedStyle(document.documentElement),muted=css.getPropertyValue('--muted').trim(),line=css.getPropertyValue('--line').trim();
+  const x=t=>left+t/tmax*(width-left-right),y=v=>top+(vmax-v)/(vmax-vmin)*(height-top-bottom);
+  c.font='11px system-ui';c.fillStyle=muted;
+  for(const g of payload.gaps||[]){c.fillStyle='rgba(180,150,80,.09)';c.fillRect(x(g.from_s),top,Math.max(1,x(Math.min(tmax,g.to_s))-x(g.from_s)),height-top-bottom);}
+  for(let i=0;i<=4;i++){const v=vmin+(vmax-vmin)*i/4,yy=y(v);c.strokeStyle=line;c.lineWidth=1;c.beginPath();c.moveTo(left,yy);c.lineTo(width-right,yy);c.stroke();c.fillStyle=muted;c.textAlign='right';c.fillText(fmt(v,series[0].unit),left-7,yy+4);c.textAlign='center';c.fillText((tmax*i/4).toFixed(1)+'s',x(tmax*i/4),height-8);}
+  if(!found){c.textAlign='center';c.fillText('无有效观测 · 不以 0 代替',width/2,height/2);return;}
+  series.forEach((s,i)=>{c.strokeStyle=colors[i%colors.length];c.fillStyle=c.strokeStyle;c.lineWidth=1.6;c.beginPath();let pen=false;for(const p of s.points||[]){if(p[0]===null||p[1]===null){pen=false;continue;}if(pen)c.lineTo(x(p[0]),y(p[1]));else c.moveTo(x(p[0]),y(p[1]));pen=true;}c.stroke();for(const p of valid[i]){c.beginPath();c.arc(x(p[0]),y(p[1]),1.6,0,2*Math.PI);c.fill();}});
+  c.strokeStyle='#e25e64';c.lineWidth=1.2;c.beginPath();for(const t of payload.stalls||[]){if(t>tmax)continue;c.moveTo(x(t),top);c.lineTo(x(t),top+7);}c.stroke();
+ }
+ canvas.addEventListener('mousemove',e=>{const t=Math.max(0,Math.min(tmax,(e.clientX-canvas.getBoundingClientRect().left-left)/(width-left-right)*tmax));const lines=['光标 '+t.toFixed(2)+' 秒（最近保留点，不作插值）'];series.forEach((s,i)=>{let best=null;for(const p of valid[i])if(best===null||Math.abs(p[0]-t)<Math.abs(best[0]-t))best=p;lines.push(s.label+'：'+(best?fmt(best[1],s.unit)+' @ '+best[0].toFixed(2)+'s':'不可用'));});tip.textContent=lines.join('\n');});
+ draw();if(typeof ResizeObserver!=='undefined')new ResizeObserver(draw).observe(card);else window.addEventListener('resize',draw);
+}
+})();
+</script>
+</body>
+</html>

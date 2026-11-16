@@ -57,6 +57,7 @@ type session struct {
 	updateFeed           updates.Feed
 	updateNotice         string
 	diagnosticsState
+	performanceState
 	done                  chan struct{}
 	stopOnce              sync.Once
 	textControl           func(bool)
@@ -252,7 +253,11 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 		s.rememberWindowPosition()
 		w.Close()
 	})
-	defer func() { s.stop(); s.diagnosticWriters.Wait() }()
+	defer func() {
+		s.stop()
+		s.performanceWorkers.Wait()
+		s.diagnosticWriters.Wait()
+	}()
 	if len(cfg.UI.PlayerNames) > 0 {
 		s.myName = cfg.UI.PlayerNames[0]
 	}
@@ -388,6 +393,10 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	swap := widget.NewButton("换边", s.swapSide)
 	diag := widget.NewButton("诊断", s.openDiagnostics)
 	about := widget.NewButton("关于", s.openAbout)
+	s.performanceButton = widget.NewButton("性能报告", s.openPerformance)
+	s.performanceMu.Lock()
+	s.performanceButton.Text = performanceButtonText(s.performanceUpdateLocked(false))
+	s.performanceMu.Unlock()
 	s.updateButton = widget.NewButtonWithIcon("发现新版本", theme.DownloadIcon(), s.openAbout)
 	s.updateButton.Importance = widget.HighImportance
 	s.updateButton.Hide()
@@ -396,7 +405,8 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	// the last three seconds, neutral otherwise (same as the Android card).
 	s.accent = canvas.NewRectangle(panelBorder)
 	s.accent.SetMinSize(fyne.NewSize(3, 0))
-	s.footer = container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about))
+	// Keep the existing four controls at 280px; performance gets its own row.
+	s.footer = container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about), s.performanceButton)
 	s.singleClockRow = container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(eventChip))
 	body := container.NewBorder(nil, container.NewPadded(s.footer), s.accent, nil,
 		container.NewVBox(
@@ -598,6 +608,7 @@ func (c *latestCoalescer[T]) Take() *T {
 func (s *session) stop() {
 	s.stopOnce.Do(func() {
 		close(s.done)
+		s.shutdownPerformance()
 		s.stopDiagnostics()
 		s.mu.Lock()
 		aboutCancel, captureCancel := s.aboutCancel, s.captureCancel
@@ -741,6 +752,11 @@ func (s *session) captureOnce() {
 	// Read before the capture: its analysis uses this calibration or a newer one.
 	calibrationGen := s.calibrationFeed.gen.Load()
 	f := s.provider()
+	// Keep the disabled path to one atomic load, without even copying Frame
+	// into the observation helper. No pixels are retained or UI work posted.
+	if s.performanceActive.Load() != nil {
+		s.observePerformanceFrame(f)
+	}
 	// One atomic load unless the calibration window is open.
 	s.offerCalibrationFrame(f, calibrationGen)
 	trace := traceRef{recorder: recorder}

@@ -586,7 +586,8 @@ func (s *session) diagnosticsControls(w fyne.Window) fyne.CanvasObject {
 	})
 	hint := widget.NewLabel("无损 PNG 原帧与回放是两项独立开关：回放每秒最多一帧，保存原始游戏 JPEG 和同帧的 annotated JPEG（720px/质量75，两者共用64MiB上限）。标注图固定记录对应 frame_id 的识别、豆位、计时器显示和绘制时刻；没有同帧 UI 状态会明确写不可用，不会借用新帧。导出后可直接打开所在文件夹；支持包默认不含图像。")
 	hint.Wrapping = fyne.TextWrapWord
-	return container.NewVBox(widget.NewLabel("采集与延迟诊断"), record, replay, includeImages, includeNames, start,
+	performanceEntry := widget.NewButton("性能报告（不录制游戏画面）", s.openPerformance)
+	return container.NewVBox(widget.NewLabel("采集与延迟诊断"), performanceEntry, record, replay, includeImages, includeNames, start,
 		container.NewGridWithColumns(2, export, exportReplay),
 		container.NewGridWithColumns(2, exportBundle, probe),
 		container.NewGridWithColumns(2, open, openOCR), bundleContents, s.diagnosticLabel, hint)

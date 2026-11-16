@@ -352,7 +352,10 @@ func (s *session) buildSettings(tab int) {
 
 	calibrationEntry := widget.NewButtonWithIcon("区域校准（豆/头像）", theme.MediaPhotoIcon(), s.openCalibration)
 	diagnosticEntry := widget.NewButtonWithIcon("采集与延迟诊断 / 原帧录制", theme.MediaRecordIcon(), s.openDiagnostics)
+	performanceEntry := widget.NewButton("性能报告（CPU / 内存 / GPU）", s.openPerformance)
 	general := container.NewVScroll(container.NewVBox(
+		sectionCard("电脑资源占用", container.NewVBox(performanceEntry,
+			wrapped("独立的每秒性能监测与 ZIP 报告，不开启全量诊断、不录制游戏图像。关闭性能窗口仍继续监测。"))),
 		sectionCard("我方所在边", container.NewVBox(sideSel, rememberChk,
 			wrapped("点选即生效。选的是我方，浮窗计时的是另一边；自动尚未认出时显示“待认边”。"),
 			preMatchSideCheck,

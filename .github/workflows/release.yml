@@ -216,6 +216,14 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-glfw
             mingw-w64-ucrt-x86_64-pkgconf
+      - name: Test diagnostics on Windows
+        shell: pwsh
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          $env:Path = "C:\msys64\ucrt64\bin;$env:Path"
+          go test -race ./internal/diagnostics
+          if ($LASTEXITCODE -ne 0) { throw "Windows diagnostics tests failed" }
       - name: Build Windows binaries
         shell: pwsh
         env:
