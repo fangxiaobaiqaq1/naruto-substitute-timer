@@ -363,7 +363,42 @@ func (c *linuxPerformanceCollector) Collect() performancePlatformSample {
 		s.Unavailable["collection_budget"] = linuxPerformanceReadReason(err)
 		linuxPerformanceTreeProblem(&s, "incomplete: collection scan budget exhausted")
 	}
+	s.AllProcesses = c.allProcesses()
 	return s
+}
+
+// allProcesses reads one stat line per process for the system-wide table. It
+// mirrors the Windows collector so the whole pipeline can be exercised here.
+func (c *linuxPerformanceCollector) allProcesses() []performanceSystemProcess {
+	entries, err := os.ReadDir(c.procDirectory)
+	if err != nil {
+		return nil
+	}
+	var out []performanceSystemProcess
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 0 || len(out) >= 32768 {
+			continue
+		}
+		stat, err := c.readStat(pid)
+		if err != nil {
+			continue // Exited between ReadDir and the read.
+		}
+		p := performanceSystemProcess{PID: pid, ParentPID: stat.parentPID, Name: stat.name, StartID: stat.startID()}
+		if threads, ok := stat.uintField(20); ok {
+			p.Threads = int(threads)
+		}
+		if pages, ok := stat.uintField(24); ok && c.pageSize > 0 {
+			p.WorkingSet = float64(pages) * float64(c.pageSize)
+		}
+		user, userOK := stat.uintField(14)
+		system, systemOK := stat.uintField(15)
+		if userOK && systemOK && c.clockTicks > 0 {
+			p.CPUSeconds = (float64(user) + float64(system)) / float64(c.clockTicks)
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 func linuxPerformanceTreeProblem(s *performancePlatformSample, reason string) {

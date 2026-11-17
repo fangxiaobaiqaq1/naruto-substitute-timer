@@ -2,9 +2,11 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +30,7 @@ type performanceRecorder interface {
 	Snapshot() diagnostics.PerformanceStatus
 	Metadata() diagnostics.PerformanceMetadata
 	ObserveFrame(frame.Frame, time.Time, time.Duration, bool)
+	ObserveLoop(total, post time.Duration)
 	ObserveUIQueue(time.Duration)
 	Mark(string) error
 	Stop() error
@@ -62,6 +65,7 @@ type performanceRun struct {
 	exporting       bool
 	marking         bool
 	exportAfterStop bool
+	exportOnExit    bool // The app is closing: write the report before the process ends.
 	errorText       string
 	notice          string
 	exportPath      string
@@ -80,10 +84,22 @@ type performanceState struct {
 	performancePending  latestCoalescer[performanceUpdate]
 	performanceExportID uint64
 
+	// "Previous session" export state, protected by performanceMu.
+	performanceOffline       bool
+	performanceOfflineText   string
+	performanceOfflineCancel context.CancelFunc
+	performanceOfflineExport uint64
+	performanceOfflinePath   string
+
 	// Fyne-thread-only objects. Closing the view does not stop the recorder.
-	performanceWindow fyne.Window
-	performanceView   *performanceView
-	performanceButton *widget.Button
+	// performanceButton is the overlay's settings button, which doubles as
+	// the "recording" indicator. performanceSeenExport lives here, not in the
+	// view, so a report finished while Settings is closed is still announced.
+	performanceView       *performanceView
+	performanceButton     *widget.Button
+	performanceSeenExport uint64
+	// Capture-loop-goroutine only: when the current frame reached the loop.
+	performanceReceived time.Time
 
 	// Immutable after session initialization; nil selects production behavior.
 	performanceNew      func(diagnostics.PerformanceOptions) (performanceRecorder, error)
@@ -104,6 +120,8 @@ type performanceUpdate struct {
 	exportPath      string
 	exportID        uint64
 	fullDiagnostics bool
+	offline         bool
+	offlineText     string
 }
 
 func performanceSettings(cfg config.Config) diagnostics.PerformanceSettings {
@@ -120,10 +138,13 @@ func (s *session) startPerformance(profiles bool) bool {
 	s.mu.Lock()
 	options := diagnostics.PerformanceOptions{Root: s.cfg.Debug.Directory, Version: buildinfo.Version,
 		Settings: performanceSettings(s.cfg), Profiles: profiles}
+	// The effective settings travel with the report, so the developer does
+	// not have to ask for them separately.
+	options.Config, _ = json.MarshalIndent(s.cfg, "", "  ")
 	s.mu.Unlock()
 	s.performanceMu.Lock()
 	old := s.performanceCurrent
-	if s.performanceClosing || s.stopped() || (old != nil &&
+	if s.performanceClosing || s.stopped() || s.performanceOffline || (old != nil &&
 		(old.phase != performanceStopped && old.phase != performanceFailed || old.exporting || old.exportAfterStop || old.marking)) {
 		s.performanceMu.Unlock()
 		return false
@@ -222,8 +243,16 @@ func (s *session) finishPerformance(r *performanceRun) {
 	if err != nil {
 		r.errorText = "停止监测：" + err.Error()
 	}
-	export := r.exportAfterStop
+	export, onExit := r.exportAfterStop, r.exportOnExit
 	s.performanceMu.Unlock()
+	if onExit {
+		// Quitting is how a gaming session normally ends. Leave a finished
+		// report behind instead of raw samples; Run waits for this worker.
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_, _ = r.recorder.Export(ctx)
+		return
+	}
 	s.queuePerformanceUpdate(r)
 	if export {
 		s.exportPerformanceRun(r)
@@ -252,9 +281,15 @@ func (s *session) shutdownPerformance() {
 	s.performanceClosing = true
 	s.performanceActive.Store(nil)
 	if r := s.performanceCurrent; r != nil {
+		// A run still recording (or stopping toward its report) gets its ZIP
+		// written on the way out; anything else in flight is canceled.
+		r.exportOnExit = r.recorder != nil && (r.phase == performanceRunning || r.phase == performanceStopping && r.exportAfterStop)
 		r.cancel() // cancel accepted exports, not just the visible window
 		r.exportAfterStop = false
 		r.stopOnce.Do(func() { close(r.stop) })
+	}
+	if s.performanceOfflineCancel != nil {
+		s.performanceOfflineCancel()
 	}
 	s.performanceMu.Unlock()
 }
@@ -293,7 +328,7 @@ func (s *session) exportPerformanceRun(r *performanceRun) bool {
 		} else {
 			s.performanceExportID++
 			r.exportID, r.exportPath = s.performanceExportID, path
-			r.notice = "已导出性能 ZIP；不会自动上传。"
+			r.notice = "报告已生成。"
 		}
 		// A stop-and-export requested during a snapshot export gets a FINAL
 		// export after Stop, without concurrent ZIP writers or blocking the UI.
@@ -320,7 +355,7 @@ func (s *session) markPerformanceStall() bool {
 	s.queuePerformanceUpdate(r)
 	go func() {
 		defer s.performanceWorkers.Done()
-		err := r.recorder.Mark("用户标记：卡顿") // fixed label, never account/free-form text
+		err := r.recorder.Mark(diagnostics.PerformanceUserMark + "：卡顿")
 		s.performanceMu.Lock()
 		r.marking = false
 		if err != nil {
@@ -334,11 +369,9 @@ func (s *session) markPerformanceStall() bool {
 	return true
 }
 
-var performanceFrameError = errors.New("capture/analysis error")
-
 // One atomic load when off. Never enqueue a Frame/image or nest the session,
-// diagnostics and performance locks. The recorder consumes borrowed pixels only
-// to read bounds synchronously; only timing/counter fields cross this boundary.
+// diagnostics and performance locks. The recorder reads the frame's timings,
+// labels and error text synchronously and retains no pixels.
 func (s *session) observePerformanceFrame(f frame.Frame) {
 	r := s.performanceActive.Load()
 	if r == nil || s.stopped() {
@@ -351,42 +384,22 @@ func (s *session) observePerformanceFrame(f frame.Frame) {
 		return
 	default:
 	}
-	received := time.Now()
-	poll := s.poll()
-	full := s.currentDiagnostics() != nil
-	observation := frame.Frame{Img: f.Img, CaptureStarted: f.CaptureStarted, CapturedAt: f.CapturedAt,
-		AnalysisStarted: f.AnalysisStarted, AnalyzedAt: f.AnalyzedAt, Sequence: f.Sequence,
-		Hold: f.Hold, Duplicate: f.Duplicate, Fighting: f.Fighting, CaptureMethod: performanceBackend(f.CaptureMethod)}
-	switch f.Scene {
-	case "fight", "lobby", "result", "vs", "queue", "pick", "ban", "blank", "unsupported-resolution", "":
-		observation.Scene = f.Scene
-	default:
-		observation.Scene = "unknown"
-	}
-	if f.Err != nil {
-		observation.Err = performanceFrameError
-	}
-	r.recorder.ObserveFrame(observation, received, poll, full)
+	s.performanceReceived = time.Now()
+	r.recorder.ObserveFrame(f, s.performanceReceived, s.poll(), s.currentDiagnostics() != nil)
 }
 
-func performanceBackend(source string) string {
-	source = strings.ToLower(source)
-	switch {
-	case strings.Contains(source, "printwindow"):
-		return "printwindow-fullcontent"
-	case strings.Contains(source, "mumu"):
-		return "mumu-sdk"
-	case strings.Contains(source, "leidian") || strings.Contains(source, "雷电"):
-		if strings.Contains(source, "window") {
-			return "leidian-window"
-		}
-		if strings.Contains(source, "raw") {
-			return "leidian-adb-raw"
-		}
-		return "leidian-adb"
-	default:
-		return "unknown"
+// observePerformanceLoop reports one whole capture-loop iteration: its total
+// time and the part after the frame arrived (state update, bead logic, overlay
+// post). Called from the capture loop only.
+func (s *session) observePerformanceLoop(started time.Time) {
+	r := s.performanceActive.Load()
+	received := s.performanceReceived
+	s.performanceReceived = time.Time{}
+	if r == nil || received.IsZero() || received.Before(started) {
+		return
 	}
+	now := time.Now()
+	r.recorder.ObserveLoop(now.Sub(started), now.Sub(received))
 }
 
 // Caller holds performanceMu. Snapshot/Metadata copies have already been made
@@ -400,6 +413,10 @@ func (s *session) performanceUpdateLocked(full bool) *performanceUpdate {
 		u.exporting = r.exporting || (r.exportAfterStop && r.phase == performanceStopped)
 		u.marking, u.errorText, u.notice = r.marking, r.errorText, r.notice
 		u.exportPath, u.exportID = r.exportPath, r.exportID
+	}
+	u.offline, u.offlineText = s.performanceOffline, s.performanceOfflineText
+	if s.performanceOfflineExport > u.exportID {
+		u.exportID, u.exportPath = s.performanceOfflineExport, s.performanceOfflinePath
 	}
 	return u
 }
@@ -445,11 +462,19 @@ func (s *session) queuePerformanceUpdate(r *performanceRun) {
 	})
 }
 
+const performanceTabTitle = "性能"
+
+// performanceView is the 设置 → 性能 tab. It is rebuilt with the settings
+// window and dropped when that closes; the recorder keeps running either way.
 type performanceView struct {
-	status, hardware, cpu, memory, gpu, application, processes, metrics, availability, exportLabel *widget.Label
-	start, stop, export, mark                                                                      *widget.Button
-	profiles                                                                                       *widget.Check
-	seenExport                                                                                     uint64
+	window                              fyne.Window
+	status, top, details, exportLabel   *widget.Label
+	verdict                             *widget.Label
+	tiles                               [4]*canvas.Text
+	start, stop, mark, folder, previous *widget.Button
+	profiles                            *widget.Check
+	detailToggle                        *widget.Button
+	detailOpen                          bool
 }
 
 func performanceLabel(text string) *widget.Label {
@@ -458,80 +483,136 @@ func performanceLabel(text string) *widget.Label {
 	return l
 }
 
+// openPerformance shows the settings window on the 性能 tab.
 func (s *session) openPerformance() {
 	if s.stopped() {
 		return
 	}
-	if s.performanceWindow != nil {
-		s.performanceWindow.Show()
-		s.performanceWindow.RequestFocus()
+	s.openSettings()
+	if s.settingsTabs == nil {
 		return
 	}
-	w := fyne.CurrentApp().NewWindow("性能报告 · CPU / 内存 / GPU")
-	v := &performanceView{status: performanceLabel(""), hardware: performanceLabel(""),
-		cpu: performanceLabel(""), memory: performanceLabel(""), gpu: performanceLabel(""),
-		application: performanceLabel(""), processes: performanceLabel(""), metrics: performanceLabel(""),
-		availability: performanceLabel(""), exportLabel: performanceLabel("")}
-	v.profiles = widget.NewCheck("保存开始/结束 Go 堆与协程快照（可选）", nil)
+	for i, item := range s.settingsTabs.Items {
+		if item.Text == performanceTabTitle {
+			s.settingsTabs.SelectIndex(i)
+		}
+	}
+}
+
+var performanceTileTitles = [4]string{"整机 CPU", "计时器 CPU", "整机内存", "整机 GPU"}
+
+// performanceControls builds the tab. Only a status line, four numbers and a
+// short process list refresh every second; the long developer text is filled
+// only while its section is open.
+func (s *session) performanceControls(w fyne.Window) fyne.CanvasObject {
+	v := &performanceView{window: w, status: performanceLabel(""), top: widget.NewLabel(""), details: performanceLabel(""),
+		exportLabel: performanceLabel(""), verdict: performanceLabel("")}
+	v.top.TextStyle.Monospace = true
+	v.profiles = widget.NewCheck("附带开发者调试数据（堆 / 协程 / CPU 采样）", nil)
 	profiles := true
 	s.performanceMu.Lock()
-	v.seenExport = s.performanceExportID
 	if r := s.performanceCurrent; r != nil {
 		profiles = r.profiles
 	}
 	s.performanceMu.Unlock()
 	v.profiles.SetChecked(profiles)
-	v.start = widget.NewButton("开始性能监测", func() { s.startPerformance(v.profiles.Checked) })
-	v.stop = widget.NewButton("停止并导出 ZIP", func() { s.stopPerformance(true) })
-	v.export = widget.NewButton("导出当前快照 ZIP", func() { s.exportPerformance() })
+	v.start = widget.NewButton("开始监测", func() { s.startPerformance(v.profiles.Checked) })
+	v.stop = widget.NewButton("停止并生成报告", func() { s.stopPerformance(true) })
 	v.mark = widget.NewButton("标记卡顿", func() { s.markPerformanceStall() })
+	v.folder = widget.NewButton("打开报告文件夹", s.openPerformanceFolder)
+	v.previous = widget.NewButton("生成上次记录的报告", func() { s.exportPreviousPerformance() })
 	v.start.Importance = widget.HighImportance
-	s.performanceWindow, s.performanceView = w, v
-	w.SetOnClosed(func() { s.performanceWindow, s.performanceView = nil, nil })
-	addToggleMiniShortcut(w, s)
-	content := container.NewVBox(
-		performanceLabel("独立性能监测：默认关闭，仅本次运行。每秒采样 CPU、内存、GPU 和进程树；不启用全量诊断、不录制游戏图像、不采账号或 config 路径，也不自动上传。"),
-		performanceLabel("关闭本窗口仍继续监测，主窗口按钮会标记进行中。最多 21600 个样本（1Hz 约 6 小时）/ 时间线 64 MiB，达到上限自动停止；退出程序会停止并保留原始数据。"),
-		v.profiles, performanceLabel("快照包含分配统计、函数栈及源码文件名，非完整内存转储；分享前可取消勾选。快照与导出本身会产生额外开销。"),
-		container.NewGridWithColumns(2, v.start, v.stop, v.export, v.mark), v.status,
-		container.NewGridWithColumns(3, sectionCard("CPU", v.cpu), sectionCard("RAM / 内存", v.memory), sectionCard("GPU", v.gpu)),
-		sectionCard("采集与 UI 调度", v.application), sectionCard("已观测进程树", v.processes),
-		performanceLabel("CPU 百分比以全机逻辑核归一；工作集合计可能重复共享页。独立模拟器和预先存在的 ADB 服务不属于本进程树；GPU 为最忙引擎，缺失值不当作 0。"),
-		sectionCard("系统与本次设置", v.hardware), sectionCard("指标明细", v.metrics),
-		sectionCard("不可用原因 / 采集限制", v.availability), v.exportLabel)
-	w.SetContent(container.NewStack(canvas.NewRectangle(panelBG), container.NewPadded(container.NewVScroll(content))))
-	w.Resize(fyne.NewSize(880, 720))
+	tiles := make([]fyne.CanvasObject, 0, len(v.tiles))
+	for i := range v.tiles {
+		v.tiles[i] = canvas.NewText("—", clockLive)
+		v.tiles[i].TextSize = 22
+		v.tiles[i].TextStyle.Bold = true
+		caption := canvas.NewText(performanceTileTitles[i], tagIdle)
+		caption.TextSize = 12
+		tiles = append(tiles, container.NewVBox(caption, v.tiles[i]))
+	}
+	v.details.Hide()
+	v.detailToggle = widget.NewButton("显示开发者明细", func() {
+		v.detailOpen = !v.detailOpen
+		if v.detailOpen {
+			v.detailToggle.SetText("收起开发者明细")
+			v.details.Show()
+			s.refreshPerformanceView() // Fill on demand.
+		} else {
+			v.detailToggle.SetText("显示开发者明细")
+			v.details.Hide()
+		}
+	})
+	header := container.NewVBox(
+		container.NewGridWithColumns(3, v.start, v.stop, v.mark),
+		v.status)
+	body := container.NewVScroll(container.NewVBox(
+		sectionCard("现在的占用", container.NewVBox(container.NewGridWithColumns(4, tiles...), v.verdict)),
+		sectionCard("谁在占用资源", v.top),
+		sectionCard("报告", container.NewVBox(
+			performanceLabel("复现卡顿时点“标记卡顿”，结束后点“停止并生成报告”，把生成的 ZIP 发给开发者。关闭设置窗口不会停止监测，最长记录 6 小时。"),
+			container.NewGridWithColumns(2, v.folder, v.previous), v.exportLabel, v.profiles)),
+		v.detailToggle, v.details))
+	s.performanceView = v
+	s.refreshPerformanceView()
+	return container.NewBorder(header, nil, nil, nil, body)
+}
+
+// refreshPerformanceView re-applies the current state (Fyne thread only).
+func (s *session) refreshPerformanceView() {
 	full := s.currentDiagnostics() != nil
 	s.performanceMu.Lock()
 	u := s.performanceUpdateLocked(full)
 	s.performanceMu.Unlock()
 	s.applyPerformanceUpdate(u)
-	w.Show()
-	w.RequestFocus()
 }
 
 func performanceButtonText(u *performanceUpdate) string {
-	if u.run == nil {
-		return "性能报告"
+	if u.run != nil {
+		switch u.phase {
+		case performanceStarting, performanceRunning:
+			return "设置 · 监测中"
+		case performanceStopping:
+			return "设置 · 生成报告"
+		}
 	}
-	switch u.phase {
-	case performanceStarting:
-		return "性能报告 · 启动中"
-	case performanceRunning:
-		return "性能报告 · 进行中"
-	case performanceStopping:
-		return "性能报告 · 停止中"
+	return "设置"
+}
+
+// performanceTabVisible reports whether the user can currently see the tab;
+// when not, the once-per-second text updates are skipped entirely.
+func (s *session) performanceTabVisible() bool {
+	if s.performanceView == nil || s.settingsTabs == nil {
+		return false
 	}
-	return "性能报告"
+	selected := s.settingsTabs.Selected()
+	return selected != nil && selected.Text == performanceTabTitle
 }
 
 func (s *session) applyPerformanceUpdate(u *performanceUpdate) {
 	if s.stopped() {
 		return
 	}
+	// The overlay's settings button doubles as the "recording" indicator.
 	if b := s.performanceButton; b != nil {
 		if text := performanceButtonText(u); b.Text != text {
 			b.SetText(text)
+		}
+	}
+	// A finished export is announced even when the settings window is closed:
+	// the user asked for a file and must learn where it is.
+	if u.exportID > s.performanceSeenExport {
+		s.performanceSeenExport = u.exportID
+		if u.exportPath != "" {
+			parent := s.win
+			if s.settings != nil {
+				parent = s.settings
+			}
+			if s.performanceExported != nil {
+				s.performanceExported(parent, u.exportPath)
+			} else if parent != nil {
+				exportSaved(parent, "性能报告已保存", u.exportPath)
+			}
 		}
 	}
 	v := s.performanceView
@@ -539,34 +620,32 @@ func (s *session) applyPerformanceUpdate(u *performanceUpdate) {
 		return
 	}
 	idle := u.run == nil || u.phase == performanceStopped || u.phase == performanceFailed
-	setPerformanceEnabled(v.start, idle && !u.exporting && !u.marking)
+	busy := u.exporting || u.marking || u.offline
+	setPerformanceEnabled(v.start, idle && !busy)
 	setPerformanceEnabled(v.stop, u.run != nil && (u.phase == performanceStarting || u.phase == performanceRunning))
-	setPerformanceEnabled(v.export, u.recorder != nil && !u.exporting && (u.phase == performanceRunning || u.phase == performanceStopped))
 	setPerformanceEnabled(v.mark, u.run != nil && u.phase == performanceRunning && u.status.Active && !u.marking)
+	setPerformanceEnabled(v.previous, idle && !busy)
 	if idle && v.profiles.Disabled() {
 		v.profiles.Enable()
 	} else if !idle && !v.profiles.Disabled() {
 		v.profiles.Disable()
 	}
 	setPerformanceText(v.status, performanceStatusText(u, time.Now()))
-	setPerformanceText(v.cpu, performanceCard(u, [][2]string{{"system_cpu_percent", "系统"}, {"tree_cpu_percent", "进程树"}, {"tree_cpu_cores", "核等效"}}))
-	setPerformanceText(v.memory, performanceCard(u, [][2]string{{"main_working_set_bytes", "主进程工作集"}, {"tree_working_set_bytes", "进程树工作集"}, {"tree_private_bytes", "私有提交"}, {"go_heap_alloc_bytes", "Go 堆"}}))
-	setPerformanceText(v.gpu, performanceCard(u, [][2]string{{"system_gpu_busiest_engine_percent", "系统最忙引擎"}, {"main_gpu_busiest_engine_percent", "主进程最忙引擎"}, {"tree_gpu_busiest_engine_percent", "进程树最忙引擎"}, {"tree_gpu_dedicated_bytes", "专用显存"}, {"tree_gpu_shared_bytes", "共享内存"}}))
-	setPerformanceText(v.hardware, performanceHardwareText(u))
-	setPerformanceText(v.application, performanceApplicationText(u.status.Latest))
-	setPerformanceText(v.processes, performanceProcessesText(u.status.Latest, u.metadata.RootPID))
-	setPerformanceText(v.metrics, performanceMetricsText(u.status.Latest))
-	setPerformanceText(v.availability, performanceAvailabilityText(u))
 	setPerformanceText(v.exportLabel, u.exportPath)
-	if u.exportID > v.seenExport {
-		v.seenExport = u.exportID
-		if u.exportPath != "" {
-			if s.performanceExported != nil {
-				s.performanceExported(s.performanceWindow, u.exportPath)
-			} else {
-				exportSaved(s.performanceWindow, "性能报告（ZIP，不含游戏图像）", u.exportPath)
-			}
+	if !s.performanceTabVisible() {
+		return
+	}
+	values := performanceTileValues(u.status.Latest)
+	for i, text := range values {
+		if v.tiles[i].Text != text {
+			v.tiles[i].Text = text
+			v.tiles[i].Refresh()
 		}
+	}
+	setPerformanceText(v.verdict, performanceVerdictText(u))
+	setPerformanceText(v.top, performanceTopText(u.status.Latest))
+	if v.detailOpen {
+		setPerformanceText(v.details, performanceDetailText(u))
 	}
 }
 
@@ -585,20 +664,34 @@ func setPerformanceEnabled(b *widget.Button, on bool) {
 	}
 }
 
+func performanceElapsed(d time.Duration) string {
+	total := int(d.Round(time.Second) / time.Second)
+	if total < 0 {
+		total = 0
+	}
+	if total >= 3600 {
+		return fmt.Sprintf("%d 小时 %02d 分 %02d 秒", total/3600, total%3600/60, total%60)
+	}
+	if total >= 60 {
+		return fmt.Sprintf("%d 分 %02d 秒", total/60, total%60)
+	}
+	return fmt.Sprintf("%d 秒", total)
+}
+
 func performanceStatusText(u *performanceUpdate, now time.Time) string {
-	state := "性能监测关闭 · 尚未开始"
+	state := "未开始监测"
 	if u.run != nil {
 		switch u.phase {
 		case performanceStarting:
 			state = "正在后台启动性能监测…"
 		case performanceRunning:
-			state = "性能监测进行中"
+			state = "监测中"
 		case performanceStopping:
-			state = "正在后台停止 / 保存快照…"
+			state = "正在后台停止并保存…"
 		case performanceStopped:
-			state = "性能监测已停止"
+			state = "监测已停止"
 		case performanceFailed:
-			state = "性能监测启动失败"
+			state = "启动失败，可重试"
 		}
 	}
 	if !u.status.StartedAt.IsZero() {
@@ -606,24 +699,21 @@ func performanceStatusText(u *performanceUpdate, now time.Time) string {
 		if u.status.EndedAt != nil {
 			end = *u.status.EndedAt
 		}
-		duration := end.Sub(u.status.StartedAt).Round(time.Second)
-		if duration < 0 {
-			duration = 0
-		}
-		state += fmt.Sprintf(" · 时长 %s · %d 样本 · 时间线 %.2f MiB", duration, u.status.Samples, float64(u.status.Bytes)/(1<<20))
+		state += " · 已记录 " + performanceElapsed(end.Sub(u.status.StartedAt))
 	}
 	if u.exporting {
-		state += "\n正在后台导出 ZIP…"
+		state += "\n正在后台生成报告 ZIP…"
+	}
+	if u.offline {
+		state += "\n正在生成上次记录的报告…"
 	}
 	if u.fullDiagnostics {
-		state += "\n全量诊断：并行开启，其资源开销也计入本报告。"
-	} else {
-		state += "\n全量诊断：关闭（与本开关独立）。"
+		state += "\n诊断录制同时开启，会增加占用（已计入本报告）。"
 	}
-	if u.status.StopReason != "" {
+	if u.status.StopReason != "" && u.status.StopReason != "user_stopped" {
 		state += "\n停止原因：" + performanceStopReason(u.status.StopReason)
 	}
-	for _, text := range []string{u.status.LastError, u.errorText, u.notice} {
+	for _, text := range []string{u.status.LastError, u.errorText, u.notice, u.offlineText} {
 		if text != "" {
 			state += "\n" + text
 		}
@@ -634,212 +724,357 @@ func performanceStatusText(u *performanceUpdate, now time.Time) string {
 func performanceStopReason(reason string) string {
 	switch reason {
 	case "user_stopped":
-		return "用户停止 / 应用退出"
+		return "手动停止 / 程序退出"
 	case "sample_limit":
-		return "已达到 21600 个样本上限（1Hz 约 6 小时）"
+		return "已达到 6 小时记录上限"
 	case "byte_limit":
-		return "已达到时间线 64 MiB 上限"
+		return "已达到数据大小上限"
 	case "collector_failed":
 		return "采样器异常"
 	case "write_failed":
-		return "写入失败"
+		return "写入磁盘失败"
 	case "finalize_failed":
-		return "保存快照/关闭采样器失败（仍可尝试导出已有数据）"
+		return "保存调试数据或关闭采样器失败（已有数据仍可生成报告）"
 	default:
 		return reason
 	}
 }
 
-func performanceMetricValue(values map[string]float64, key string) string {
-	if (key == "go_gogc_percent" || key == "go_gc_disabled") && values["go_gc_disabled"] == 1 {
-		return "GC 已关闭"
+func performancePercent(values map[string]float64, key string) string {
+	if v, ok := values[key]; ok && !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 {
+		return fmt.Sprintf("%.0f%%", v)
 	}
-	if (key == "go_memory_limit_bytes" || key == "go_memory_limit_disabled") && values["go_memory_limit_disabled"] == 1 {
-		return "未设置（无限制）"
-	}
-	v, ok := values[key]
-	if !ok || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
-		return "不可用"
-	}
-	switch {
-	case strings.HasSuffix(key, "bytes_s"):
-		return fmt.Sprintf("%.2f MiB/s", v/(1<<20))
-	case strings.HasSuffix(key, "bytes"):
-		return fmt.Sprintf("%.1f MiB", v/(1<<20))
-	case strings.HasSuffix(key, "percent"):
-		return fmt.Sprintf("%.1f%%", v)
-	case strings.HasSuffix(key, "cores"):
-		return fmt.Sprintf("%.2f 核", v)
-	case strings.HasSuffix(key, "_ms"):
-		return fmt.Sprintf("%.2f ms", v)
-	case strings.HasSuffix(key, "_seconds"):
-		return fmt.Sprintf("%.3f s", v)
-	case strings.HasSuffix(key, "_s") || strings.HasSuffix(key, "_fps"):
-		return fmt.Sprintf("%.2f /s", v)
-	default:
-		return fmt.Sprintf("%.0f", v)
-	}
+	return "—"
 }
 
-func performanceCard(u *performanceUpdate, fields [][2]string) string {
-	if u.status.Latest == nil {
-		return "不可用 · 等待首个样本"
+func performanceBytes(v float64) string {
+	switch {
+	case v >= 1<<30:
+		return fmt.Sprintf("%.1f GB", v/(1<<30))
+	case v >= 1<<20:
+		return fmt.Sprintf("%.0f MB", v/(1<<20))
 	}
+	return fmt.Sprintf("%.0f KB", v/(1<<10))
+}
+
+func performanceTileValues(sample *diagnostics.PerformanceSample) [4]string {
+	if sample == nil {
+		return [4]string{"—", "—", "—", "—"}
+	}
+	return [4]string{performancePercent(sample.Values, "system_cpu_percent"), performancePercent(sample.Values, "tree_cpu_percent"),
+		performancePercent(sample.Values, "system_memory_used_percent"), performancePercent(sample.Values, "system_gpu_busiest_engine_percent")}
+}
+
+// performanceVerdictText is the one-line live reading under the four numbers:
+// the timer's own share, the emulator's, and a hint about who is responsible
+// when the machine is busy.
+func performanceVerdictText(u *performanceUpdate) string {
+	sample := u.status.Latest
+	if sample == nil {
+		if u.run == nil {
+			return "点“开始监测”后，这里显示整机、计时器和模拟器各占多少。"
+		}
+		return "等待首个样本…"
+	}
+	v := sample.Values
+	var parts []string
+	if memory, ok := v["tree_working_set_bytes"]; ok {
+		parts = append(parts, "计时器内存 "+performanceBytes(memory))
+	}
+	if cpu, ok := v["emulator_cpu_percent"]; ok {
+		text := fmt.Sprintf("模拟器 CPU %.0f%%", cpu)
+		if memory, ok := v["emulator_working_set_bytes"]; ok {
+			text += " / 内存 " + performanceBytes(memory)
+		}
+		parts = append(parts, text)
+	}
+	if a := sample.Application; a.LoopMaxMS != nil {
+		parts = append(parts, fmt.Sprintf("本秒最慢一轮识别 %.0f ms", *a.LoopMaxMS))
+	}
+	text := strings.Join(parts, " · ")
+	system, hasSystem := v["system_cpu_percent"]
+	timer, hasTimer := v["tree_cpu_percent"]
+	memory := v["system_memory_used_percent"]
+	switch {
+	case hasSystem && hasTimer && system >= 80 && timer < 15:
+		text += "\n整机 CPU 很高，但计时器只占很少：卡顿主要不是计时器造成的，看下面谁占得多。"
+	case hasTimer && timer >= 25:
+		text += "\n计时器自身 CPU 占用偏高。"
+	case memory >= 90:
+		text += "\n整机内存快用满了，系统会变卡。"
+	}
+	if reason := sample.Unavailable["system_gpu_busiest_engine_percent"]; reason != "" {
+		text += "\nGPU 数据暂无：" + reason
+	}
+	return strings.TrimSpace(text)
+}
+
+// performanceTopText lists the heaviest programs right now, merged by name.
+func performanceTopText(sample *diagnostics.PerformanceSample) string {
+	if sample == nil {
+		return "开始监测后显示占用最高的程序。"
+	}
+	if len(sample.Top) == 0 {
+		if reason := sample.Unavailable["top_processes"]; reason != "" {
+			return "进程列表不可用：" + reason
+		}
+		return "暂无进程数据。"
+	}
+	type row struct {
+		name             string
+		cpu, memory, gpu float64
+		hasCPU, hasGPU   bool
+		count            int
+	}
+	merged := make(map[string]*row)
+	var order []*row
+	for _, p := range sample.Top {
+		name := p.Name
+		switch p.Role {
+		case "self", "child":
+			name = "计时器（本程序）"
+		case "emulator":
+			name += "（模拟器）"
+		}
+		r := merged[name]
+		if r == nil {
+			r = &row{name: name}
+			merged[name] = r
+			order = append(order, r)
+		}
+		r.count++
+		r.memory += p.WorkingSetBytes
+		if p.CPUPercent != nil {
+			r.cpu, r.hasCPU = r.cpu+*p.CPUPercent, true
+		}
+		if p.GPUPercent != nil {
+			r.gpu, r.hasGPU = math.Max(r.gpu, *p.GPUPercent), true
+		}
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		if order[i].cpu != order[j].cpu {
+			return order[i].cpu > order[j].cpu
+		}
+		return order[i].memory > order[j].memory
+	})
 	var lines []string
-	for _, f := range fields {
-		value := performanceMetricValue(u.status.Latest.Values, f[0])
-		reason := u.status.Latest.Unavailable[f[0]]
-		if value == "不可用" {
-			if reason == "" && strings.Contains(f[0], "gpu") {
-				for _, key := range sortedPerformanceKeys(u.status.Latest.Unavailable) {
-					if strings.Contains(strings.ToLower(key), "gpu") {
-						reason = u.status.Latest.Unavailable[key]
-						break
-					}
-				}
-			}
-			if reason == "" {
-				reason = "本次未提供；见采集限制"
-			}
+	for _, r := range order[:min(8, len(order))] {
+		cpu, gpu := "  —  ", ""
+		if r.hasCPU {
+			cpu = fmt.Sprintf("%4.1f%%", r.cpu)
 		}
-		// A partial tree sum is a value, but must not look like a complete sum.
-		if reason != "" {
-			value += "（" + reason + "）"
+		if r.hasGPU && r.gpu >= 0.5 {
+			gpu = fmt.Sprintf("  GPU %.0f%%", r.gpu)
 		}
-		lines = append(lines, f[1]+"："+value)
+		name := r.name
+		if r.count > 1 {
+			name += fmt.Sprintf(" ×%d", r.count)
+		}
+		lines = append(lines, fmt.Sprintf("CPU %s  内存 %8s%s  %s", cpu, performanceBytes(r.memory), gpu, name))
 	}
 	return strings.Join(lines, "\n")
-}
-
-func performanceHardwareText(u *performanceUpdate) string {
-	if u.recorder == nil {
-		return "启动后显示系统、版本及非敏感设置；不读取或附加 config 文件。"
-	}
-	m := u.metadata
-	cpu, ram := "不可用", "不可用"
-	if m.System.LogicalCPUs > 0 {
-		cpu = fmt.Sprintf("%d", m.System.LogicalCPUs)
-	}
-	if m.System.TotalRAMBytes > 0 {
-		ram = fmt.Sprintf("%.1f GiB", float64(m.System.TotalRAMBytes)/(1<<30))
-	}
-	osVersion := m.System.OSVersion
-	if osVersion == "" {
-		osVersion = m.System.OS
-	}
-	text := fmt.Sprintf("版本 %s · %s · %s / %s\nCPU：%s · 逻辑核 %s · 物理内存 %s\n捕获 %s · 对局 %d ms / 待机 %d ms · 超时 %d ms\nOCR %t · VS OCR %t · 请求 DirectML %t（不代表实际后端） · %s 模式",
-		m.Version, osVersion, m.System.NativeArch, m.System.ProcessArch, m.System.CPUName, cpu,
-		ram, m.Settings.CaptureProvider, m.Settings.PollMS, m.Settings.IdlePollMS,
-		m.Settings.CaptureTimeoutMS, m.Settings.OCREnabled, m.Settings.PreMatchOCR, m.Settings.OCRGPURequested, m.Settings.OverlayMode)
-	text += "\nGo：" + m.GoVersion
-	if revision := m.Build["vcs.revision"]; revision != "" {
-		text += " · 构建 " + revision + " · 修改状态 " + m.Build["vcs.modified"]
-	}
-	for _, gpu := range m.System.GPUs {
-		text += "\nGPU：" + gpu.Name + " · 驱动 " + gpu.Driver
-	}
-	if len(m.System.GPUs) == 0 {
-		text += "\nGPU 硬件信息不可用（不代表没有 GPU）。"
-	}
-	return text
 }
 
 func performanceMS(v *float64) string {
 	if v == nil || math.IsNaN(*v) || math.IsInf(*v, 0) {
-		return "不可用"
+		return "—"
 	}
-	return fmt.Sprintf("%.2f ms", *v)
+	return fmt.Sprintf("%.1f ms", *v)
 }
 
-func performanceApplicationText(sample *diagnostics.PerformanceSample) string {
+func performanceOnOff(on bool) string {
+	if on {
+		return "开"
+	}
+	return "关"
+}
+
+func performanceMetricValue(values map[string]float64, key, unit string) string {
+	v, ok := values[key]
+	if !ok || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return "—"
+	}
+	switch unit {
+	case "bytes":
+		return performanceBytes(v)
+	case "bytes/s":
+		return performanceBytes(v) + "/秒"
+	case "%":
+		return fmt.Sprintf("%.1f%%", v)
+	case "ms":
+		return fmt.Sprintf("%.1f ms", v)
+	case "cores":
+		return fmt.Sprintf("%.2f 核", v)
+	case "seconds":
+		return fmt.Sprintf("%.1f 秒", v)
+	case "count/s":
+		return fmt.Sprintf("%.1f /秒", v)
+	}
+	return fmt.Sprintf("%.0f", v)
+}
+
+// performanceDetailText is the developer section: hardware, pipeline timing,
+// every metric and the reasons for anything that could not be measured. All of
+// it is also in the exported report; it is built only while the section is open.
+func performanceDetailText(u *performanceUpdate) string {
+	if u.recorder == nil {
+		return "开始监测后显示硬件、识别链路耗时、全部指标和未测到数据的原因。"
+	}
+	m := u.metadata
+	var b strings.Builder
+	osVersion := m.System.OSVersion
+	if osVersion == "" {
+		osVersion = m.System.OS
+	}
+	fmt.Fprintf(&b, "版本 %s · %s · %s\nCPU：%s · %d 逻辑核 · 内存 %s\n", m.Version, osVersion, m.System.NativeArch,
+		m.System.CPUName, m.System.LogicalCPUs, performanceBytes(float64(m.System.TotalRAMBytes)))
+	for _, gpu := range m.System.GPUs {
+		fmt.Fprintf(&b, "显卡：%s · 驱动 %s", gpu.Name, gpu.Driver)
+		if gpu.DedicatedBytes > 0 {
+			fmt.Fprintf(&b, " · 显存 %s", performanceBytes(float64(gpu.DedicatedBytes)))
+		}
+		b.WriteByte('\n')
+	}
+	fmt.Fprintf(&b, "采集 %s · 对局 %d ms / 待机 %d ms · 文字识别 %s · GPU 加速 %s\n", m.Settings.CaptureProvider, m.Settings.PollMS,
+		m.Settings.IdlePollMS, performanceOnOff(m.Settings.OCREnabled), performanceOnOff(m.Settings.OCRGPURequested))
+	sample := u.status.Latest
 	if sample == nil {
-		return "等待采样；UI 等待不是 GPU 呈现延迟，交付次数不是游戏 FPS。"
+		return b.String() + "\n等待首个样本…"
 	}
 	a := sample.Application
-	geometry, poll := "尚无图像尺寸", "不可用"
-	if a.Width > 0 && a.Height > 0 {
-		geometry = fmt.Sprintf("%d×%d", a.Width, a.Height)
+	fmt.Fprintf(&b, "\n识别链路（本秒）\n%s · %s · %d×%d\n最慢一轮 %s（截图 %s / 识别 %s / 状态更新与刷新 %s）\n采集到交付最长 %s · 界面线程最长等待 %s\n累计：交付 %d · 慢帧 %d · 错误 %d",
+		a.Backend, a.Scene, a.Width, a.Height, performanceMS(a.LoopMaxMS), performanceMS(a.CaptureMaxMS), performanceMS(a.AnalysisMaxMS),
+		performanceMS(a.PostMaxMS), performanceMS(a.AttemptMaxMS), performanceMS(a.UIQueueMaxMS), a.Attempts, a.SlowFrames, a.Errors)
+	if a.LastError != "" {
+		b.WriteString("\n最近错误：" + a.LastError)
 	}
-	if a.PollMS > 0 {
-		poll = fmt.Sprintf("%.0f ms", a.PollMS)
-	}
-	return fmt.Sprintf("样本 %s · 计数器采样/统计 %.2f ms（不含写盘/导出）\n%s · %s · %s · 轮询 %s · 样本中的全量诊断 %t\n交付 %d / 已分析 %d / 重复 %d / hold %d / 错误 %d / 超预算 %d（累计）\n采集 %s · 分析 %s · 交付年龄 %s\n窗口 P95：采集 %s / 分析 %s · UI 排队 %s\n标记：%s",
-		sample.At.Format("15:04:05"), sample.CollectMS, a.Backend, a.Scene, geometry, poll, a.FullDiagnostics,
-		a.Attempts, a.Analyzed, a.Duplicates, a.Held, a.Errors, a.SlowFrames,
-		performanceMS(a.CaptureMS), performanceMS(a.AnalysisMS), performanceMS(a.DeliveryAgeMS),
-		performanceMS(a.CaptureP95MS), performanceMS(a.AnalysisP95MS), performanceMS(a.UIQueueMS), strings.Join(sample.Markers, "；"))
-}
-
-func performanceProcessesText(sample *diagnostics.PerformanceSample, rootPID int) string {
-	if sample == nil || len(sample.Processes) == 0 {
-		return "进程明细不可用 / 等待采样（不当作 0 占用）。"
-	}
-	processes := append([]diagnostics.PerformanceProcess(nil), sample.Processes...)
-	sort.Slice(processes, func(i, j int) bool { return processes[i].PID < processes[j].PID })
-	var lines []string
-	for _, p := range processes {
-		role := "子进程"
-		if p.PID == rootPID {
-			role = "主进程"
-		}
-		lines = append(lines, fmt.Sprintf("%s %s · PID %d / 父 PID %d\nCPU %s · %s · 工作集 %s · 私有提交 %s\n线程 %s · 句柄 %s · GPU 最忙引擎 %s",
-			role, p.Name, p.PID, p.ParentPID, performanceMetricValue(p.Values, "cpu_percent"), performanceMetricValue(p.Values, "cpu_cores"),
-			performanceMetricValue(p.Values, "working_set_bytes"), performanceMetricValue(p.Values, "private_bytes"),
-			performanceMetricValue(p.Values, "threads"), performanceMetricValue(p.Values, "handles"), performanceMetricValue(p.Values, "gpu_busiest_engine_percent")))
-		for _, key := range sortedPerformanceKeys(p.Unavailable) {
-			lines = append(lines, "  "+key+"："+p.Unavailable[key])
-		}
-	}
-	return strings.Join(lines, "\n\n")
-}
-
-func performanceMetricsText(sample *diagnostics.PerformanceSample) string {
-	if sample == nil {
-		return "等待首个样本；首次 CPU / I/O 速率需要第二个计数器样本。"
-	}
-	var lines []string
-	known := make(map[string]bool)
+	b.WriteString("\n\n全部指标\n")
 	for _, metric := range diagnostics.PerformanceMetrics {
-		known[metric.Key] = true
-		lines = append(lines, metric.Label+"："+performanceMetricValue(sample.Values, metric.Key))
-	}
-	var extra []string
-	for key := range sample.Values {
-		if !known[key] {
-			extra = append(extra, key)
+		if _, ok := sample.Values[metric.Key]; ok {
+			fmt.Fprintf(&b, "%s：%s\n", metric.Label, performanceMetricValue(sample.Values, metric.Key, metric.Unit))
 		}
 	}
-	sort.Strings(extra)
-	for _, key := range extra {
-		lines = append(lines, key+"："+performanceMetricValue(sample.Values, key))
+	reasons := make(map[string]string)
+	for key, reason := range m.System.Unavailable {
+		reasons["系统 "+key] = reason
 	}
-	return strings.Join(lines, "\n")
-}
-
-func sortedPerformanceKeys(values map[string]string) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
+	for key, reason := range sample.Unavailable {
+		reasons[key] = reason
 	}
-	sort.Strings(keys)
-	return keys
-}
-
-func performanceAvailabilityText(u *performanceUpdate) string {
-	var lines []string
-	for _, key := range sortedPerformanceKeys(u.metadata.System.Unavailable) {
-		lines = append(lines, "系统 "+key+"："+u.metadata.System.Unavailable[key])
-	}
-	if sample := u.status.Latest; sample != nil {
-		for _, key := range sortedPerformanceKeys(sample.Unavailable) {
-			lines = append(lines, key+"："+sample.Unavailable[key])
+	for key, status := range u.status.ProfileStatus {
+		if status != "ok" {
+			reasons["调试数据 "+key] = status
 		}
 	}
-	for _, key := range sortedPerformanceKeys(u.status.ProfileStatus) {
-		lines = append(lines, "快照 "+key+"："+u.status.ProfileStatus[key])
+	if len(reasons) > 0 {
+		b.WriteString("\n未测到的数据\n")
+		keys := make([]string, 0, len(reasons))
+		for key := range reasons {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(&b, "%s：%s\n", key, reasons[key])
+		}
 	}
-	if len(lines) == 0 {
-		return "尚无额外原因；缺失指标仅表示本次不可用，不代表占用为零。"
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// performanceDirectory returns the newest session directory: the current run's
+// if any, else the latest one on disk.
+func (s *session) performanceDirectory() string {
+	s.performanceMu.Lock()
+	directory := ""
+	if r := s.performanceCurrent; r != nil {
+		directory = r.status.Directory
 	}
-	return strings.Join(lines, "\n")
+	s.performanceMu.Unlock()
+	if directory != "" {
+		return directory
+	}
+	s.mu.Lock()
+	root := s.cfg.Debug.Directory
+	s.mu.Unlock()
+	if sessions := diagnostics.PerformanceSessions(root); len(sessions) > 0 {
+		return sessions[0]
+	}
+	return ""
+}
+
+func (s *session) openPerformanceFolder() {
+	directory := s.performanceDirectory()
+	if directory == "" {
+		s.setPerformanceOffline(false, "还没有任何性能记录。")
+		return
+	}
+	if err := openExportFolder(filepath.Join(directory, "performance-report.zip")); err != nil {
+		s.setPerformanceOffline(false, "打开文件夹失败："+err.Error())
+	}
+}
+
+// setPerformanceOffline publishes the state of the "previous session" export
+// and refreshes the view through the normal coalesced path.
+func (s *session) setPerformanceOffline(busy bool, text string) {
+	s.performanceMu.Lock()
+	s.performanceOffline, s.performanceOfflineText = busy, text
+	s.performanceMu.Unlock()
+	s.postPerformanceRefresh()
+}
+
+func (s *session) postPerformanceRefresh() {
+	if s.stopped() {
+		return
+	}
+	post := s.performancePost
+	if post == nil {
+		post = fyne.Do
+	}
+	post(func() {
+		if !s.stopped() {
+			s.refreshPerformanceView()
+		}
+	})
+}
+
+// exportPreviousPerformance turns the newest finished session on disk into a
+// report: for "it lagged, I closed everything, now I want to send the report"
+// and for sessions cut short by a crash.
+func (s *session) exportPreviousPerformance() bool {
+	s.mu.Lock()
+	root := s.cfg.Debug.Directory
+	s.mu.Unlock()
+	s.performanceMu.Lock()
+	r := s.performanceCurrent
+	if s.performanceClosing || s.stopped() || s.performanceOffline ||
+		(r != nil && r.phase != performanceStopped && r.phase != performanceFailed) {
+		s.performanceMu.Unlock()
+		return false
+	}
+	s.performanceOffline, s.performanceOfflineText = true, ""
+	ctx, cancel := context.WithCancel(context.Background())
+	s.performanceOfflineCancel = cancel
+	s.performanceWorkers.Add(1)
+	s.performanceMu.Unlock()
+	s.postPerformanceRefresh()
+	go func() {
+		defer s.performanceWorkers.Done()
+		defer cancel()
+		sessions := diagnostics.PerformanceSessions(root)
+		if len(sessions) == 0 {
+			s.setPerformanceOffline(false, "还没有任何性能记录。")
+			return
+		}
+		path, err := diagnostics.ExportPerformanceSession(ctx, sessions[0])
+		if err != nil {
+			s.setPerformanceOffline(false, "生成失败："+err.Error())
+			return
+		}
+		s.performanceMu.Lock()
+		s.performanceOffline, s.performanceOfflineText = false, "已生成："+path
+		s.performanceExportID++
+		s.performanceOfflineExport, s.performanceOfflinePath = s.performanceExportID, path
+		s.performanceMu.Unlock()
+		s.postPerformanceRefresh()
+	}()
+	return true
 }

@@ -2,13 +2,16 @@ package diagnostics
 
 import "time"
 
-// Performance reports are independent of image/recognition diagnostics. No
-// screenshot, account name, command line, environment dump or executable path
-// belongs in these types. Missing measurements are omitted, never fabricated as 0.
+// Performance reports are independent of image/recognition diagnostics and
+// never contain screenshots. Recording is opt-in and stays on the local disk,
+// so process names, error text and the effective config are kept verbatim.
+// Missing measurements are omitted, never fabricated as 0.
 const (
 	PerformanceInterval   = time.Second
 	PerformanceMaxSamples = 21600 // Six hours at the default interval.
-	PerformanceMaxBytes   = 64 << 20
+	PerformanceMaxBytes   = 256 << 20
+	// PerformanceMaxTop bounds the per-sample system-wide process table.
+	PerformanceMaxTop = 20
 )
 
 type PerformanceSettings struct {
@@ -37,9 +40,11 @@ type PerformanceSystem struct {
 }
 
 type PerformanceGPU struct {
-	Name    string `json:"name"`
-	Driver  string `json:"driver,omitempty"`
-	Adapter string `json:"adapter,omitempty"` // Ephemeral adapter LUID, not a hardware serial.
+	Name           string `json:"name"`
+	Driver         string `json:"driver,omitempty"`
+	Adapter        string `json:"adapter,omitempty"` // Adapter LUID; links PDH rows to this name.
+	DedicatedBytes uint64 `json:"dedicated_bytes,omitempty"`
+	SharedBytes    uint64 `json:"shared_bytes,omitempty"`
 }
 
 type PerformanceMetadata struct {
@@ -84,19 +89,50 @@ type PerformanceGPUEngine struct {
 	Percent float64 `json:"percent"`
 }
 
+// PerformanceTopProcess is one row of the system-wide "who is using the
+// machine" table: the timer itself, emulator processes and the heaviest other
+// processes by CPU, memory and GPU. Pointer fields are nil when not measured.
+type PerformanceTopProcess struct {
+	PID               int      `json:"pid"`
+	Name              string   `json:"name"`
+	Role              string   `json:"role,omitempty"` // self, child, emulator or empty.
+	CPUPercent        *float64 `json:"cpu_percent"`    // All logical CPUs = 100.
+	WorkingSetBytes   float64  `json:"working_set_bytes"`
+	PrivateBytes      float64  `json:"private_bytes,omitempty"`
+	Threads           int      `json:"threads,omitempty"`
+	GPUPercent        *float64 `json:"gpu_percent"`
+	GPUDedicatedBytes *float64 `json:"gpu_dedicated_bytes"`
+}
+
+// performanceSystemProcess is the raw per-process row a collector reports for
+// EVERY process it can see. The recorder derives CPU rates and the top table.
+type performanceSystemProcess struct {
+	PID, ParentPID int
+	Name           string
+	StartID        string
+	CPUSeconds     float64
+	WorkingSet     float64
+	Private        float64
+	Threads        int
+	GPUPercent     *float64
+	GPUDedicated   *float64
+}
+
 // Platform Values: system_cpu_total_seconds/system_cpu_idle_seconds cumulative,
 // system_memory_total_bytes/system_memory_available_bytes,
 // system_commit_used_bytes/system_commit_limit_bytes,
 // system_swap_total_bytes/system_swap_free_bytes, disk_total_bytes/disk_free_bytes,
-// system_gpu_busiest_engine_percent and tree_gpu_busiest_engine_percent.
+// system_gpu_busiest_engine_percent, system_gpu_dedicated_bytes,
+// system_gpu_shared_bytes and tree_gpu_busiest_engine_percent.
 // GPU busiest-engine percentages are NOT sums of unrelated engine percentages.
-// Processes must contain only the root and observed descendants (bounded at 64).
-// GPU engines likewise contain only those PIDs (bounded at 256).
+// Processes holds the root and observed descendants with detailed counters;
+// AllProcesses holds a cheap row for every process on the machine.
 type performancePlatformSample struct {
-	Values      map[string]float64
-	Processes   []PerformanceProcess
-	GPUEngines  []PerformanceGPUEngine
-	Unavailable map[string]string
+	Values       map[string]float64
+	Processes    []PerformanceProcess
+	AllProcesses []performanceSystemProcess
+	GPUEngines   []PerformanceGPUEngine
+	Unavailable  map[string]string
 }
 
 type performanceCollector interface {
@@ -105,9 +141,8 @@ type performanceCollector interface {
 	Close()
 }
 
-// newPerformanceCollector(rootPID, reportDirectory) is platform-specific. It
-// must use local APIs only and never enumerate/store other applications' names,
-// command lines, user names, serial numbers or network identifiers.
+// newPerformanceCollector(rootPID, reportDirectory) is platform-specific and
+// uses local APIs only.
 
 type PerformanceApplication struct {
 	Backend             string   `json:"backend"`
@@ -129,19 +164,37 @@ type PerformanceApplication struct {
 	AnalysisP95MS       *float64 `json:"analysis_p95_ms"`
 	UIQueueMS           *float64 `json:"ui_queue_ms"`
 	WindowCaptureFrames uint64   `json:"window_capture_frames"`
+	// Per-sample-window worst cases: a single slow frame must stay visible.
+	// attempt = capture start until the frame reached the UI loop, including
+	// failed and timed-out captures; loop = one whole capture-loop iteration;
+	// post = the part of it after the frame arrived (state update + overlay).
+	CaptureMaxMS  *float64 `json:"capture_max_ms"`
+	AnalysisMaxMS *float64 `json:"analysis_max_ms"`
+	AttemptMaxMS  *float64 `json:"attempt_max_ms"`
+	AttemptP95MS  *float64 `json:"attempt_p95_ms"`
+	LoopMaxMS     *float64 `json:"loop_max_ms"`
+	LoopP95MS     *float64 `json:"loop_p95_ms"`
+	PostMaxMS     *float64 `json:"post_max_ms"`
+	UIQueueMaxMS  *float64 `json:"ui_queue_max_ms"`
+	WindowSlow    uint64   `json:"window_slow_frames"`
+	WindowErrors  uint64   `json:"window_errors"`
+	LastError     string   `json:"last_error,omitempty"` // Latest capture/analysis error text.
+	LayoutProfile string   `json:"layout_profile,omitempty"`
+	Engine        string   `json:"engine,omitempty"`
 }
 
 type PerformanceSample struct {
-	At          time.Time              `json:"at"`
-	ElapsedS    float64                `json:"elapsed_s"`
-	IntervalS   float64                `json:"interval_s"`
-	CollectMS   float64                `json:"collector_ms"`
-	Values      map[string]float64     `json:"values"`
-	Processes   []PerformanceProcess   `json:"processes"`
-	GPUEngines  []PerformanceGPUEngine `json:"gpu_engines,omitempty"`
-	Application PerformanceApplication `json:"application"`
-	Unavailable map[string]string      `json:"unavailable,omitempty"`
-	Markers     []string               `json:"markers,omitempty"`
+	At          time.Time               `json:"at"`
+	ElapsedS    float64                 `json:"elapsed_s"`
+	IntervalS   float64                 `json:"interval_s"`
+	CollectMS   float64                 `json:"collector_ms"`
+	Values      map[string]float64      `json:"values"`
+	Processes   []PerformanceProcess    `json:"processes"`
+	GPUEngines  []PerformanceGPUEngine  `json:"gpu_engines,omitempty"`
+	Top         []PerformanceTopProcess `json:"top_processes,omitempty"`
+	Application PerformanceApplication  `json:"application"`
+	Unavailable map[string]string       `json:"unavailable,omitempty"`
+	Markers     []string                `json:"markers,omitempty"`
 }
 
 type PerformanceStatus struct {
@@ -162,7 +215,8 @@ type PerformanceOptions struct {
 	Root     string
 	Version  string
 	Settings PerformanceSettings
-	Profiles bool   // Optional start/end sampled Go heap and goroutine snapshots.
+	Config   []byte // Effective config as JSON; stored as config.json beside the samples.
+	Profiles bool   // Go heap/goroutine snapshots at start and end plus short CPU profiles.
 	OnSample func() // Background callback: must not block; UI should coalesce posts.
 }
 
@@ -175,19 +229,21 @@ type PerformanceMetric struct {
 }
 
 var PerformanceMetrics = []PerformanceMetric{
-	{"system_cpu_percent", "系统 CPU", "%"},
-	{"main_cpu_percent", "主进程 CPU（全机逻辑核归一）", "%"},
-	{"tree_cpu_percent", "已观测进程树 CPU（全机逻辑核归一）", "%"},
-	{"tree_cpu_cores", "已观测进程树 CPU 核等效", "cores"},
-	{"main_working_set_bytes", "主进程工作集 / RSS", "bytes"},
+	{"system_cpu_percent", "整机 CPU", "%"},
+	{"tree_cpu_percent", "计时器 CPU（含子进程）", "%"},
+	{"emulator_cpu_percent", "模拟器 CPU", "%"},
+	{"main_cpu_percent", "计时器主进程 CPU", "%"},
+	{"tree_cpu_cores", "计时器 CPU 核等效", "cores"},
+	{"system_memory_used_percent", "整机内存使用率", "%"},
+	{"tree_working_set_bytes", "计时器内存（含子进程，共享页可能重复）", "bytes"},
+	{"emulator_working_set_bytes", "模拟器内存", "bytes"},
+	{"main_working_set_bytes", "计时器主进程内存（工作集）", "bytes"},
 	{"main_peak_working_set_bytes", "主进程生命周期工作集峰值（非本会话）", "bytes"},
 	{"main_counter_interval_seconds", "主进程计数器实际时间窗", "seconds"},
 	{"main_counter_age_ms", "主进程计数器时效", "ms"},
 	{"main_private_bytes", "主进程私有提交（Windows）", "bytes"},
-	{"tree_working_set_bytes", "进程树工作集合计（共享页可能重复）", "bytes"},
 	{"tree_private_bytes", "进程树私有提交（Windows）", "bytes"},
 	{"system_memory_available_bytes", "系统可用物理内存", "bytes"},
-	{"system_memory_used_percent", "系统物理内存使用率", "%"},
 	{"system_commit_used_bytes", "系统提交量", "bytes"},
 	{"system_commit_limit_bytes", "系统提交上限", "bytes"},
 	{"go_heap_alloc_bytes", "Go 堆已分配", "bytes"},
@@ -215,11 +271,15 @@ var PerformanceMetrics = []PerformanceMetric{
 	{"tree_page_faults_s", "进程树页错误速率（含软错误）", "count/s"},
 	{"main_gdi_objects", "主进程 GDI 对象", "count"},
 	{"main_user_objects", "主进程 USER 对象", "count"},
-	{"system_gpu_busiest_engine_percent", "系统 GPU 最忙引擎", "%"},
-	{"main_gpu_busiest_engine_percent", "主进程 GPU 最忙引擎", "%"},
-	{"tree_gpu_busiest_engine_percent", "进程树 GPU 最忙引擎", "%"},
-	{"tree_gpu_dedicated_bytes", "进程树专用显存", "bytes"},
-	{"tree_gpu_shared_bytes", "进程树共享 GPU 内存", "bytes"},
+	{"system_gpu_busiest_engine_percent", "整机 GPU（最忙引擎）", "%"},
+	{"tree_gpu_busiest_engine_percent", "计时器 GPU（最忙引擎）", "%"},
+	{"emulator_gpu_percent", "模拟器 GPU（最忙引擎）", "%"},
+	{"main_gpu_busiest_engine_percent", "计时器主进程 GPU", "%"},
+	{"system_gpu_dedicated_bytes", "整机专用显存占用", "bytes"},
+	{"system_gpu_shared_bytes", "整机共享显存占用", "bytes"},
+	{"tree_gpu_dedicated_bytes", "计时器专用显存", "bytes"},
+	{"tree_gpu_shared_bytes", "计时器共享显存", "bytes"},
+	{"emulator_gpu_dedicated_bytes", "模拟器专用显存", "bytes"},
 	{"disk_free_bytes", "报告所在卷可用空间", "bytes"},
 	{"capture_fps", "采样尝试（含失败/hold，非游戏帧率）", "count/s"},
 	{"analysis_fps", "当前采样窗口分析次数", "count/s"},

@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -53,11 +54,10 @@ type performanceWindowsGPUCounter struct {
 }
 
 type performanceWindowsGPU struct {
-	query                     uintptr
-	engine, dedicated, shared performanceWindowsGPUCounter
-	warm                      bool
-	previous                  map[int]string // Only selected PIDs/StartIDs, bounded by the process cap.
-	canceled                  func() bool    // Owner-only; checked between native calls, never kills one in flight.
+	query                                                      uintptr
+	engine, dedicated, shared, adapterDedicated, adapterShared performanceWindowsGPUCounter
+	warm                                                       bool
+	canceled                                                   func() bool // Worker-only; checked between native calls.
 }
 
 func newPerformanceWindowsGPUWorker() *performanceGPUWorker {
@@ -72,23 +72,24 @@ func newPerformanceWindowsGPUWorker() *performanceGPUWorker {
 			}
 			return info
 		},
-		collect: func(s *performancePlatformSample, canceled func() bool) {
+		collect: func(canceled func() bool) *performanceGPUSample {
 			g.canceled = canceled
-			g.collect(s)
+			return g.collect()
 		},
 		close: g.close,
-	}, performanceGPUInitTimeout, performanceGPUReadTimeout)
+	}, PerformanceInterval)
 }
 
-// Initialization, collection, and cleanup are called ONLY by the slot owner.
+// Initialization, collection, and cleanup are called ONLY by the worker.
 func (g *performanceWindowsGPU) initialize() {
-	for _, proc := range []*windows.LazyProc{performancePDHOpen, performancePDHAdd, performancePDHCollect, performancePDHArray, performancePDHClose} {
-		if g.canceled() {
-			return
+	all := func(reason string) {
+		for _, c := range []*performanceWindowsGPUCounter{&g.engine, &g.dedicated, &g.shared, &g.adapterDedicated, &g.adapterShared} {
+			c.unavailable = reason
 		}
-		if proc.Find() != nil {
-			g.engine.unavailable = "PDH English GPU counter API unavailable"
-			g.dedicated.unavailable, g.shared.unavailable = g.engine.unavailable, g.engine.unavailable
+	}
+	for _, proc := range []*windows.LazyProc{performancePDHOpen, performancePDHAdd, performancePDHCollect, performancePDHArray, performancePDHClose} {
+		if err := proc.Find(); err != nil {
+			all("PDH GPU 计数器接口不可用：" + err.Error())
 			return
 		}
 	}
@@ -97,26 +98,29 @@ func (g *performanceWindowsGPU) initialize() {
 	}
 	status, _, _ := performancePDHOpen.Call(0, 0, uintptr(unsafe.Pointer(&g.query)))
 	if uint32(status) != 0 {
-		g.engine.unavailable = performancePDHStatus("PdhOpenQuery", uint32(status))
-		g.dedicated.unavailable, g.shared.unavailable = g.engine.unavailable, g.engine.unavailable
+		all(performancePDHStatus("PdhOpenQuery", uint32(status)))
 		g.close()
 		return
 	}
 	g.engine = g.add(`\GPU Engine(*)\Utilization Percentage`)
 	g.dedicated = g.add(`\GPU Process Memory(*)\Dedicated Usage`)
 	g.shared = g.add(`\GPU Process Memory(*)\Shared Usage`)
+	g.adapterDedicated = g.add(`\GPU Adapter Memory(*)\Dedicated Usage`)
+	g.adapterShared = g.add(`\GPU Adapter Memory(*)\Shared Usage`)
 }
 
 func (g *performanceWindowsGPU) add(path string) performanceWindowsGPUCounter {
 	var c performanceWindowsGPUCounter
 	if g.canceled() {
+		c.unavailable = "GPU 采集已停止"
 		return c
 	}
-	name, _ := windows.UTF16PtrFromString(path) // Constant, local, English path; never a remote machine.
+	// PdhAddEnglishCounter: the English path works on localized (Chinese) Windows.
+	name, _ := windows.UTF16PtrFromString(path)
 	status, _, _ := performancePDHAdd.Call(g.query, uintptr(unsafe.Pointer(name)), 0, uintptr(unsafe.Pointer(&c.handle)))
 	if uint32(status) != 0 {
 		c.handle = 0
-		c.unavailable = performancePDHStatus("PdhAddEnglishCounter", uint32(status))
+		c.unavailable = performancePDHStatus("PdhAddEnglishCounter "+path, uint32(status))
 	}
 	return c
 }
@@ -128,170 +132,62 @@ func (g *performanceWindowsGPU) close() {
 		g.query = 0
 	}
 	g.warm = false
-	g.previous = nil
 }
 
-func (g *performanceWindowsGPU) collect(s *performancePlatformSample) {
-	if g.canceled() {
-		return
-	}
-	selected := make(map[int]int, len(s.Processes))
-	current := make(map[int]string, len(s.Processes))
-	for i := range s.Processes {
-		p := &s.Processes[i]
-		selected[p.PID], current[p.PID] = i, p.StartID
-	}
-	queryReason := ""
-	if g.query != 0 {
-		status, _, _ := performancePDHCollect.Call(g.query)
-		if uint32(status) != 0 {
-			queryReason = performancePDHStatus("PdhCollectQueryData", uint32(status))
-			g.warm = false
-			g.previous = nil
+// collect returns nil only when canceled mid-way. Every counter fails or
+// succeeds on its own; a bad row is skipped inside the sample.
+func (g *performanceWindowsGPU) collect() *performanceGPUSample {
+	s := newPerformanceGPUSample()
+	if g.query == 0 {
+		reason := g.engine.unavailable
+		if reason == "" {
+			reason = "PDH 查询不可用"
 		}
+		s.engineReason, s.memoryReason, s.adapterReason = reason, reason, reason
+		return s
+	}
+	if status, _, _ := performancePDHCollect.Call(g.query); uint32(status) != 0 {
+		reason := performancePDHStatus("PdhCollectQueryData", uint32(status))
+		s.engineReason, s.memoryReason, s.adapterReason = reason, reason, reason
+		g.warm = false
+		return s
+	}
+	read := func(c performanceWindowsGPUCounter, visit func(string, float64, uint32)) string {
+		if c.unavailable != "" {
+			return c.unavailable
+		}
+		reason := performanceWindowsPDHReadArray(c.handle, g.canceled, visit)
+		if reason == performancePDHNoInstances {
+			return "" // No process holds a GPU context right now: a real zero.
+		}
+		return reason
+	}
+	// Utilization is a rate: PDH needs two collections before it has a value.
+	if !g.warm {
+		s.engineReason = "GPU 占用率需要连续两次采样，等待下一秒"
 	} else {
-		queryReason = "PDH query unavailable"
+		s.engineReason = read(g.engine, s.addEngine)
 	}
+	memory := func(c performanceWindowsGPUCounter, shared bool) string {
+		return read(c, func(name string, value float64, status uint32) { s.addMemory(name, value, status, shared) })
+	}
+	s.memoryReason = memory(g.dedicated, false)
+	if reason := memory(g.shared, true); s.memoryReason == "" {
+		s.memoryReason = reason
+	}
+	s.adapterReason = memory(g.adapterDedicated, false)
+	if reason := memory(g.adapterShared, true); s.adapterReason == "" {
+		s.adapterReason = reason
+	}
+	g.warm = true
 	if g.canceled() {
-		return
+		return nil
 	}
-	engineReason := g.engine.unavailable
-	if engineReason == "" {
-		engineReason = queryReason
-	}
-	if engineReason == "" && !g.warm {
-		engineReason = "warm_up: GPU Engine rate requires two successful samples"
-	}
-	if engineReason != "" {
-		performanceWindowsGPUUnavailable(s, "gpu_busiest_engine_percent", engineReason)
-		performanceWindowsUnavailable(s.Unavailable, engineReason, "system_gpu_busiest_engine_percent", "tree_gpu_busiest_engine_percent", "gpu_engines")
-	} else {
-		g.collectEngines(s, selected, current)
-	}
-	if g.canceled() {
-		return
-	}
-	g.collectMemory(s, selected, g.dedicated, "gpu_dedicated_bytes", queryReason)
-	if g.canceled() {
-		return
-	}
-	g.collectMemory(s, selected, g.shared, "gpu_shared_bytes", queryReason)
-	if queryReason == "" {
-		g.warm = true
-		g.previous = current
-	}
+	s.at = time.Now()
+	return s
 }
 
-func performanceWindowsGPUUnavailable(s *performancePlatformSample, key, reason string) {
-	s.Unavailable[key] = reason
-	for i := range s.Processes {
-		s.Processes[i].Unavailable[key] = reason
-	}
-}
-
-func (g *performanceWindowsGPU) collectEngines(s *performancePlatformSample, selected map[int]int, current map[int]string) {
-	var totals performanceGPUEngineTotals
-	invalid := make(map[int]string)
-	systemReason, treeReason := "", ""
-	malformed := false
-	reason := performanceWindowsPDHReadArray(g.engine.handle, g.canceled, func(name string, value float64, status uint32) {
-		n, ok := parsePerformanceGPUInstance(name)
-		if !ok || !n.hasEngine {
-			malformed = true
-			systemReason, treeReason = "unrecognised GPU Engine instance format", "unrecognised GPU Engine instance format"
-			return
-		}
-		_, ours := selected[n.pid]
-		if status > 1 || !performanceGPUValidNumber(value) {
-			r := performancePDHStatus("GPU Engine instance", status)
-			if status <= 1 {
-				r = "GPU Engine returned a non-finite or negative value"
-			}
-			systemReason = r
-			if ours {
-				invalid[n.pid], treeReason = r, r
-			}
-			return
-		}
-		if ours && (current[n.pid] == "" || g.previous[n.pid] != current[n.pid]) {
-			r := "warm_up: this process identity needs two GPU samples (PID reuse guarded)"
-			invalid[n.pid], treeReason = r, r
-			ours = false
-		}
-		// Group by LUID + physical-adapter index + engine index, NOT engine
-		// type, PID or an all-engines sum. No unrelated PID rows are retained.
-		totals.add(n, min(value, 100), ours)
-	})
-	if reason != "" {
-		performanceWindowsGPUUnavailable(s, "gpu_busiest_engine_percent", reason)
-		performanceWindowsUnavailable(s.Unavailable, reason, "system_gpu_busiest_engine_percent", "tree_gpu_busiest_engine_percent", "gpu_engines")
-		return
-	}
-	performanceGPUApplyEngineTotals(s, &totals, invalid, systemReason, treeReason, malformed)
-}
-
-func (g *performanceWindowsGPU) collectMemory(s *performancePlatformSample, selected map[int]int, counter performanceWindowsGPUCounter, key, queryReason string) {
-	reason := counter.unavailable
-	if reason == "" {
-		reason = queryReason
-	}
-	if reason != "" {
-		performanceWindowsGPUUnavailable(s, key, reason)
-		return
-	}
-	// Only running sums for the <=64 selected processes are retained, not a
-	// system-wide map of GPU process-memory instances. No data is not zero.
-	totals := make(map[int]float64)
-	invalid := make(map[int]string)
-	selectedCount := 0
-	truncated, malformed := false, false
-	reason = performanceWindowsPDHReadArray(counter.handle, g.canceled, func(name string, value float64, status uint32) {
-		n, ok := parsePerformanceGPUInstance(name)
-		if !ok || n.hasEngine {
-			malformed = true
-			return
-		}
-		if _, ours := selected[n.pid]; !ours {
-			return
-		}
-		selectedCount++
-		if selectedCount > performanceMaxGPUEngines {
-			truncated = true
-			return
-		}
-		if status > 1 || !performanceGPUValidNumber(value) {
-			invalid[n.pid] = performancePDHStatus("GPU Process Memory instance", status)
-			if status <= 1 {
-				invalid[n.pid] = "GPU Process Memory returned a non-finite or negative value"
-			}
-			return
-		}
-		totals[n.pid] += value
-	})
-	if reason == "" && truncated {
-		reason = "selected GPU process-memory instances limited to 256; incomplete totals omitted"
-	}
-	if reason == "" && malformed {
-		reason = "unrecognised GPU Process Memory instance format"
-	}
-	if reason != "" {
-		performanceWindowsGPUUnavailable(s, key, reason)
-		return
-	}
-	if len(totals) == 0 {
-		s.Unavailable[key] = "no matching GPU Process Memory data; driver/counter may be unavailable"
-	}
-	for pid, index := range selected {
-		p := &s.Processes[index]
-		if reason := invalid[pid]; reason != "" {
-			p.Unavailable[key] = reason
-		} else if value, ok := totals[pid]; ok && performanceGPUValidNumber(value) {
-			p.Values[key] = value
-		} else {
-			p.Unavailable[key] = "no matching valid GPU Process Memory instance; absence is not measured zero"
-		}
-	}
-}
+const performancePDHNoInstances = "PDH array has no instances"
 
 // Read the transient native array, then immediately discard it. Buffers are
 // aligned, limited to 8 MiB/32768 rows, and may grow at most three times under
@@ -310,7 +206,7 @@ func performanceWindowsPDHReadArray(counter uintptr, canceled func() bool, visit
 	status, _, _ := performancePDHArray.Call(counter, flags, uintptr(unsafe.Pointer(&size)), uintptr(unsafe.Pointer(&count)), 0)
 	if uint32(status) != performancePDHMoreData {
 		if uint32(status) == 0 {
-			return "PDH array has no instances"
+			return performancePDHNoInstances
 		}
 		return performancePDHStatus("PdhGetFormattedCounterArray(size)", uint32(status))
 	}
@@ -339,7 +235,7 @@ func performanceWindowsPDHReadArray(counter uintptr, canceled func() bool, visit
 			return "PDH array returned invalid buffer size/item count"
 		}
 		if count == 0 {
-			return "PDH array has no instances"
+			return performancePDHNoInstances
 		}
 		reason := performanceWindowsPDHVisitBuffer(buffer, size, count, visit)
 		runtime.KeepAlive(buffer)
@@ -379,23 +275,22 @@ func performanceWindowsPDHVisitBuffer(buffer []uint64, size, count uint32, visit
 }
 
 func performancePDHStatus(operation string, status uint32) string {
-	reason := "counter data unavailable"
+	reason := "计数器数据不可用"
 	switch status {
 	case 0x800007d1, performancePDHNoData:
-		reason = "no instances/data (GPU may be idle, absent or driver counters unavailable)"
+		reason = "没有实例/数据（GPU 空闲、不存在或驱动不提供计数器）"
 	case 0xc0000bb8, 0xc0000bb9:
-		reason = "GPU object/counter missing (requires a supporting WDDM driver)"
+		reason = "系统没有该 GPU 计数器（需要 Windows 10 1709+ 与 WDDM 2.x 驱动）"
 	case 5, 0xc0000bdb:
-		reason = "access denied to performance counters"
+		reason = "没有读取性能计数器的权限"
 	case 0xc0000bba, 0xc0000bc6, 0x800007d6, 0x800007d7, 0x800007d8:
-		reason = "invalid data/rate (warm-up, instance churn or driver unavailable)"
+		reason = "数据无效（预热中、实例变动或驱动不可用）"
 	}
-	return fmt.Sprintf("%s: %s (PDH 0x%08x)", operation, reason, status)
+	return fmt.Sprintf("%s：%s (PDH 0x%08x)", operation, reason, status)
 }
 
 // DXGI enumerates present adapters, including adapters without an attached
-// monitor. Only Description, LUID and the UMD version are retained; the other
-// descriptor fields are discarded. Device paths and outputs are not queried.
+// monitor: name, LUID, driver version and dedicated/shared memory sizes.
 type performanceDXGIAdapterDesc struct {
 	Description                                                     [128]uint16
 	VendorID, DeviceID, SubSysID, Revision                          uint32
@@ -482,7 +377,8 @@ func performanceWindowsGPUInventory(s *PerformanceSystem, canceled func() bool) 
 		var desc performanceDXGIAdapterDesc
 		hr, _, _ = syscall.SyscallN(adapter.VTable[10], uintptr(unsafe.Pointer(adapter)), uintptr(unsafe.Pointer(&desc))) // GetDesc1
 		if int32(hr) >= 0 && desc.Flags&2 == 0 {                                                                          // Exclude DXGI_ADAPTER_FLAG_SOFTWARE.
-			gpu := PerformanceGPU{Name: strings.TrimSpace(windows.UTF16ToString(desc.Description[:])), Adapter: fmt.Sprintf("luid_0x%08x_0x%08x", uint32(desc.LUIDHigh), desc.LUIDLow)}
+			gpu := PerformanceGPU{Name: strings.TrimSpace(windows.UTF16ToString(desc.Description[:])), Adapter: fmt.Sprintf("luid_0x%08x_0x%08x", uint32(desc.LUIDHigh), desc.LUIDLow),
+				DedicatedBytes: uint64(desc.DedicatedVideoMemory), SharedBytes: uint64(desc.SharedSystemMemory)}
 			if canceled() {
 				syscall.SyscallN(adapter.VTable[2], uintptr(unsafe.Pointer(adapter)))
 				return

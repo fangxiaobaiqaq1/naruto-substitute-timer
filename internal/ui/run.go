@@ -390,13 +390,14 @@ func (s *session) overlayContent() fyne.CanvasObject {
 
 	// Text-only: four icon buttons would not fit the 280 px compact width.
 	set := widget.NewButton("设置", s.openSettings)
+	// The settings button doubles as the "performance recording" indicator.
+	s.performanceButton = set
+	s.performanceMu.Lock()
+	set.Text = performanceButtonText(s.performanceUpdateLocked(false))
+	s.performanceMu.Unlock()
 	swap := widget.NewButton("换边", s.swapSide)
 	diag := widget.NewButton("诊断", s.openDiagnostics)
 	about := widget.NewButton("关于", s.openAbout)
-	s.performanceButton = widget.NewButton("性能报告", s.openPerformance)
-	s.performanceMu.Lock()
-	s.performanceButton.Text = performanceButtonText(s.performanceUpdateLocked(false))
-	s.performanceMu.Unlock()
 	s.updateButton = widget.NewButtonWithIcon("发现新版本", theme.DownloadIcon(), s.openAbout)
 	s.updateButton.Importance = widget.HighImportance
 	s.updateButton.Hide()
@@ -405,8 +406,7 @@ func (s *session) overlayContent() fyne.CanvasObject {
 	// the last three seconds, neutral otherwise (same as the Android card).
 	s.accent = canvas.NewRectangle(panelBorder)
 	s.accent.SetMinSize(fyne.NewSize(3, 0))
-	// Keep the existing four controls at 280px; performance gets its own row.
-	s.footer = container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about), s.performanceButton)
+	s.footer = container.NewVBox(s.updateButton, container.NewGridWithColumns(4, swap, set, diag, about))
 	s.singleClockRow = container.NewHBox(primaryBox, s.alternateBox, container.NewCenter(eventChip))
 	body := container.NewBorder(nil, container.NewPadded(s.footer), s.accent, nil,
 		container.NewVBox(
@@ -547,6 +547,9 @@ func (s *session) loop() {
 		}
 		started := time.Now()
 		s.captureOnce()
+		if s.performanceActive.Load() != nil {
+			s.observePerformanceLoop(started)
+		}
 		interval, elapsed := s.poll(), time.Since(started)
 		if s.slowCapture.Observe(elapsed, interval) {
 			runs := atomic.AddUint64(&s.slowCaptureRuns, 1)

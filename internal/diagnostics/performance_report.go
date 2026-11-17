@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"html/template"
 	"io"
 	"math"
@@ -37,10 +36,12 @@ const (
 var performanceReportHTML string
 
 var performanceReportTemplate = template.Must(template.New("performance-report").Funcs(template.FuncMap{
-	"number": performanceReportNumber,
-	"human":  performanceReportHumanValue,
-	"size":   performanceReportSize,
-	"clock":  performanceReportTime,
+	"number":  performanceReportNumber,
+	"human":   performanceReportHumanValue,
+	"size":    performanceReportSize,
+	"percent": performanceReportPercent,
+	"clock":   performanceReportTime,
+	"elapsed": performanceReportClock,
 }).Parse(performanceReportHTML))
 
 // exportPerformanceReport exports only a performance-session snapshot. The caller
@@ -52,17 +53,11 @@ func exportPerformanceReport(ctx context.Context, metadata PerformanceMetadata, 
 		return "", err
 	}
 	if timelineBytes < 0 || timelineBytes > PerformanceMaxBytes {
-		return "", fmt.Errorf("performance timeline exceeds the 64 MiB snapshot limit")
+		return "", fmt.Errorf("性能时间线超过 %d MiB 上限", PerformanceMaxBytes>>20)
 	}
 	directory, err := filepath.Abs(filepath.Dir(timelinePath))
 	if err != nil {
 		return "", err
-	}
-	if status.Directory != "" {
-		d, err := filepath.Abs(status.Directory)
-		if err != nil || d != directory {
-			return "", errors.New("performance timeline is outside the session directory")
-		}
 	}
 	out, err := os.CreateTemp(directory, ".performance-report-*.tmp")
 	if err != nil {
@@ -107,7 +102,7 @@ func exportPerformanceReport(ctx context.Context, metadata PerformanceMetadata, 
 		return "", err
 	}
 	if timelineBytes > 0 {
-		f, err := performanceReportOpenRegular(timelinePath)
+		f, err := os.Open(timelinePath)
 		if err != nil {
 			return "", err
 		}
@@ -121,7 +116,7 @@ func exportPerformanceReport(ctx context.Context, metadata PerformanceMetadata, 
 		}
 		limited := &io.LimitedReader{R: f, N: timelineBytes}
 		reader := io.TeeReader(limited, io.MultiWriter(raw, performanceReportWriter{ctx, spool}))
-		if err := performanceReportScan(ctx, reader, func(s performanceReportSample) error { return report.add(s) }); err != nil {
+		if err := performanceReportScan(ctx, reader, &report.Summary.SkippedLines, func(s performanceReportSample) error { return report.add(s) }); err != nil {
 			return "", err
 		}
 		if limited.N != 0 {
@@ -145,54 +140,53 @@ func exportPerformanceReport(ctx context.Context, metadata PerformanceMetadata, 
 		return "", err
 	}
 
-	// Never walk the session directory. Profiles are independent, size-bounded
-	// snapshots, not promises of exact alignment with the timeline endpoints.
-	for _, name := range []string{"heap-start.pprof", "heap-end.pprof", "goroutines-start.txt", "goroutines-end.txt"} {
-		p := performanceReportProfile{Name: name, Status: status.ProfileStatus[name], Result: "文件不存在；未包含"}
-		// A coincidentally named file is not evidence of an opted-in, completed
-		// profile. Do not even inspect it unless the captured status permits it.
-		if !metadata.ProfilesRequested || p.Status != "ok" {
-			p.Result = "采集尚未完成或失败（status 非 ok）；未包含"
-			if !metadata.ProfilesRequested {
-				p.Result = "本会话未请求 profiles；未包含"
-			}
-			report.Summary.Profiles = append(report.Summary.Profiles, p)
-			continue
+	// Optional attachments: completed profiles, the effective config and the
+	// recorder's final status. A missing or oversized one is noted, not fatal.
+	attach := func(name string) (int64, error) {
+		f, err := os.Open(filepath.Join(directory, name))
+		if err != nil {
+			return 0, err
 		}
-		path := filepath.Join(directory, name)
-		info, statErr := os.Lstat(path)
-		switch {
-		case os.IsNotExist(statErr):
-		case statErr != nil:
-			return "", fmt.Errorf("inspect optional performance profile %s: %w", name, statErr)
-		case !info.Mode().IsRegular():
-			p.Result = "不是普通文件（含符号链接）；未包含"
-		case info.Size() > performanceReportProfileLimit:
-			p.Result = "超过单文件 16 MiB 限制；未包含"
-		default:
-			f, err := performanceReportOpenRegular(path)
-			if err != nil {
-				return "", err
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			return 0, err
+		}
+		if !info.Mode().IsRegular() || info.Size() > performanceReportProfileLimit {
+			return 0, errors.New("不是普通文件或超过 16 MiB")
+		}
+		w, err := entry(name)
+		if err != nil {
+			return 0, err
+		}
+		return io.Copy(w, f)
+	}
+	names := make([]string, 0, len(status.ProfileStatus))
+	for name := range status.ProfileStatus {
+		if name == filepath.Base(name) && !strings.HasPrefix(name, ".") {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		p := performanceReportProfile{Name: name, Status: status.ProfileStatus[name]}
+		if p.Status != "ok" {
+			p.Result = "采集未完成：" + p.Status
+		} else if n, err := attach(name); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
 			}
-			opened, err := f.Stat()
-			if err != nil || !os.SameFile(info, opened) || opened.Size() != info.Size() {
-				f.Close()
-				return "", errors.New("optional performance profile changed while opening")
-			}
-			w, err := entry(name)
-			if err == nil {
-				_, err = io.CopyN(w, f, opened.Size())
-			}
-			closeErr := f.Close()
-			if err != nil {
-				return "", err
-			}
-			if closeErr != nil {
-				return "", closeErr
-			}
-			p.Included, p.Bytes, p.Result = true, info.Size(), "已包含已完成快照（status=ok）"
+			p.Result = "未包含：" + err.Error()
+		} else {
+			p.Included, p.Bytes, p.Result = true, n, "已包含"
 		}
 		report.Summary.Profiles = append(report.Summary.Profiles, p)
+	}
+	if _, err := attach("config.json"); err != nil && ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if err = jsonEntry("status.json", status); err != nil {
+		return "", err
 	}
 	if err = jsonEntry("metadata.json", report.Metadata); err != nil {
 		return "", err
@@ -256,29 +250,8 @@ func (w performanceReportWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func performanceReportOpenRegular(path string) (*os.File, error) {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !before.Mode().IsRegular() {
-		return nil, errors.New("performance input must be a regular file, not a link or device")
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	after, err := f.Stat()
-	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
-		f.Close()
-		return nil, errors.New("performance input changed while opening")
-	}
-	return f, nil
-}
-
 // Pointer-valued wire maps intentionally differ from the shared recorder types:
 // encoding/json otherwise silently converts a JSON null float64 into a real 0.
-// Unknown struct fields are rejected so raw samples cannot smuggle config dumps.
 type performanceReportSampleAlias PerformanceSample
 type performanceReportProcessAlias PerformanceProcess
 type performanceReportApplicationAlias PerformanceApplication
@@ -303,65 +276,51 @@ type performanceReportSample struct {
 	App       *performanceReportApplicationWire `json:"application"`
 }
 
-func performanceReportScan(ctx context.Context, r io.Reader, visit func(performanceReportSample) error) error {
+// performanceReportScan visits every well-formed sample. A damaged line (for
+// example the torn last line of a crashed session) is skipped and counted, so
+// one bad record never costs the user the whole report.
+func performanceReportScan(ctx context.Context, r io.Reader, skipped *int, visit func(performanceReportSample) error) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64<<10), performanceReportLineLimit+1)
-	line := 0
+	skip := func() {
+		if skipped != nil {
+			*skipped++
+		}
+	}
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		line++
-		if line > PerformanceMaxSamples {
-			return errors.New("performance snapshot exceeds 21600 samples")
-		}
 		data := scanner.Bytes()
-		if len(data) > performanceReportLineLimit || !utf8.Valid(data) {
-			return fmt.Errorf("performance sample %d: oversized line or invalid UTF-8", line)
+		if len(bytes.TrimSpace(data)) == 0 {
+			continue
 		}
 		var s performanceReportSample
-		d := json.NewDecoder(bytes.NewReader(data))
-		d.DisallowUnknownFields()
-		if err := d.Decode(&s); err != nil {
-			return fmt.Errorf("performance sample %d: invalid JSON: %w", line, err)
+		if !utf8.Valid(data) || json.Unmarshal(data, &s) != nil || s.At.IsZero() || s.Elapsed == nil || *s.Elapsed < 0 {
+			skip()
+			continue
 		}
-		if err := d.Decode(new(any)); err != io.EOF {
-			return fmt.Errorf("performance sample %d: trailing JSON data", line)
-		}
-		if s.At.IsZero() || s.Elapsed == nil || s.Interval == nil || *s.Elapsed < 0 || *s.Interval < 0 || (s.Collector != nil && *s.Collector < 0) {
-			return fmt.Errorf("performance sample %d: missing or invalid timing", line)
-		}
-		s.ElapsedS, s.IntervalS = *s.Elapsed, *s.Interval
-		if len(s.Procs) > 64 || len(s.GPUEngines) > 256 || len(s.Markers) > 64 || len(s.Metrics) > performanceReportMetricLimit {
-			return fmt.Errorf("performance sample %d: too many metrics/processes/engines/markers", line)
+		s.ElapsedS = *s.Elapsed
+		if s.Interval != nil && *s.Interval > 0 {
+			s.IntervalS = *s.Interval
 		}
 		s.Values = performanceReportValues(s.Metrics)
 		for _, p := range s.Procs {
-			if p.PID <= 0 || len(p.Values) > performanceReportMetricLimit {
-				return fmt.Errorf("performance sample %d: invalid process", line)
-			}
-			for key, value := range p.Values {
-				if len(key) > 256 || (value != nil && math.Abs(*value) > 1e100) {
-					return fmt.Errorf("performance sample %d: process metric exceeds supported range", line)
-				}
-			}
 			p.performanceReportProcessAlias.Values = performanceReportValues(p.Values)
-			// Names are basenames by contract. Reject paths instead of exporting a
-			// username accidentally embedded in a collector's executable path.
-			if strings.ContainsAny(p.Name, `/\\`) {
-				return fmt.Errorf("performance sample %d: process name is not a basename", line)
-			}
 			s.Processes = append(s.Processes, PerformanceProcess(p.performanceReportProcessAlias))
 		}
 		if s.App != nil {
 			s.Application = PerformanceApplication(s.App.performanceReportApplicationAlias)
+			if s.App.SlowFrames != nil {
+				s.Application.SlowFrames = *s.App.SlowFrames
+			}
 		}
 		if err := visit(s); err != nil {
-			return fmt.Errorf("performance sample %d: %w", line, err)
+			skip()
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read performance snapshot (line limit 1 MiB): %w", err)
+		return fmt.Errorf("读取性能时间线（单行上限 1 MiB）：%w", err)
 	}
 	return ctx.Err()
 }
@@ -369,7 +328,7 @@ func performanceReportScan(ctx context.Context, r io.Reader, visit func(performa
 func performanceReportValues(values map[string]*float64) map[string]float64 {
 	out := make(map[string]float64, len(values))
 	for key, v := range values {
-		if v != nil {
+		if v != nil && !math.IsNaN(*v) && !math.IsInf(*v, 0) && math.Abs(*v) <= 1e100 {
 			out[key] = *v
 		}
 	}
@@ -435,7 +394,22 @@ func (a *performanceReportAccumulator) add(t, v float64) {
 	m.Peak = math.Max(m.Peak, v)
 }
 
-func (a *performanceReportAccumulator) finish(samples int) performanceReportMetric {
+// performanceReportLevel reports whether a per-minute growth trend means
+// anything for the metric: levels such as memory, handles and threads do;
+// percentages, rates, durations and cumulative counters do not.
+func performanceReportLevel(m PerformanceMetric) bool {
+	if m.Unit != "bytes" && m.Unit != "count" {
+		return false
+	}
+	for _, part := range []string{"_total", "gc_count", "disk_", "system_memory_total", "commit_limit", "memory_limit", "gomaxprocs", "_window", "page_faults", "io_"} {
+		if strings.Contains(m.Key, part) {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *performanceReportAccumulator) finish(samples int, spanS float64) performanceReportMetric {
 	m := a.metric
 	m.Count, m.Missing = len(a.values), samples-len(a.values)
 	if m.Count == 0 {
@@ -448,9 +422,11 @@ func (a *performanceReportAccumulator) finish(samples int) performanceReportMetr
 	m.Min, m.Peak = quantile(0), quantile(1)
 	m.P50, m.P95, m.P99 = quantile(.50), quantile(.95), quantile(.99)
 	m.Mean = performanceReportFloat(a.meanV)
-	if m.Count > 1 {
+	// A slope fitted to a few warm-up samples prints alarming nonsense
+	// ("+86 MiB/min"). Only levels observed for five minutes get a trend.
+	if m.Count > 1 && performanceReportLevel(m.PerformanceMetric) {
 		m.Change = performanceReportFloat(*m.Last - *m.First)
-		if a.sTT > 0 {
+		if a.sTT > 0 && spanS >= 300 && m.Count >= 120 {
 			m.TrendPerMinute = performanceReportFloat(60 * a.sTV / a.sTT)
 		}
 	}
@@ -466,6 +442,41 @@ type performanceReportGap struct {
 type performanceReportEvent struct {
 	ElapsedS float64  `json:"elapsed_s"`
 	Markers  []string `json:"markers"`
+}
+
+// performanceReportMark is a mark the user made ("it stuttered now").
+type performanceReportMark struct {
+	ElapsedS float64   `json:"elapsed_s"`
+	At       time.Time `json:"at"`
+	Label    string    `json:"label"`
+}
+
+// performanceReportTop aggregates the per-sample system-wide process table by
+// program: same-named processes (an emulator's helpers, browser tabs) are
+// summed within a sample. CPUMean is over the whole session, counting samples
+// where the program was too light to be listed as 0.
+type performanceReportTop struct {
+	Name       string   `json:"name"`
+	Role       string   `json:"role,omitempty"`
+	Samples    int      `json:"samples"`
+	Instances  int      `json:"max_instances"`
+	CPUMean    *float64 `json:"cpu_percent_mean"`
+	CPUPeak    *float64 `json:"cpu_percent_peak"`
+	MemoryMean float64  `json:"working_set_bytes_mean"`
+	MemoryPeak float64  `json:"working_set_bytes_peak"`
+	GPUMean    *float64 `json:"gpu_percent_mean"`
+	GPUPeak    *float64 `json:"gpu_percent_peak"`
+	VRAMPeak   *float64 `json:"gpu_dedicated_bytes_peak"`
+
+	cpuSum, gpuSum, memorySum float64
+	cpuCount, gpuCount        int
+}
+
+// performanceReportHeadline is one at-a-glance number on the first screen.
+type performanceReportHeadline struct {
+	Label  string `json:"label"`
+	Value  string `json:"value"`
+	Detail string `json:"detail,omitempty"`
 }
 
 type performanceReportUnavailable struct {
@@ -511,8 +522,19 @@ type performanceReportSummary struct {
 	EndedAt       *time.Time `json:"ended_at"`
 	Active        bool       `json:"active"`
 	StopReason    string     `json:"stop_reason,omitempty"`
-	// Error details can contain a home directory. Keep a flag, not an OS path.
-	RecorderError              bool                           `json:"recorder_error"`
+	LastError     string     `json:"last_error,omitempty"` // The recorder's own error, verbatim.
+	// The first screen: plain-language findings, key numbers, and who used the machine.
+	Verdict          []string                    `json:"verdict"`
+	Headline         []performanceReportHeadline `json:"headline"`
+	Top              []*performanceReportTop     `json:"top_processes"`
+	UserMarks        []performanceReportMark     `json:"user_marks"`
+	SlowFrames       uint64                      `json:"slow_frames"`
+	CaptureErrors    uint64                      `json:"capture_errors"`
+	LastCaptureError string                      `json:"last_capture_error,omitempty"`
+	Backend          string                      `json:"capture_backend,omitempty"`
+	Resolution       string                      `json:"capture_resolution,omitempty"`
+	SkippedLines     int                         `json:"skipped_lines"`
+
 	ProfileStatus              map[string]string              `json:"profile_status"`
 	TimelineBytes              int64                          `json:"timeline_bytes"`
 	Samples                    int                            `json:"samples"`
@@ -539,14 +561,35 @@ type performanceReport struct {
 	Summary  performanceReportSummary
 	metrics  map[string]*performanceReportAccumulator
 	procs    map[string]*performanceReportProcess
+	tops     map[string]*performanceReportTop
+	topSeen  int // Samples that carried a system-wide process table.
 	reasons  map[string]*performanceReportUnavailable
 	previous *performanceReportSample
 	charts   []performanceReportChart
 	width    int
+	order    []string // Curated metric order; unknown keys follow alphabetically.
+	finished map[string]performanceReportMetric
 }
 
 var performanceReportExtraMetrics = []PerformanceMetric{
-	{"main_cpu_cores", "主进程 CPU 核等效（coreEquivalent）", "cores"},
+	{"loop_max_ms", "单轮识别循环最长耗时", "ms"},
+	{"loop_p95_ms", "单轮识别循环 P95", "ms"},
+	{"attempt_max_ms", "采集到交付最长耗时（含失败/超时）", "ms"},
+	{"attempt_p95_ms", "采集到交付 P95", "ms"},
+	{"capture_max_ms", "截图最长耗时", "ms"},
+	{"capture_p95_ms", "截图 P95", "ms"},
+	{"analysis_max_ms", "识别最长耗时", "ms"},
+	{"analysis_p95_ms", "识别 P95", "ms"},
+	{"post_max_ms", "状态更新与刷新最长耗时", "ms"},
+	{"ui_queue_max_ms", "界面线程最长等待", "ms"},
+	{"ui_queue_ms", "界面线程等待（最近一次）", "ms"},
+	{"slow_frames_window", "本秒慢帧数（超过轮询间隔）", "count"},
+	{"errors_window", "本秒采集/识别错误数", "count"},
+	{"capture_ms", "截图耗时（最近一帧）", "ms"},
+	{"analysis_ms", "识别耗时（最近一帧）", "ms"},
+	{"delivery_age_ms", "交付帧龄（最近一帧）", "ms"},
+	{"collector_ms", "性能采样自身耗时", "ms"},
+	{"main_cpu_cores", "计时器主进程 CPU 核等效", "cores"},
 	{"main_private_resident_bytes", "主进程私有驻留（Linux）", "bytes"},
 	{"tree_private_resident_bytes", "进程树私有驻留（Linux）", "bytes"},
 	{"main_virtual_bytes", "主进程虚拟地址空间", "bytes"},
@@ -554,46 +597,40 @@ var performanceReportExtraMetrics = []PerformanceMetric{
 	{"main_threads", "主进程线程数", "count"},
 	{"main_handles", "主进程句柄数（Windows）", "count"},
 	{"main_fds", "主进程文件描述符（Linux）", "count"},
+	{"main_io_read_bytes_s", "主进程读取速率", "bytes/s"},
+	{"main_io_write_bytes_s", "主进程写入速率", "bytes/s"},
+	{"main_page_faults_s", "主进程页错误速率", "count/s"},
+	{"main_io_read_bytes", "主进程累计读取", "bytes"},
+	{"main_io_write_bytes", "主进程累计写入", "bytes"},
+	{"main_page_faults", "主进程累计页错误", "count"},
+	{"main_cpu_seconds", "主进程累计 CPU 时间", "seconds"},
+	{"system_cpu_total_seconds", "整机累计 CPU 时间", "seconds"},
+	{"system_cpu_idle_seconds", "整机累计空闲时间", "seconds"},
+	{"system_memory_total_bytes", "物理内存总量", "bytes"},
+	{"system_swap_total_bytes", "交换分区总量", "bytes"},
+	{"system_swap_free_bytes", "交换分区可用", "bytes"},
+	{"disk_total_bytes", "报告所在盘总容量", "bytes"},
 	{"go_alloc_total_bytes", "Go 累计分配量", "bytes"},
 	{"go_next_gc_bytes", "Go 下次 GC 目标堆", "bytes"},
 	{"go_mallocs_total", "Go 累计分配对象", "count"},
 	{"go_frees_total", "Go 累计释放对象", "count"},
 	{"go_memory_limit_disabled", "Go 软内存上限未设置（1=是）", "flag"},
-	{"go_gc_disabled", "自动 GC 已关闭 / GOGC off（1=是）", "flag"},
-	{"capture_ms", "采集耗时", "ms"},
-	{"analysis_ms", "分析耗时", "ms"},
-	{"delivery_age_ms", "交付帧龄", "ms"},
-	{"capture_p95_ms", "采集窗口 P95", "ms"},
-	{"analysis_p95_ms", "分析窗口 P95", "ms"},
-	{"ui_queue_ms", "UI 队列等待", "ms"},
-	{"collector_ms", "采样开销（仅采集与统计）", "ms"},
+	{"go_gc_disabled", "自动 GC 已关闭（1=是）", "flag"},
 }
 
 func newPerformanceReport(m PerformanceMetadata, s PerformanceStatus, n int64) *performanceReport {
-	m.Build = performanceReportBuild(m.Build)
-	r := &performanceReport{Metadata: m, metrics: make(map[string]*performanceReportAccumulator), procs: make(map[string]*performanceReportProcess), reasons: make(map[string]*performanceReportUnavailable), width: 1}
+	r := &performanceReport{Metadata: m, metrics: make(map[string]*performanceReportAccumulator), procs: make(map[string]*performanceReportProcess),
+		tops: make(map[string]*performanceReportTop), reasons: make(map[string]*performanceReportUnavailable), width: 1}
 	r.Summary = performanceReportSummary{
-		SchemaVersion: 1, GeneratedAt: time.Now().UTC(), StartedAt: m.StartedAt, EndedAt: s.EndedAt,
-		Active: s.Active, StopReason: s.StopReason, RecorderError: s.LastError != "", ProfileStatus: s.ProfileStatus,
+		SchemaVersion: 2, GeneratedAt: time.Now(), StartedAt: m.StartedAt, EndedAt: s.EndedAt,
+		Active: s.Active, StopReason: s.StopReason, LastError: s.LastError, ProfileStatus: s.ProfileStatus,
 		TimelineBytes: n, ExpectedIntervalS: float64(m.IntervalMS) / 1000,
 		PendingMarkers: append([]string(nil), s.PendingMarkers...),
 		Notes: []string{
-			"仅导出性能元数据和指定字节前缀；不读取活跃尾部、旧诊断、截图、config、用户名、命令行或其他进程名称。Latest 不属于本快照。",
-			"CPU 百分比按全机逻辑核归一：100% 表示所有逻辑核满载。coreEquivalent = CPU% × 逻辑核数 / 100；核数未知时不推算。系统/主进程/已观测子进程树不是同一口径。",
-			"进程 CPU/IO 速率使用记录器提供的 counter_interval_seconds（实际计数器读取间隔）；原始进程 counter_at 是读取时刻的墙钟表示，counter_age_ms 表示时效。sample.at/interval_s 是样本级时序，不代替各进程时间窗，也不用于重算速率。",
-			"进程树仅含已观测后代；短命、无权限或尚未观测的子进程可能缺失。工作集合计可能重复计算共享页，不能视为独占物理内存。Windows 私有提交不等于 Linux RSS/私有驻留。",
-			"ORT/ONNX Runtime、显卡驱动及其他原生分配不在 Go heap 中；Go 堆下降不意味着全部进程内存下降。内存首末增长和趋势只提示排查线索，不能据此判定泄漏。",
-			"GPU 为最忙引擎百分比，不累加不同引擎；OCR GPU 请求/配置不证明实际执行后端。GPU/显存、句柄、IO 等可能受平台、驱动、权限影响。IO 包含管道/设备，不等于物理磁盘吞吐；磁盘余量是报告所在卷。",
-			"缺失值使用 JSON null、CSV 空单元格和页面“不可用”，绝不补 0；真实 0 参与统计。baseline / counter reset 不伪造计数器增量；派生速率采用记录器提供的值。",
-			"首末为该指标最早/最晚有效观测；均值和最近秩 P50/P95/P99 按样本等权，不作时间加权或插值。趋势为有效样本对 elapsed_s 的最小二乘斜率 × 60；每分钟桶 mean/peak/count 见 summary.json，不填空桶。",
-			"缺失区间按相邻 elapsed_s 超过期望间隔 1.5 倍估计（含首样本前）；暂停/调度抖动也可能产生间隙。墙钟倒退单独标记，曲线和趋势使用 elapsed_s。",
-			"卡顿标记来自记录器 markers 或 slow_frames 计数增加；采集/分析 FPS 是当前采样窗口次数率，不是游戏源 FPS。耗时、UI 队列等待和采样开销都不等于物理呈现/端到端延迟。",
-			"collector_ms 仅测原生/运行时采集与统计，不含后续序列化、写盘或报告导出，不能当作总监控开销；导出自身可能扰动仍在采集的会话。",
-			"pending_markers 是已接受但尚未写入本次 timeline 前缀的标记（可能含导出开始/结束）；独立列示，不伪造时间点、不追加到原始样本或统计曲线。",
-			"go_memory_limit_disabled=1 表示没有设置 Go 软内存上限；go_gc_disabled=1 表示 GOGC off。对应限制/百分比省略并注明原因，不是 0 bytes 或 0%；缺少 disabled 标志也不推断为 0。",
-			"图表仅保留必要指标；自适应分桶保留首末与最小/最大值，缺失桶以断开的极值点表示，禁止跨缺失连线。精确原始 samples.jsonl、完整 samples.csv 及全量统计随包提供。",
-			"限制：输入 64 MiB、单行 1 MiB、21600 样本、512 指标、每样本 64 进程/256 GPU 引擎；进程汇总最多 1024 身份，可用性原因最多 512 类，超出计数可见且原始样本不裁剪。",
-			"可选 profile 仅在 metadata.profiles_requested=true 且对应 status.ProfileStatus 为 ok 时读取固定四项普通文件（每项最多 16 MiB）；同名文件不能绕过请求和完成状态检查。它们是独立文件快照，可能缺少结束快照；Go heap profile 不能描述 ORT 原生堆。",
+			"CPU 百分比按全部逻辑核归一（与任务管理器“进程”页一致）：100% 表示所有核心满载。",
+			"空白 / “—” 表示没有测到，不是 0。",
+			"GPU 为最忙引擎的占用，不把不同引擎相加；计时器内存合计可能重复计算共享页。",
+			"进程榜每秒只记录占用最高的若干进程：平均 CPU 按整段记录计算，未上榜的时刻按 0 计。",
 		},
 	}
 	if r.Summary.ExpectedIntervalS <= 0 {
@@ -601,7 +638,10 @@ func newPerformanceReport(m PerformanceMetadata, s PerformanceStatus, n int64) *
 	}
 	for _, metrics := range [][]PerformanceMetric{PerformanceMetrics, performanceReportExtraMetrics} {
 		for _, metric := range metrics {
-			r.metrics[metric.Key] = &performanceReportAccumulator{metric: performanceReportMetric{PerformanceMetric: metric}}
+			if _, exists := r.metrics[metric.Key]; !exists {
+				r.metrics[metric.Key] = &performanceReportAccumulator{metric: performanceReportMetric{PerformanceMetric: metric}}
+				r.order = append(r.order, metric.Key)
+			}
 		}
 	}
 	for _, group := range performanceReportChartGroups {
@@ -622,10 +662,16 @@ func (r *performanceReport) values(s performanceReportSample) map[string]float64
 	for key, value := range map[string]*float64{
 		"capture_ms": app.CaptureMS, "analysis_ms": app.AnalysisMS, "delivery_age_ms": app.DeliveryAgeMS,
 		"capture_p95_ms": app.CaptureP95MS, "analysis_p95_ms": app.AnalysisP95MS, "ui_queue_ms": app.UIQueueMS,
+		"capture_max_ms": app.CaptureMaxMS, "analysis_max_ms": app.AnalysisMaxMS, "attempt_max_ms": app.AttemptMaxMS,
+		"attempt_p95_ms": app.AttemptP95MS, "loop_max_ms": app.LoopMaxMS, "loop_p95_ms": app.LoopP95MS,
+		"post_max_ms": app.PostMaxMS, "ui_queue_max_ms": app.UIQueueMaxMS,
 	} {
-		if value != nil {
+		if value != nil && !math.IsNaN(*value) && !math.IsInf(*value, 0) {
 			v[key] = *value
 		}
+	}
+	if s.App != nil {
+		v["slow_frames_window"], v["errors_window"] = float64(app.WindowSlow), float64(app.WindowErrors)
 	}
 	for _, prefix := range []string{"main", "tree"} {
 		if _, exists := v[prefix+"_cpu_cores"]; !exists && r.Metadata.System.LogicalCPUs > 0 {
@@ -641,26 +687,14 @@ func (r *performanceReport) add(s performanceReportSample) error {
 	if r.previous != nil && s.ElapsedS <= r.previous.ElapsedS {
 		return errors.New("elapsed_s must be strictly increasing")
 	}
-	// These guard arithmetic and minute-index overflow, not a six-hour wall-time
-	// assumption: suspended recordings can legitimately span longer periods.
-	if s.ElapsedS > 1e12 || s.IntervalS > 1e12 {
+	if s.ElapsedS > 1e12 {
 		return errors.New("timing exceeds supported numeric range")
 	}
 	values := r.values(s)
-	// Include unknown and explicitly null keys, even if never available.
-	for key := range s.Metrics {
-		if err := r.ensureMetric(key); err != nil {
-			return err
-		}
-	}
 	for key, value := range values {
-		if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > 1e100 {
-			return errors.New("metric exceeds supported numeric range")
+		if r.ensureMetric(key) {
+			r.metrics[key].add(s.ElapsedS, value)
 		}
-		if err := r.ensureMetric(key); err != nil {
-			return err
-		}
-		r.metrics[key].add(s.ElapsedS, value)
 	}
 	from := 0.0
 	if r.previous != nil {
@@ -671,62 +705,46 @@ func (r *performanceReport) add(s performanceReportSample) error {
 		r.Summary.Gaps = append(r.Summary.Gaps, performanceReportGap{FromS: from, ToS: s.ElapsedS,
 			EstimatedMissing: max(1, int64(math.Round((s.ElapsedS-from)/r.Summary.ExpectedIntervalS))-1)})
 	}
-	markers := append([]string(nil), s.Markers...)
-	if r.previous == nil {
-		markers = append(markers, "baseline：首样本只建立累计计数器基线；缺失速率不是 0")
-	} else {
-		if s.At.Before(r.previous.At) {
-			markers = append(markers, "wall_clock_reset：墙钟倒退，使用 elapsed_s")
-		}
-		for _, key := range []string{"system_cpu_total_seconds", "system_cpu_idle_seconds", "go_gc_count", "go_alloc_total_bytes", "go_mallocs_total", "go_frees_total"} {
-			a, aok := r.previous.Values[key]
-			b, bok := s.Values[key]
-			if aok && bok && b < a {
-				markers = append(markers, "counter reset："+key)
+	// User marks are the point of the recording: list every one of them, apart
+	// from bookkeeping, and never let automatic events crowd them out.
+	var events []string
+	for _, marker := range s.Markers {
+		at, label := s.ElapsedS, marker
+		if prefix, rest, ok := strings.Cut(marker, "s: "); ok {
+			if v, err := strconv.ParseFloat(prefix, 64); err == nil && v >= 0 && v <= s.ElapsedS {
+				at, label = v, rest
 			}
 		}
-		if s.App != nil && s.App.SlowFrames != nil && r.previous.App != nil && r.previous.App.SlowFrames != nil {
-			current, previous := *s.App.SlowFrames, *r.previous.App.SlowFrames
-			if current > previous {
-				markers = append(markers, fmt.Sprintf("卡顿：slow_frames +%d", current-previous))
-			} else if current < previous {
-				markers = append(markers, "counter reset：slow_frames")
-			}
+		if strings.HasPrefix(label, PerformanceUserMark) {
+			r.Summary.UserMarks = append(r.Summary.UserMarks, performanceReportMark{ElapsedS: at,
+				At: r.Summary.StartedAt.Add(time.Duration(at * float64(time.Second))), Label: label})
+		} else {
+			events = append(events, label)
 		}
 	}
-	baselines, resets := []string{}, []string{}
-	previousProcesses := make(map[int]PerformanceProcess)
-	if r.previous != nil {
-		for _, p := range r.previous.Processes {
-			previousProcesses[p.PID] = p
-		}
+	if r.previous != nil && s.At.Before(r.previous.At) {
+		events = append(events, "系统时钟被回拨（曲线按已用时间绘制，不受影响）")
+	}
+	if len(events) != 0 && len(r.Summary.Events) < 500 {
+		r.Summary.Events = append(r.Summary.Events, performanceReportEvent{ElapsedS: s.ElapsedS, Markers: events})
 	}
 	for _, p := range s.Processes {
-		prior, ok := previousProcesses[p.PID]
-		if !ok || p.StartID == "" || prior.StartID != p.StartID {
-			baselines = append(baselines, strconv.Itoa(p.PID))
-		} else {
-			for _, key := range []string{"cpu_seconds", "io_read_bytes", "io_write_bytes", "page_faults"} {
-				a, aok := prior.Values[key]
-				b, bok := p.Values[key]
-				if aok && bok && b < a {
-					resets = append(resets, fmt.Sprintf("%d/%s", p.PID, key))
-				}
-			}
+		r.addProcess(p, s.ElapsedS)
+		r.unavailable("process:"+p.Name, p.Unavailable, s.ElapsedS)
+	}
+	r.addTop(s.Top)
+	if s.App != nil {
+		app := s.Application
+		r.Summary.SlowFrames, r.Summary.CaptureErrors = app.SlowFrames, app.Errors
+		if app.LastError != "" {
+			r.Summary.LastCaptureError = app.LastError
 		}
-		if err := r.addProcess(p, s.ElapsedS); err != nil {
-			return err
+		if app.Backend != "" {
+			r.Summary.Backend = app.Backend
 		}
-		r.unavailable("process:"+strconv.Itoa(p.PID), p.Unavailable, s.ElapsedS)
-	}
-	if len(baselines) != 0 {
-		markers = append(markers, "baseline：新出现/重启/重新观测 PID "+strings.Join(baselines, ","))
-	}
-	if len(resets) != 0 {
-		markers = append(markers, "counter reset："+strings.Join(resets, ","))
-	}
-	if len(markers) != 0 {
-		r.Summary.Events = append(r.Summary.Events, performanceReportEvent{ElapsedS: s.ElapsedS, Markers: markers})
+		if app.Width > 0 && app.Height > 0 {
+			r.Summary.Resolution = fmt.Sprintf("%d×%d", app.Width, app.Height)
+		}
 	}
 	r.unavailable("sample", s.Unavailable, s.ElapsedS)
 	for i := range r.charts {
@@ -749,24 +767,24 @@ func (r *performanceReport) add(s performanceReportSample) error {
 	return nil
 }
 
-func (r *performanceReport) ensureMetric(key string) error {
+func (r *performanceReport) ensureMetric(key string) bool {
 	if _, ok := r.metrics[key]; ok {
-		return nil
+		return true
 	}
 	if len(r.metrics) >= performanceReportMetricLimit || len(key) > 256 {
-		return errors.New("too many metric keys or metric key exceeds 256 bytes")
+		return false
 	}
 	r.metrics[key] = &performanceReportAccumulator{metric: performanceReportMetric{PerformanceMetric: PerformanceMetric{Key: key, Label: key}}}
-	return nil
+	return true
 }
 
-func (r *performanceReport) addProcess(p PerformanceProcess, at float64) error {
+func (r *performanceReport) addProcess(p PerformanceProcess, at float64) {
 	id := strconv.Itoa(p.PID) + ":" + p.StartID
 	row := r.procs[id]
 	if row == nil {
 		if len(r.procs) >= performanceReportProcessLimit {
 			r.Summary.OmittedProcessObservations++
-			return nil
+			return
 		}
 		row = &performanceReportProcess{PID: p.PID, Parent: p.ParentPID, Name: p.Name, StartID: p.StartID, FirstS: at, Metrics: make(map[string]performanceReportProcessMetric)}
 		r.procs[id] = row
@@ -776,7 +794,7 @@ func (r *performanceReport) addProcess(p PerformanceProcess, at float64) error {
 		m := row.Metrics[key]
 		if m.Count == 0 {
 			if len(row.Metrics) >= performanceReportMetricLimit {
-				return errors.New("too many distinct metrics for one process")
+				continue
 			}
 			m.First, m.Peak = value, value
 		}
@@ -785,7 +803,77 @@ func (r *performanceReport) addProcess(p PerformanceProcess, at float64) error {
 		m.Mean += (value - m.Mean) / float64(m.Count)
 		row.Metrics[key] = m
 	}
-	return nil
+}
+
+func (r *performanceReport) addTop(rows []PerformanceTopProcess) {
+	if len(rows) == 0 {
+		return
+	}
+	r.topSeen++
+	type sum struct {
+		cpu, gpu, vram, memory  float64
+		hasCPU, hasGPU, hasVRAM bool
+		instances               int
+		name, role              string
+	}
+	now := make(map[string]*sum)
+	for _, row := range rows {
+		role := row.Role
+		if role == "child" {
+			role = "self" // The timer's helpers belong to the timer.
+		}
+		name := row.Name
+		if role == "self" {
+			name = "计时器（本程序）"
+		}
+		key := role + "\x00" + strings.ToLower(name)
+		t := now[key]
+		if t == nil {
+			t = &sum{name: name, role: role}
+			now[key] = t
+		}
+		t.instances++
+		t.memory += row.WorkingSetBytes
+		if row.CPUPercent != nil {
+			t.cpu, t.hasCPU = t.cpu+*row.CPUPercent, true
+		}
+		if row.GPUPercent != nil {
+			t.gpu, t.hasGPU = max(t.gpu, *row.GPUPercent), true
+		}
+		if row.GPUDedicatedBytes != nil {
+			t.vram, t.hasVRAM = t.vram+*row.GPUDedicatedBytes, true
+		}
+	}
+	for key, t := range now {
+		row := r.tops[key]
+		if row == nil {
+			if len(r.tops) >= performanceReportProcessLimit {
+				continue
+			}
+			row = &performanceReportTop{Name: t.name, Role: t.role}
+			r.tops[key] = row
+		}
+		row.Samples++
+		row.Instances = max(row.Instances, t.instances)
+		row.memorySum += t.memory
+		row.MemoryPeak = max(row.MemoryPeak, t.memory)
+		if t.hasCPU {
+			cpu := min(100, t.cpu)
+			row.cpuSum, row.cpuCount = row.cpuSum+cpu, row.cpuCount+1
+			if row.CPUPeak == nil || cpu > *row.CPUPeak {
+				row.CPUPeak = performanceReportFloat(cpu)
+			}
+		}
+		if t.hasGPU {
+			row.gpuSum, row.gpuCount = row.gpuSum+t.gpu, row.gpuCount+1
+			if row.GPUPeak == nil || t.gpu > *row.GPUPeak {
+				row.GPUPeak = performanceReportFloat(t.gpu)
+			}
+		}
+		if t.hasVRAM && (row.VRAMPeak == nil || t.vram > *row.VRAMPeak) {
+			row.VRAMPeak = performanceReportFloat(t.vram)
+		}
+	}
 }
 
 func (r *performanceReport) unavailable(scope string, values map[string]string, at float64) {
@@ -807,16 +895,30 @@ func (r *performanceReport) unavailable(scope string, values map[string]string, 
 
 func (r *performanceReport) finish(ctx context.Context) error {
 	r.Summary.Insufficient = r.Summary.Samples < 2
-	keys := make([]string, 0, len(r.metrics))
-	for key := range r.metrics {
-		keys = append(keys, key)
+	span := 0.0
+	if seconds := r.Summary.observedSeconds(); seconds != nil {
+		span = *seconds
 	}
-	sort.Strings(keys)
-	for _, key := range keys {
+	// Curated order first (what a reader looks for), unknown keys after.
+	known := make(map[string]bool, len(r.order))
+	for _, key := range r.order {
+		known[key] = true
+	}
+	extra := make([]string, 0)
+	for key := range r.metrics {
+		if !known[key] {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(extra)
+	r.finished = make(map[string]performanceReportMetric, len(r.metrics))
+	for _, key := range append(append([]string(nil), r.order...), extra...) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		r.Summary.Metrics = append(r.Summary.Metrics, r.metrics[key].finish(r.Summary.Samples))
+		m := r.metrics[key].finish(r.Summary.Samples, span)
+		r.finished[key] = m
+		r.Summary.Metrics = append(r.Summary.Metrics, m)
 	}
 	for _, row := range r.procs {
 		r.Summary.Processes = append(r.Summary.Processes, row)
@@ -828,6 +930,33 @@ func (r *performanceReport) finish(ctx context.Context) error {
 		}
 		return a.StartID < b.StartID
 	})
+	for _, row := range r.tops {
+		// Samples where a program was too light to be listed count as 0 CPU.
+		if row.cpuCount > 0 && r.topSeen > 0 {
+			row.CPUMean = performanceReportFloat(row.cpuSum / float64(r.topSeen))
+		}
+		if row.gpuCount > 0 && r.topSeen > 0 {
+			row.GPUMean = performanceReportFloat(row.gpuSum / float64(r.topSeen))
+		}
+		row.MemoryMean = row.memorySum / float64(row.Samples)
+		r.Summary.Top = append(r.Summary.Top, row)
+	}
+	score := func(t *performanceReportTop) float64 {
+		if t.CPUMean == nil {
+			return -1
+		}
+		return *t.CPUMean
+	}
+	sort.Slice(r.Summary.Top, func(i, j int) bool {
+		a, b := r.Summary.Top[i], r.Summary.Top[j]
+		if score(a) != score(b) {
+			return score(a) > score(b)
+		}
+		if a.MemoryPeak != b.MemoryPeak {
+			return a.MemoryPeak > b.MemoryPeak
+		}
+		return a.Name < b.Name
+	})
 	for _, reason := range r.reasons {
 		r.Summary.Unavailable = append(r.Summary.Unavailable, *reason)
 	}
@@ -835,21 +964,168 @@ func (r *performanceReport) finish(ctx context.Context) error {
 		a, b := r.Summary.Unavailable[i], r.Summary.Unavailable[j]
 		return a.Scope+"\x00"+a.Metric+"\x00"+a.Reason < b.Scope+"\x00"+b.Metric+"\x00"+b.Reason
 	})
+	r.conclude(span)
 	// Release quantile storage before serializing the report and attachments.
-	r.metrics, r.procs, r.reasons, r.previous = nil, nil, nil, nil
+	r.metrics, r.procs, r.tops, r.reasons, r.previous = nil, nil, nil, nil, nil
 	return nil
+}
+
+func performanceReportDuration(seconds float64) string {
+	total := int64(math.Round(seconds))
+	if total >= 3600 {
+		return fmt.Sprintf("%d 小时 %02d 分 %02d 秒", total/3600, total%3600/60, total%60)
+	}
+	if total >= 60 {
+		return fmt.Sprintf("%d 分 %02d 秒", total/60, total%60)
+	}
+	return fmt.Sprintf("%d 秒", total)
+}
+
+// conclude writes the first screen: the key numbers and a few rule-based,
+// plain-language findings. The rules only point at where to look; they are
+// thresholds on measured averages and peaks, not a diagnosis.
+func (r *performanceReport) conclude(span float64) {
+	metric := func(key string) (performanceReportMetric, bool) {
+		m, ok := r.finished[key]
+		return m, ok && m.Count > 0
+	}
+	head := func(label, value, detail string) {
+		r.Summary.Headline = append(r.Summary.Headline, performanceReportHeadline{label, value, detail})
+	}
+	head("记录时长", performanceReportDuration(span), fmt.Sprintf("%d 次采样", r.Summary.Samples))
+	for _, item := range [][2]string{
+		{"整机 CPU", "system_cpu_percent"}, {"计时器 CPU", "tree_cpu_percent"}, {"模拟器 CPU", "emulator_cpu_percent"},
+		{"整机内存", "system_memory_used_percent"}, {"整机 GPU", "system_gpu_busiest_engine_percent"},
+		{"计时器 GPU", "tree_gpu_busiest_engine_percent"}, {"模拟器 GPU", "emulator_gpu_percent"},
+	} {
+		if m, ok := metric(item[1]); ok {
+			head(item[0], "平均 "+performanceReportHumanValue(m.Mean, "%"), "峰值 "+performanceReportHumanValue(m.Peak, "%"))
+		}
+	}
+	if m, ok := metric("tree_working_set_bytes"); ok {
+		detail := "峰值 " + performanceReportHumanValue(m.Peak, "bytes")
+		if m.Change != nil {
+			detail += fmt.Sprintf(" · 首末变化 %+.0f MB", *m.Change/(1<<20))
+		}
+		head("计时器内存", performanceReportHumanValue(m.Last, "bytes"), detail)
+	}
+	if m, ok := metric("emulator_working_set_bytes"); ok {
+		head("模拟器内存", "平均 "+performanceReportHumanValue(m.Mean, "bytes"), "峰值 "+performanceReportHumanValue(m.Peak, "bytes"))
+	}
+	if m, ok := metric("loop_max_ms"); ok {
+		head("单轮识别最长", performanceReportHumanValue(m.Peak, "ms"), "P95 "+performanceReportHumanValue(m.P95, "ms"))
+	}
+	head("手动卡顿标记", fmt.Sprintf("%d 次", len(r.Summary.UserMarks)), fmt.Sprintf("慢帧 %d · 采集错误 %d", r.Summary.SlowFrames, r.Summary.CaptureErrors))
+
+	say := func(format string, args ...any) {
+		r.Summary.Verdict = append(r.Summary.Verdict, fmt.Sprintf(format, args...))
+	}
+	mean := func(key string) (float64, bool) {
+		if m, ok := metric(key); ok {
+			return *m.Mean, true
+		}
+		return 0, false
+	}
+	heaviest := func(by func(*performanceReportTop) float64) *performanceReportTop {
+		var best *performanceReportTop
+		for _, t := range r.Summary.Top {
+			if t.Role != "self" && (best == nil || by(t) > by(best)) {
+				best = t
+			}
+		}
+		return best
+	}
+	short := span < 30
+	if short {
+		say("记录只有 %s，时间太短，下面的结论仅供参考；建议在卡顿出现时至少记录一两分钟。", performanceReportDuration(span))
+	}
+	findings := len(r.Summary.Verdict)
+	system, hasSystem := mean("system_cpu_percent")
+	timer, hasTimer := mean("tree_cpu_percent")
+	if hasSystem && system >= 75 {
+		text := fmt.Sprintf("整机 CPU 长时间偏高（平均 %.0f%%）", system)
+		if hasTimer {
+			text += fmt.Sprintf("，其中计时器占 %.1f%%", timer)
+		}
+		if top := heaviest(func(t *performanceReportTop) float64 {
+			if t.CPUMean == nil {
+				return -1
+			}
+			return *t.CPUMean
+		}); top != nil && top.CPUMean != nil && (!hasTimer || *top.CPUMean > timer) {
+			text += fmt.Sprintf("；占用最高的是 %s（平均 %.1f%%）", top.Name, *top.CPUMean)
+			if hasTimer && timer < 15 {
+				text += "，瓶颈不在计时器"
+			}
+		}
+		say("%s。", text)
+	}
+	if hasTimer && timer >= 20 {
+		peak, _ := metric("tree_cpu_percent")
+		say("计时器自身 CPU 占用偏高：平均 %.1f%%，峰值 %.1f%%。可查看 ZIP 中的 cpu-*.pprof 定位热点函数。", timer, *peak.Peak)
+	}
+	if m, ok := metric("system_memory_used_percent"); ok && *m.Peak >= 90 {
+		text := fmt.Sprintf("整机内存紧张（峰值 %.0f%%）", *m.Peak)
+		if top := heaviest(func(t *performanceReportTop) float64 { return t.MemoryPeak }); top != nil {
+			text += fmt.Sprintf("；占用内存最多的是 %s（峰值 %s）", top.Name, performanceReportHumanValue(&top.MemoryPeak, "bytes"))
+		}
+		say("%s。内存不足时系统会换页，表现为全局卡顿。", text)
+	}
+	if m, ok := metric("tree_working_set_bytes"); ok && m.Change != nil && span >= 300 && *m.Change >= 100<<20 && *m.Change >= 0.3**m.First {
+		say("计时器内存从 %s 增长到 %s（%+.0f MB）。需要更长时间的记录才能确认是否持续增长。",
+			performanceReportHumanValue(m.First, "bytes"), performanceReportHumanValue(m.Last, "bytes"), *m.Change/(1<<20))
+	}
+	if gpu, ok := mean("system_gpu_busiest_engine_percent"); ok && gpu >= 85 {
+		text := fmt.Sprintf("显卡长时间接近满载（平均 %.0f%%）", gpu)
+		if ours, ok := mean("tree_gpu_busiest_engine_percent"); ok {
+			text += fmt.Sprintf("，计时器占 %.1f%%", ours)
+		}
+		say("%s。", text)
+	}
+	if m, ok := metric("loop_max_ms"); ok && *m.Peak >= 250 {
+		text := fmt.Sprintf("识别循环出现过单轮 %.0f ms 的长耗时", *m.Peak)
+		var parts []string
+		for _, item := range [][2]string{{"capture_max_ms", "截图"}, {"analysis_max_ms", "识别"}, {"post_max_ms", "状态更新与刷新"}} {
+			if stage, ok := metric(item[0]); ok {
+				parts = append(parts, fmt.Sprintf("%s最长 %.0f ms", item[1], *stage.Peak))
+			}
+		}
+		if len(parts) > 0 {
+			text += "（各阶段分别统计：" + strings.Join(parts, "，") + "）"
+		}
+		say("%s。", text)
+	}
+	if m, ok := metric("ui_queue_max_ms"); ok && *m.Peak >= 200 {
+		say("界面线程出现过 %.0f ms 的排队等待，期间浮窗刷新会停顿。", *m.Peak)
+	}
+	if r.Summary.CaptureErrors > 0 {
+		text := fmt.Sprintf("采集/识别共报错 %d 次", r.Summary.CaptureErrors)
+		if r.Summary.LastCaptureError != "" {
+			text += "，最近一次：" + r.Summary.LastCaptureError
+		}
+		say("%s。", text)
+	}
+	if r.Summary.LastError != "" {
+		say("性能记录器自身报告过错误：%s", r.Summary.LastError)
+	}
+	if len(r.Summary.Gaps) > 0 {
+		say("有 %d 段时间没有采到样本（系统休眠，或整机卡到连采样都被推迟）。", len(r.Summary.Gaps))
+	}
+	if len(r.Summary.Verdict) == findings {
+		say("本次记录没有发现明显的资源瓶颈：整机与计时器的 CPU、内存、显卡占用都在正常范围。")
+	}
 }
 
 func (r *performanceReport) csv(ctx context.Context, source io.Reader, dest io.Writer) error {
 	w := csv.NewWriter(dest)
 	header := []string{"at", "elapsed_s", "interval_s", "markers_json", "unavailable_json"}
 	for _, metric := range r.Summary.Metrics {
-		header = append(header, performanceReportCSVText(metric.Key))
+		header = append(header, metric.Key)
 	}
 	if err := w.Write(header); err != nil {
 		return err
 	}
-	err := performanceReportScan(ctx, source, func(s performanceReportSample) error {
+	err := performanceReportScan(ctx, source, nil, func(s performanceReportSample) error {
 		values := r.values(s)
 		markers, _ := json.Marshal(s.Markers)
 		unavailable, _ := json.Marshal(s.Unavailable)
@@ -870,20 +1146,15 @@ func (r *performanceReport) csv(ctx context.Context, source io.Reader, dest io.W
 	return w.Error()
 }
 
-func performanceReportCSVText(s string) string {
-	trimmed := strings.TrimLeft(s, " \t\r\n")
-	if (len(trimmed) > 0 && strings.ContainsRune("=+-@", rune(trimmed[0]))) || strings.HasPrefix(s, "\t") || strings.HasPrefix(s, "\r") {
-		return "'" + s
-	}
-	return s
-}
-
 // A chart bucket retains extrema at their original times, not averaged peaks.
 // Compaction merges adjacent buckets, keeping this invariant at every level.
+// A discontinuity (sampling gap or missing value) is recorded where it
+// happened: before the bucket's first point, or somewhere inside it.
 type performanceReportPoint struct{ T, V float64 }
 type performanceReportBucket struct {
-	first, last, low, high performanceReportPoint
-	valid, broken          bool
+	first, last, low, high   performanceReportPoint
+	valid                    bool
+	breakBefore, breakInside bool
 }
 
 type performanceReportChart struct {
@@ -893,38 +1164,48 @@ type performanceReportChart struct {
 	Unit    string   `json:"unit"`
 	Points  [][2]any `json:"points"`
 	buckets []performanceReportBucket
+	started bool // A valid point exists: later breaks are real discontinuities.
+	pending bool // A gap/missing value since the last valid point.
 }
 
 var performanceReportChartGroups = []struct {
 	Title string
 	Keys  []string
 }{
-	{"CPU · 全逻辑核归一 %", []string{"main_cpu_percent", "tree_cpu_percent", "system_cpu_percent"}},
-	{"内存 · bytes", []string{"main_working_set_bytes", "tree_working_set_bytes", "tree_private_bytes", "go_heap_alloc_bytes"}},
-	{"系统物理内存使用率 · %", []string{"system_memory_used_percent"}},
-	{"GPU · 最忙引擎 %", []string{"tree_gpu_busiest_engine_percent", "system_gpu_busiest_engine_percent"}},
-	{"显存 · bytes", []string{"tree_gpu_dedicated_bytes", "tree_gpu_shared_bytes"}},
-	{"IO · bytes/s", []string{"tree_io_read_bytes_s", "tree_io_write_bytes_s"}},
-	{"磁盘余量 · bytes", []string{"disk_free_bytes"}},
-	{"窗口交付 / 分析 · count/s", []string{"capture_fps", "analysis_fps"}},
-	{"耗时 / UI / 采集统计 · ms", []string{"capture_ms", "analysis_ms", "ui_queue_ms", "collector_ms", "go_gc_pause_ms"}},
-	{"线程 / 句柄 / Go 协程 · count", []string{"tree_threads", "tree_handles", "tree_fds", "go_goroutines"}},
+	{"CPU 占用 (%)", []string{"system_cpu_percent", "tree_cpu_percent", "emulator_cpu_percent"}},
+	{"内存：计时器 / 模拟器", []string{"tree_working_set_bytes", "emulator_working_set_bytes", "go_heap_alloc_bytes"}},
+	{"整机内存使用率 (%)", []string{"system_memory_used_percent"}},
+	{"GPU 占用 (%)", []string{"system_gpu_busiest_engine_percent", "tree_gpu_busiest_engine_percent", "emulator_gpu_percent"}},
+	{"显存", []string{"system_gpu_dedicated_bytes", "tree_gpu_dedicated_bytes", "emulator_gpu_dedicated_bytes"}},
+	{"每秒内最慢的一轮 (ms)", []string{"loop_max_ms", "attempt_max_ms", "capture_max_ms", "analysis_max_ms"}},
+	{"界面线程等待 / GC 暂停 (ms)", []string{"ui_queue_max_ms", "go_gc_pause_ms"}},
+	{"每秒识别次数", []string{"capture_fps", "analysis_fps"}},
+	{"每秒慢帧 / 错误数", []string{"slow_frames_window", "errors_window"}},
+	{"计时器磁盘读写", []string{"tree_io_read_bytes_s", "tree_io_write_bytes_s"}},
+	{"线程 / 协程", []string{"tree_threads", "go_goroutines"}},
+	{"句柄", []string{"tree_handles", "tree_fds"}},
 }
 
 func (c *performanceReportChart) add(index int, t float64, values map[string]float64, gap bool) {
-	if index == len(c.buckets) {
+	for index >= len(c.buckets) {
 		c.buckets = append(c.buckets, performanceReportBucket{})
 	}
 	b := &c.buckets[index]
 	v, ok := values[c.Key]
-	b.broken = b.broken || gap || !ok
+	if (gap || !ok) && c.started {
+		c.pending = true
+	}
 	if !ok {
 		return
 	}
 	p := performanceReportPoint{t, v}
 	if !b.valid {
 		b.first, b.low, b.high, b.valid = p, p, p, true
+		b.breakBefore = c.pending
+	} else if c.pending {
+		b.breakInside = true
 	}
+	c.started, c.pending = true, false
 	b.last = p
 	if v < b.low.V {
 		b.low = p
@@ -939,12 +1220,10 @@ func (c *performanceReportChart) compact() {
 		a := c.buckets[i]
 		if i+1 < len(c.buckets) {
 			b := c.buckets[i+1]
-			a.broken = a.broken || b.broken
 			if !a.valid {
-				broken := a.broken
 				a = b
-				a.broken = broken
 			} else if b.valid {
+				a.breakInside = a.breakInside || b.breakInside || b.breakBefore
 				a.last = b.last
 				if b.low.V < a.low.V {
 					a.low = b.low
@@ -959,11 +1238,16 @@ func (c *performanceReportChart) compact() {
 	c.buckets = c.buckets[:(len(c.buckets)+1)/2]
 }
 
+// finish emits up to four points per bucket in time order. [null,null] lifts
+// the pen: once before a bucket that follows a discontinuity, and between the
+// points of a bucket that contains one (its exact position was compacted away).
 func (c *performanceReportChart) finish() {
 	for _, b := range c.buckets {
 		if !b.valid {
-			c.Points = append(c.Points, [2]any{nil, nil})
 			continue
+		}
+		if b.breakBefore {
+			c.Points = append(c.Points, [2]any{nil, nil})
 		}
 		points := []performanceReportPoint{b.first, b.low, b.high, b.last}
 		sort.Slice(points, func(i, j int) bool { return points[i].T < points[j].T })
@@ -973,81 +1257,80 @@ func (c *performanceReportChart) finish() {
 			if previous != nil && p.T == previous.T {
 				continue
 			}
-			if b.broken {
+			if b.breakInside && previous != nil {
 				c.Points = append(c.Points, [2]any{nil, nil})
 			}
 			c.Points = append(c.Points, [2]any{p.T, p.V})
 			previous = p
 		}
-		if b.broken {
-			c.Points = append(c.Points, [2]any{nil, nil})
-		}
 	}
 	c.buckets = nil
 }
 
-type performanceReportProcessView struct {
-	*performanceReportProcess
-	CPU, Cores, WorkingSet, Private, PrivateResident, GPU, VRAM, GPUShared, IORead, IOWrite, Threads, Handles, FDs *float64
+type performanceReportView struct {
+	Metadata  PerformanceMetadata
+	Summary   performanceReportSummary
+	Key       []performanceReportMetric // Metrics with data, curated order.
+	Top       []*performanceReportTop
+	ChartJSON template.JS
+	Duration  string
+	Stop      string
 }
 
-type performanceReportView struct {
-	Metadata            PerformanceMetadata
-	Summary             performanceReportSummary
-	Processes           []performanceReportProcessView
-	Events              []performanceReportEvent
-	ChartJSON           template.JS
-	ObservedSeconds     *float64
-	ShortSessionWarning string
+// performanceReportStop turns the recorder's stop reason into words.
+func performanceReportStop(s performanceReportSummary) string {
+	switch s.StopReason {
+	case "":
+		if s.Active {
+			return "仍在记录（本报告是中途生成的）"
+		}
+		return ""
+	case "user_stopped":
+		return "手动停止 / 程序退出"
+	case "sample_limit":
+		return "达到 6 小时记录上限"
+	case "byte_limit":
+		return "达到数据大小上限"
+	case "collector_failed":
+		return "采样器异常"
+	case "write_failed":
+		return "写入磁盘失败"
+	case "finalize_failed":
+		return "收尾时出错（已有数据仍有效）"
+	case "not_finalized":
+		return "未正常结束（程序被关闭或崩溃），按已写入的数据生成"
+	}
+	return s.StopReason
 }
 
 func (r *performanceReport) view() (performanceReportView, error) {
-	v := performanceReportView{Metadata: r.Metadata, Summary: r.Summary,
-		ObservedSeconds: r.Summary.observedSeconds(), ShortSessionWarning: r.Summary.shortSessionWarning()}
-	for _, p := range r.Summary.Processes {
-		peak := func(key string) *float64 {
-			if m, ok := p.Metrics[key]; ok {
-				return performanceReportFloat(m.Peak)
-			}
-			return nil
-		}
-		cores := peak("cpu_cores")
-		if cores == nil && peak("cpu_percent") != nil && r.Metadata.System.LogicalCPUs > 0 {
-			cores = performanceReportFloat(*peak("cpu_percent") * (float64(r.Metadata.System.LogicalCPUs) / 100))
-		}
-		v.Processes = append(v.Processes, performanceReportProcessView{performanceReportProcess: p,
-			CPU: peak("cpu_percent"), Cores: cores, WorkingSet: peak("working_set_bytes"), Private: peak("private_bytes"), PrivateResident: peak("private_resident_bytes"),
-			GPU: peak("gpu_busiest_engine_percent"), VRAM: peak("gpu_dedicated_bytes"), GPUShared: peak("gpu_shared_bytes"), IORead: peak("io_read_bytes_s"), IOWrite: peak("io_write_bytes_s"), Threads: peak("threads"), Handles: peak("handles"), FDs: peak("fds")})
+	v := performanceReportView{Metadata: r.Metadata, Summary: r.Summary, Stop: performanceReportStop(r.Summary)}
+	if seconds := r.Summary.observedSeconds(); seconds != nil {
+		v.Duration = performanceReportDuration(*seconds)
 	}
-	v.Events = r.Summary.Events[:min(200, len(r.Summary.Events))]
+	for _, m := range r.Summary.Metrics {
+		if m.Count > 0 {
+			v.Key = append(v.Key, m)
+		}
+	}
+	v.Top = r.Summary.Top[:min(25, len(r.Summary.Top))]
+	charts := make([]performanceReportChart, 0, len(r.charts))
 	for i := range r.charts {
-		for _, metric := range r.Summary.Metrics {
-			if metric.Key == r.charts[i].Key {
-				r.charts[i].Label, r.charts[i].Unit = metric.Label, metric.Unit
-				break
-			}
+		if m, ok := r.finished[r.charts[i].Key]; ok {
+			r.charts[i].Label, r.charts[i].Unit = m.Label, m.Unit
 		}
 		r.charts[i].finish()
-	}
-	stalls := make([]float64, 0)
-	for _, event := range r.Summary.Events {
-		for _, marker := range event.Markers {
-			lower := strings.ToLower(marker)
-			if strings.Contains(lower, "counter reset") {
-				continue
-			}
-			if strings.Contains(lower, "slow") || strings.Contains(lower, "stall") || strings.Contains(lower, "jank") || strings.Contains(lower, "卡顿") {
-				stalls = append(stalls, event.ElapsedS)
-				break
-			}
+		if len(r.charts[i].Points) > 0 { // Never draw a series that has no data.
+			charts = append(charts, r.charts[i])
 		}
 	}
 	data, err := json.Marshal(struct {
-		Charts []performanceReportChart `json:"charts"`
-		Stalls []float64                `json:"stalls"`
-		Gaps   []performanceReportGap   `json:"gaps"`
-		EndS   *float64                 `json:"end_s"`
-	}{r.charts, stalls, r.Summary.Gaps, r.Summary.LastElapsedS}) // Default HTML escaping is mandatory here.
+		Charts    []performanceReportChart `json:"charts"`
+		Marks     []performanceReportMark  `json:"marks"`
+		Gaps      []performanceReportGap   `json:"gaps"`
+		EndS      *float64                 `json:"end_s"`
+		StartedMS int64                    `json:"started_ms"`
+	}{charts, r.Summary.UserMarks, r.Summary.Gaps, r.Summary.LastElapsedS, r.Summary.StartedAt.UnixMilli()}) // Default HTML escaping is mandatory here.
 	if err != nil {
 		return v, err
 	}
@@ -1055,33 +1338,56 @@ func (r *performanceReport) view() (performanceReportView, error) {
 	return v, nil
 }
 
+// performanceReportNumber prints a plain decimal: never exponent notation,
+// at most two decimals, and "—" when the value was not measured.
 func performanceReportNumber(p *float64) string {
 	if p == nil {
-		return "不可用"
+		return "—"
 	}
-	return strconv.FormatFloat(*p, 'g', 7, 64)
+	v := *p
+	if v == math.Trunc(v) && math.Abs(v) < 1e15 {
+		return strconv.FormatFloat(v, 'f', 0, 64)
+	}
+	return strconv.FormatFloat(v, 'f', 2, 64)
 }
 
 // Display-only conversions never modify the raw metrics, CSV or quantiles.
 func performanceReportHumanValue(p *float64, unit string) string {
-	if p == nil || (unit != "bytes" && unit != "bytes/s") {
-		return performanceReportNumber(p)
+	if p == nil {
+		return "—"
 	}
-	value, i := *p, 0
-	units := [...]string{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
-	for math.Abs(value) >= 1024 && i < len(units)-1 {
-		value /= 1024
-		i++
+	value := *p
+	switch unit {
+	case "%":
+		return strconv.FormatFloat(value, 'f', 1, 64) + "%"
+	case "ms":
+		return strconv.FormatFloat(value, 'f', 1, 64) + " ms"
+	case "cores":
+		return strconv.FormatFloat(value, 'f', 2, 64) + " 核"
+	case "seconds":
+		return strconv.FormatFloat(value, 'f', 1, 64) + " 秒"
+	case "count/s":
+		return strconv.FormatFloat(value, 'f', 1, 64) + " /秒"
+	case "bytes", "bytes/s":
+		i := 0
+		units := [...]string{"B", "KB", "MB", "GB", "TB"}
+		for math.Abs(value) >= 1024 && i < len(units)-1 {
+			value /= 1024
+			i++
+		}
+		digits := 1
+		if i == 0 {
+			digits = 0
+		} else if i >= 3 {
+			digits = 2
+		}
+		text := strconv.FormatFloat(value, 'f', digits, 64) + " " + units[i]
+		if unit == "bytes/s" {
+			text += "/秒"
+		}
+		return text
 	}
-	number := performanceReportNumber(&value)
-	if i > 0 {
-		number = strconv.FormatFloat(value, 'f', 2, 64)
-	}
-	suffix := units[i]
-	if unit == "bytes/s" {
-		suffix += "/s"
-	}
-	return number + " " + suffix
+	return performanceReportNumber(p)
 }
 
 func performanceReportSize(value any) string {
@@ -1091,12 +1397,29 @@ func performanceReportSize(value any) string {
 		number = float64(v)
 	case int64:
 		number = float64(v)
+	case float64:
+		number = v
+	case *float64:
+		return performanceReportHumanValue(v, "bytes")
 	default:
-		return "不可用"
+		return "—"
 	}
 	return performanceReportHumanValue(&number, "bytes")
 }
 
+func performanceReportPercent(p *float64) string { return performanceReportHumanValue(p, "%") }
+
+// performanceReportClock formats elapsed seconds as m:ss or h:mm:ss.
+func performanceReportClock(seconds float64) string {
+	total := int64(seconds)
+	if total >= 3600 {
+		return fmt.Sprintf("%d:%02d:%02d", total/3600, total%3600/60, total%60)
+	}
+	return fmt.Sprintf("%d:%02d", total/60, total%60)
+}
+
+// One local-time format everywhere, so times in the report can be compared
+// with the user's own clock ("it lagged at 20:13").
 func performanceReportTime(value any) string {
 	var at time.Time
 	switch v := value.(type) {
@@ -1108,9 +1431,9 @@ func performanceReportTime(value any) string {
 		}
 	}
 	if at.IsZero() {
-		return "不可用"
+		return "—"
 	}
-	return at.Format("2006-01-02 15:04:05.000 UTC-07:00")
+	return at.Local().Format("2006-01-02 15:04:05")
 }
 
 func (s performanceReportSummary) observedSeconds() *float64 {
@@ -1120,88 +1443,89 @@ func (s performanceReportSummary) observedSeconds() *float64 {
 	return performanceReportFloat(*s.LastElapsedS - *s.FirstElapsedS)
 }
 
-func (s performanceReportSummary) shortSessionWarning() string {
-	if seconds := s.observedSeconds(); seconds != nil && *seconds < 60 {
-		return "短时会话：观测不足 60 秒，趋势可能受预热/GC 周期影响；不能用短期增长判定泄漏。趋势仍按至少 2 个有效样本计算。"
-	}
-	return ""
-}
-
-// Match the recorder's build-identity allowlist, not the complete Go build
-// settings (which may contain -ldflags, environment or local module paths).
-func performanceReportBuild(build map[string]string) map[string]string {
-	out := make(map[string]string)
-	for _, key := range []string{"vcs.revision", "vcs.time", "vcs.modified", "GOOS", "GOARCH", "GOAMD64", "GOARM", "GOARM64", "CGO_ENABLED", "-compiler", "-buildmode"} {
-		if value, ok := build[key]; ok {
-			out[key] = value
-		}
-	}
-	return out
-}
-
+// Table cells only need the column separator and line breaks neutralised;
+// keys such as user_stopped stay greppable plain text.
 func performanceReportMarkdownText(s string) string {
-	s = html.EscapeString(s)
-	return strings.NewReplacer("|", "&#124;", "\r", " ", "\n", " ", "`", "&#96;", "[", "&#91;", "]", "&#93;", "*", "&#42;", "_", "&#95;").Replace(s)
+	return strings.NewReplacer("|", "/", "\r", " ", "\n", " ").Replace(s)
 }
 
+// markdown is the short text version: conclusion, who used the machine, the
+// user's marks and the key metrics. Everything else is in summary.json.
 func (r *performanceReport) markdown() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# 独立性能报告\n\n版本：%s；样本：%d；快照：%d bytes；active：%t；样本不足：%t。\n\n", performanceReportMarkdownText(r.Metadata.Version), r.Summary.Samples, r.Summary.TimelineBytes, r.Summary.Active, r.Summary.Insufficient)
-	ended := performanceReportTime(r.Summary.EndedAt)
-	if r.Summary.Active && r.Summary.EndedAt == nil {
-		ended = "尚未结束（本次快照）"
+	s := r.Summary
+	fmt.Fprintf(&b, "# 性能报告\n\n版本 %s · 开始于 %s", r.Metadata.Version, performanceReportTime(s.StartedAt))
+	if seconds := s.observedSeconds(); seconds != nil {
+		fmt.Fprintf(&b, " · 记录 %s", performanceReportDuration(*seconds))
 	}
-	fmt.Fprintf(&b, "会话开始：%s；首次观测：%s；最后观测：%s；会话结束：%s。\n\n观测时长（末次减首次 elapsed_s）：%s 秒；生成时间：%s。\n\n", performanceReportTime(r.Summary.StartedAt), performanceReportTime(r.Summary.FirstAt), performanceReportTime(r.Summary.LastAt), ended, performanceReportNumber(r.Summary.observedSeconds()), performanceReportTime(r.Summary.GeneratedAt))
-	if warning := r.Summary.shortSessionWarning(); warning != "" {
-		fmt.Fprintf(&b, "> %s\n\n", warning)
+	if stop := performanceReportStop(s); stop != "" {
+		fmt.Fprintf(&b, " · %s", stop)
 	}
-	fmt.Fprintf(&b, "逻辑核：%d；系统：%s；CPU：%s。\n\nProfilesRequested：%t（是否请求采集；不等于文件已完成）。\n\n", r.Metadata.System.LogicalCPUs, performanceReportMarkdownText(r.Metadata.System.OS), performanceReportMarkdownText(r.Metadata.System.CPUName), r.Metadata.ProfilesRequested)
-	buildKeys := make([]string, 0, len(r.Metadata.Build))
-	for key := range r.Metadata.Build {
-		buildKeys = append(buildKeys, key)
+	b.WriteString("\n\n## 结论\n\n")
+	for _, line := range s.Verdict {
+		fmt.Fprintf(&b, "- %s\n", line)
 	}
-	sort.Strings(buildKeys)
-	b.WriteString("构建标识（白名单）：\n\n")
-	if len(buildKeys) == 0 {
-		b.WriteString("- 未提供。\n")
+	b.WriteString("\n## 关键数字\n\n")
+	for _, h := range s.Headline {
+		fmt.Fprintf(&b, "- %s：%s", h.Label, h.Value)
+		if h.Detail != "" {
+			fmt.Fprintf(&b, "（%s）", h.Detail)
+		}
+		b.WriteByte('\n')
 	}
-	for _, key := range buildKeys {
-		fmt.Fprintf(&b, "- %s：%s\n", performanceReportMarkdownText(key), performanceReportMarkdownText(r.Metadata.Build[key]))
+	b.WriteString("\n## 谁在占用资源\n\n")
+	if len(s.Top) == 0 {
+		b.WriteString("本次没有全系统进程数据。\n")
+	} else {
+		b.WriteString("| 程序 | 平均 CPU | 峰值 CPU | 平均内存 | 峰值内存 | 平均 GPU | 峰值 GPU | 峰值显存 |\n|---|---:|---:|---:|---:|---:|---:|---:|\n")
+		for _, t := range s.Top[:min(15, len(s.Top))] {
+			name := t.Name
+			if t.Role == "emulator" {
+				name += "（模拟器）"
+			}
+			if t.Instances > 1 {
+				name += fmt.Sprintf(" ×%d", t.Instances)
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s | %s |\n", performanceReportMarkdownText(name),
+				performanceReportPercent(t.CPUMean), performanceReportPercent(t.CPUPeak), performanceReportSize(t.MemoryMean), performanceReportSize(t.MemoryPeak),
+				performanceReportPercent(t.GPUMean), performanceReportPercent(t.GPUPeak), performanceReportSize(t.VRAMPeak))
+		}
 	}
-	b.WriteByte('\n')
-	fmt.Fprintf(&b, "停止原因：%s；记录器错误标志：%t（不导出可能含用户路径的错误原文）。\n\n", performanceReportMarkdownText(r.Summary.StopReason), r.Summary.RecorderError)
-	b.WriteString("## 指标汇总\n\nbytes / bytes/s 仅在显示时按 1024 换算；JSON/CSV 保留原始数值和单位。第二列为原始单位，分钟趋势为显示单位/分钟。增长只作线索，不能判定泄漏。\n\n| 指标 | 原始单位 | 有效/缺失 | 首 | 末 | 峰值 | 均值 | P50 | P95 | P99 | 首末差 | 趋势/分钟 |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
-	for _, m := range r.Summary.Metrics {
-		fmt.Fprintf(&b, "| %s | %s | %d/%d | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", performanceReportMarkdownText(m.Label), performanceReportMarkdownText(m.Unit), m.Count, m.Missing, performanceReportHumanValue(m.First, m.Unit), performanceReportHumanValue(m.Last, m.Unit), performanceReportHumanValue(m.Peak, m.Unit), performanceReportHumanValue(m.Mean, m.Unit), performanceReportHumanValue(m.P50, m.Unit), performanceReportHumanValue(m.P95, m.Unit), performanceReportHumanValue(m.P99, m.Unit), performanceReportHumanValue(m.Change, m.Unit), performanceReportHumanValue(m.TrendPerMinute, m.Unit))
+	b.WriteString("\n## 手动卡顿标记\n\n")
+	if len(s.UserMarks) == 0 {
+		b.WriteString("没有标记。\n")
 	}
-	b.WriteString("\n## 进程（按 PID + StartID 区分重启）\n\n| PID | PPID | 名称 | 首/末秒 | 样本 |\n|---:|---:|---|---|---:|\n")
-	for _, p := range r.Summary.Processes {
-		fmt.Fprintf(&b, "| %d | %d | %s | %.3f / %.3f | %d |\n", p.PID, p.Parent, performanceReportMarkdownText(p.Name), p.FirstS, p.LastS, p.Samples)
+	for _, m := range s.UserMarks {
+		fmt.Fprintf(&b, "- %s（记录第 %s）%s\n", performanceReportTime(m.At), performanceReportClock(m.ElapsedS), m.Label)
 	}
-	b.WriteString("\n## 缺失区间 / baseline / counter reset / 卡顿\n\n")
-	for _, gap := range r.Summary.Gaps {
-		fmt.Fprintf(&b, "- %.3f → %.3f 秒：估计缺失 %d 个采样位置。\n", gap.FromS, gap.ToS, gap.EstimatedMissing)
+	b.WriteString("\n## 环境\n\n")
+	sys := r.Metadata.System
+	fmt.Fprintf(&b, "- 系统：%s %s（%s）\n- CPU：%s · %d 逻辑核\n- 内存：%s\n", sys.OS, sys.OSVersion, sys.NativeArch, sys.CPUName, sys.LogicalCPUs, performanceReportSize(sys.TotalRAMBytes))
+	for _, gpu := range sys.GPUs {
+		fmt.Fprintf(&b, "- 显卡：%s · 驱动 %s", gpu.Name, gpu.Driver)
+		if gpu.DedicatedBytes > 0 {
+			fmt.Fprintf(&b, " · 显存 %s", performanceReportSize(gpu.DedicatedBytes))
+		}
+		b.WriteByte('\n')
 	}
-	for _, e := range r.Summary.Events[:min(200, len(r.Summary.Events))] {
-		fmt.Fprintf(&b, "- %.3f 秒：%s\n", e.ElapsedS, performanceReportMarkdownText(strings.Join(e.Markers, "；")))
+	if s.Backend != "" || s.Resolution != "" {
+		fmt.Fprintf(&b, "- 采集：%s %s\n", s.Backend, s.Resolution)
 	}
-	fmt.Fprintf(&b, "\n事件展示前 200 项；共 %d 项，完整见 summary.json / samples.jsonl。\n\n### 待落盘标记（已接受，尚未进入本次前缀）\n\n", len(r.Summary.Events))
-	if len(r.Summary.PendingMarkers) == 0 {
-		b.WriteString("无待落盘标记。\n")
+	if s.LastError != "" {
+		fmt.Fprintf(&b, "- 记录器错误：%s\n", s.LastError)
 	}
-	for _, marker := range r.Summary.PendingMarkers {
-		fmt.Fprintf(&b, "- %s\n", performanceReportMarkdownText(marker))
+	b.WriteString("\n## 主要指标\n\n| 指标 | 平均 | 峰值 | P95 | 首 | 末 |\n|---|---:|---:|---:|---:|---:|\n")
+	for _, m := range s.Metrics {
+		if m.Count == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "| %s (`%s`) | %s | %s | %s | %s | %s |\n", performanceReportMarkdownText(m.Label), m.Key, performanceReportHumanValue(m.Mean, m.Unit),
+			performanceReportHumanValue(m.Peak, m.Unit), performanceReportHumanValue(m.P95, m.Unit), performanceReportHumanValue(m.First, m.Unit), performanceReportHumanValue(m.Last, m.Unit))
 	}
-	b.WriteString("\n以上 pending_markers 不参与原始样本/统计/曲线。\n\n## 可用性与 profiles\n\n")
-	for _, u := range r.Summary.Unavailable {
-		fmt.Fprintf(&b, "- %s / %s：%s（%d 次，%.3f–%.3f 秒）\n", performanceReportMarkdownText(u.Scope), performanceReportMarkdownText(u.Metric), performanceReportMarkdownText(u.Reason), u.Count, u.FirstS, u.LastS)
+	b.WriteString("\n## 说明\n\n")
+	for _, note := range s.Notes {
+		fmt.Fprintf(&b, "- %s\n", note)
 	}
-	for _, p := range r.Summary.Profiles {
-		fmt.Fprintf(&b, "- %s：%s；status=%s；%d bytes。\n", p.Name, p.Result, performanceReportMarkdownText(p.Status), p.Bytes)
-	}
-	fmt.Fprintf(&b, "\n汇总省略进程观测 %d 次、可用性原因 %d 次；原始样本完整保留。\n\n## 口径与限制\n\n", r.Summary.OmittedProcessObservations, r.Summary.OmittedReasons)
-	for _, note := range r.Summary.Notes {
-		fmt.Fprintf(&b, "- %s\n", performanceReportMarkdownText(note))
-	}
+	b.WriteString("\n完整数据见 summary.json、samples.csv、samples.jsonl；图表见 report.html。\n")
 	return b.String()
 }

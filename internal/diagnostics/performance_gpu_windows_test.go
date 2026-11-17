@@ -76,10 +76,10 @@ func TestPerformancePDHUnavailableReasons(t *testing.T) {
 		code     uint32
 		fragment string
 	}{
-		{performancePDHNoData, "no instances/data"},
+		{performancePDHNoData, "没有实例"},
 		{0xc0000bb8, "WDDM"}, {0xc0000bb9, "WDDM"},
-		{0xc0000bdb, "access denied"}, {5, "access denied"},
-		{0xc0000bba, "warm-up"}, {0x800007d7, "warm-up"},
+		{0xc0000bdb, "权限"}, {5, "权限"},
+		{0xc0000bba, "预热"}, {0x800007d7, "预热"},
 	} {
 		if reason := performancePDHStatus("test", tc.code); !strings.Contains(reason, tc.fragment) {
 			t.Errorf("status %#x = %q, missing %q", tc.code, reason, tc.fragment)
@@ -90,5 +90,32 @@ func TestPerformancePDHUnavailableReasons(t *testing.T) {
 	}
 	if reason := performanceWindowsPDHReadArray(1, func() bool { return true }, func(string, float64, uint32) { t.Fatal("visited canceled counter") }); !strings.Contains(reason, "canceled") {
 		t.Fatal("canceled request must not enter another native PDH call")
+	}
+}
+
+// Runs on real Windows only: the PDH GPU query must initialise, warm up and
+// then produce a sample without blocking; a machine without a WDDM driver
+// reports explicit reasons instead.
+func TestPerformanceWindowsGPUCollect(t *testing.T) {
+	g := &performanceWindowsGPU{canceled: func() bool { return false }}
+	g.initialize()
+	defer g.close()
+	first := g.collect()
+	if first == nil || first.engineReason == "" {
+		t.Fatalf("first collection must report engine warm-up: %+v", first)
+	}
+	second := g.collect()
+	if second == nil {
+		t.Fatal("second collection returned nothing")
+	}
+	t.Logf("engine=%q memory=%q adapter=%q rows=%d skipped=%d", second.engineReason, second.memoryReason, second.adapterReason, len(second.engines), second.skipped)
+	if second.engineReason == "" {
+		if _, busiest := second.busiest(nil); busiest < 0 || busiest > 100 {
+			t.Fatalf("busiest engine = %v", busiest)
+		}
+	}
+	g.canceled = func() bool { return true }
+	if g.collect() != nil {
+		t.Fatal("a canceled collection must not publish a sample")
 	}
 }

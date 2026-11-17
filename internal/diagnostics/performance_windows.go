@@ -5,7 +5,6 @@ package diagnostics
 import (
 	"errors"
 	"fmt"
-	"os"
 	"runtime"
 	"sort"
 	"strconv"
@@ -80,7 +79,7 @@ type performanceWindowsSystemInfo struct {
 type performanceWindowsProcess struct {
 	handle                        windows.Handle // Pinned until removal/Close, never looked up again by PID.
 	pid, parent                   int
-	name                          string // Basename from Toolhelp, decoded only after tree membership checks.
+	name                          string
 	created, exited, kernel, user uint64
 	timesUnavailable              string
 	counterAt                     time.Time
@@ -90,20 +89,19 @@ type performanceWindowsCollector struct {
 	mu              sync.Mutex
 	rootPID         int
 	rootUnavailable string
-	volume          *uint16 // Verified local volume GUID root, never a report/executable path.
-	diskBindStarted bool
-	diskUnavailable string
+	directory       *uint16  // Report directory, for free disk space.
+	buffer          []uint64 // Reused NtQuerySystemInformation buffer (8-byte aligned).
 	system          PerformanceSystem
 	processes       map[int]*performanceWindowsProcess
 	gpu             *performanceGPUWorker
 	closed          bool
 }
 
-func newPerformanceCollector(rootPID int, _ string) (performanceCollector, error) {
-	// The original report-directory string is intentionally never resolved or
-	// queried. Core binds the already-open samples.jsonl handle instead.
-	c := &performanceWindowsCollector{rootPID: rootPID, processes: make(map[int]*performanceWindowsProcess),
-		diskUnavailable: "waiting for BindReportFile to confirm a local report volume"}
+func newPerformanceCollector(rootPID int, directory string) (performanceCollector, error) {
+	c := &performanceWindowsCollector{rootPID: rootPID, processes: make(map[int]*performanceWindowsProcess)}
+	if directory != "" {
+		c.directory, _ = windows.UTF16PtrFromString(directory)
+	}
 	if rootPID <= 0 || uint64(rootPID) > uint64(^uint32(0)) {
 		c.rootUnavailable = "invalid root PID"
 	} else if p, reason := performanceWindowsOpenProcess(rootPID); p == nil {
@@ -117,94 +115,6 @@ func newPerformanceCollector(rootPID int, _ string) (performanceCollector, error
 	// Individual failures belong in Unavailable; CPU/memory collection must
 	// remain usable even without a GPU driver, registry access or a root handle.
 	return c, nil
-}
-
-// BindReportFile is an optional core hook, called once after samples.jsonl has
-// been opened. It neither owns nor closes the file. SyscallConn.Control pins the
-// descriptor during lookup, so a concurrent File.Close cannot recycle it.
-func (c *performanceWindowsCollector) BindReportFile(file *os.File) {
-	c.mu.Lock()
-	if c.closed || c.diskBindStarted {
-		c.mu.Unlock()
-		return
-	}
-	c.diskBindStarted = true
-	c.mu.Unlock()
-	var volume *uint16
-	reason := "report file handle unavailable; local report volume not confirmed"
-	if file != nil {
-		if raw, err := file.SyscallConn(); err == nil {
-			if err := raw.Control(func(fd uintptr) {
-				volume, reason = performanceWindowsFileVolume(windows.Handle(fd))
-			}); err != nil {
-				volume, reason = nil, "report file handle closed or unavailable during volume binding"
-			}
-		}
-	}
-	c.mu.Lock()
-	if !c.closed {
-		c.volume, c.diskUnavailable = volume, reason
-	}
-	c.mu.Unlock()
-}
-
-func performanceWindowsFileVolume(file windows.Handle) (*uint16, string) {
-	if kind, err := windows.GetFileType(file); err != nil || kind != windows.FILE_TYPE_DISK {
-		return nil, "report handle is not a readable disk-file handle"
-	}
-	// FILE_NAME_OPENED avoids normalized-name traversal (including SMB parent
-	// lookups); VOLUME_NAME_GUID refuses DOS/UNC aliases. No directory components
-	// are queried, including after binding, so replacing a parent by a junction
-	// cannot redirect later disk samples onto the network.
-	const flags = 0x8 | 0x1 // FILE_NAME_OPENED | VOLUME_NAME_GUID
-	buffer := make([]uint16, 512)
-	for attempt := 0; attempt < 3; attempt++ {
-		n, err := windows.GetFinalPathNameByHandle(file, &buffer[0], uint32(len(buffer)), flags)
-		if err != nil {
-			return nil, performanceWindowsError("GetFinalPathNameByHandle(volume GUID)", err)
-		}
-		if n >= uint32(len(buffer)) {
-			if n >= 32768 {
-				return nil, "report file volume lookup exceeded bounded native buffer"
-			}
-			buffer = make([]uint16, n+1)
-			continue
-		}
-		if n < 49 || buffer[n] != 0 {
-			return nil, "report handle did not resolve to a local volume GUID"
-		}
-		// Decode only the GUID root. Never retain/decode the private filename
-		// suffix, and never include this internal volume identifier in a report.
-		root, ok := performanceWindowsVolumeGUIDRoot(windows.UTF16ToString(buffer[:49]))
-		if !ok {
-			return nil, "report handle did not resolve to a local volume GUID"
-		}
-		volume, _ := windows.UTF16PtrFromString(root)
-		switch windows.GetDriveType(volume) {
-		case windows.DRIVE_FIXED, windows.DRIVE_REMOVABLE, windows.DRIVE_RAMDISK:
-			return volume, ""
-		default:
-			return nil, "report handle volume is not confirmed as a local disk volume"
-		}
-	}
-	return nil, "report file volume lookup changed repeatedly; disk query unavailable"
-}
-
-func performanceWindowsVolumeGUIDRoot(name string) (string, bool) {
-	const prefix = `\\?\Volume{`
-	if len(name) < 49 || !strings.EqualFold(name[:len(prefix)], prefix) || name[47:49] != `}\` {
-		return "", false
-	}
-	for i, ch := range name[11:47] {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if ch != '-' {
-				return "", false
-			}
-		} else if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f' || ch >= 'A' && ch <= 'F') {
-			return "", false
-		}
-	}
-	return name[:49], true
 }
 
 func (c *performanceWindowsCollector) System() PerformanceSystem {
@@ -221,11 +131,8 @@ func (c *performanceWindowsCollector) System() PerformanceSystem {
 	for key, value := range info.Unavailable {
 		s.Unavailable[key] = value
 	}
-	if reason != "" {
-		s.Unavailable["gpu_sampling"] = reason
-		if len(s.GPUs) == 0 {
-			s.Unavailable["gpus"] = reason
-		}
+	if reason != "" && len(s.GPUs) == 0 {
+		s.Unavailable["gpus"] = reason
 	}
 	return s
 }
@@ -349,15 +256,8 @@ func (c *performanceWindowsCollector) Collect() performancePlatformSample {
 	}
 	c.collectSystem(&s)
 	c.collectProcesses(&s)
-	gpu, reason := c.gpu.sample(s.Processes)
-	if reason != "" {
-		for _, key := range []string{"gpu_busiest_engine_percent", "gpu_dedicated_bytes", "gpu_shared_bytes"} {
-			performanceWindowsGPUUnavailable(&s, key, reason)
-		}
-		performanceWindowsUnavailable(s.Unavailable, reason, "system_gpu_busiest_engine_percent", "tree_gpu_busiest_engine_percent", "gpu_engines")
-	} else {
-		performanceGPUApplySample(&s, gpu)
-	}
+	gpu, reason := c.gpu.sample()
+	performanceGPUApply(&s, gpu, reason)
 	// Keep the root handle even after exit so that the recorder cannot adopt a
 	// reused root PID. Already observed, still-running orphans remain tracked.
 	for pid, p := range c.processes {
@@ -407,15 +307,11 @@ func (c *performanceWindowsCollector) collectSystem(s *performancePlatformSample
 	}
 	// GlobalMemoryStatusEx's *PageFile fields describe commit, NOT swap size.
 	// Do not mislabel them as system_swap_*.
-	if c.diskUnavailable != "" || c.volume == nil {
-		reason := c.diskUnavailable
-		if reason == "" {
-			reason = "report file has not been bound to a local volume"
-		}
-		performanceWindowsUnavailable(s.Unavailable, reason, "disk_total_bytes", "disk_free_bytes")
+	if c.directory == nil {
+		performanceWindowsUnavailable(s.Unavailable, "报告目录未知", "disk_total_bytes", "disk_free_bytes")
 	} else {
 		var available, total, free uint64
-		if err := windows.GetDiskFreeSpaceEx(c.volume, &available, &total, &free); err != nil {
+		if err := windows.GetDiskFreeSpaceEx(c.directory, &available, &total, &free); err != nil {
 			performanceWindowsUnavailable(s.Unavailable, performanceWindowsError("GetDiskFreeSpaceEx", err), "disk_total_bytes", "disk_free_bytes")
 		} else {
 			s.Values["disk_total_bytes"] = float64(total)
@@ -463,73 +359,86 @@ func (p *performanceWindowsProcess) refreshTimes() {
 	p.kernel, p.user = performanceWindowsTicks(kernel), performanceWindowsTicks(user)
 }
 
-type performanceWindowsSnapshotEntry struct {
-	pid, parent int
-	threads     uint32
-}
-
-// The Toolhelp API supplies names as part of its fixed structure. Unrelated
-// ExeFile fields are never decoded/copied into Go strings or retained. The
-// discovery index stores only numeric ancestry/thread data, with a hard bound.
-func performanceWindowsWalkSnapshot(h windows.Handle, visit func(*windows.ProcessEntry32) bool) string {
-	var entry windows.ProcessEntry32
-	entry.Size = uint32(unsafe.Sizeof(entry))
-	err := windows.Process32First(h, &entry)
-	for err == nil {
-		if !visit(&entry) {
-			return "process snapshot exceeded 32768-entry safety bound"
+// systemProcesses lists every process on the machine with one
+// NtQuerySystemInformation(SystemProcessInformation) call: image name, parent,
+// CPU time, working set, private bytes and thread count. It opens no process
+// handles, so it also covers elevated and protected processes (emulator VMs).
+func (c *performanceWindowsCollector) systemProcesses() ([]performanceSystemProcess, string) {
+	if len(c.buffer) == 0 {
+		c.buffer = make([]uint64, (512<<10)/8)
+	}
+	for attempt := 0; ; attempt++ {
+		var needed uint32
+		size := uint32(len(c.buffer) * 8)
+		err := windows.NtQuerySystemInformation(windows.SystemProcessInformation, unsafe.Pointer(&c.buffer[0]), size, &needed)
+		if err == nil {
+			break
 		}
-		err = windows.Process32Next(h, &entry)
+		if (err != windows.STATUS_INFO_LENGTH_MISMATCH && err != windows.STATUS_BUFFER_TOO_SMALL) || attempt == 4 || needed > 64<<20 {
+			return nil, performanceWindowsError("NtQuerySystemInformation(SystemProcessInformation)", err)
+		}
+		// The process list can grow between calls: leave headroom.
+		c.buffer = make([]uint64, (max(uint64(needed), uint64(size))+(256<<10))/8)
 	}
-	if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
-		return ""
+	base, limit := unsafe.Pointer(&c.buffer[0]), uintptr(len(c.buffer)*8)
+	entrySize := unsafe.Sizeof(windows.SYSTEM_PROCESS_INFORMATION{})
+	var out []performanceSystemProcess
+	for offset := uintptr(0); offset+entrySize <= limit && len(out) < 32768; {
+		e := (*windows.SYSTEM_PROCESS_INFORMATION)(unsafe.Add(base, offset))
+		p := performanceSystemProcess{PID: int(e.UniqueProcessID), ParentPID: int(e.InheritedFromUniqueProcessID),
+			StartID: strconv.FormatInt(e.CreateTime, 10), CPUSeconds: float64(e.KernelTime+e.UserTime) / 1e7,
+			WorkingSet: float64(e.WorkingSetSize), Private: float64(e.PrivatePageCount), Threads: int(e.NumberOfThreads)}
+		// ImageName.Buffer points into this same buffer; validate before reading.
+		if name := uintptr(unsafe.Pointer(e.ImageName.Buffer)); e.ImageName.Buffer != nil && name >= uintptr(base) &&
+			name+uintptr(e.ImageName.Length) <= uintptr(base)+limit && e.ImageName.Length <= 1024 {
+			p.Name = windows.UTF16ToString(unsafe.Slice(e.ImageName.Buffer, e.ImageName.Length/2))
+		}
+		switch {
+		case p.PID == 0:
+			p.Name = "System Idle Process"
+		case p.Name == "" && p.PID == 4:
+			p.Name = "System"
+		}
+		out = append(out, p)
+		if e.NextEntryOffset == 0 {
+			break
+		}
+		offset += uintptr(e.NextEntryOffset)
 	}
-	return performanceWindowsError("Toolhelp process snapshot", err)
+	runtime.KeepAlive(c.buffer)
+	return out, ""
 }
 
 func (c *performanceWindowsCollector) collectProcesses(s *performancePlatformSample) {
+	all, listReason := c.systemProcesses()
+	s.AllProcesses = all
+	if listReason != "" {
+		s.Unavailable["top_processes"] = listReason
+		s.Unavailable["process_discovery"] = listReason
+	}
 	if c.rootUnavailable != "" {
-		s.Unavailable["processes"] = c.rootUnavailable + "; root identity was not pinned, collection will not adopt a later PID reuse"
+		s.Unavailable["processes"] = c.rootUnavailable + "；无法打开计时器自身进程"
 		return
 	}
 	for _, p := range c.processes {
 		p.refreshTimes()
 		if p.timesUnavailable != "" {
-			s.Unavailable["processes"] = "one or more observed process identities could not be revalidated"
+			s.Unavailable["processes"] = "有已观测进程无法再次读取：" + p.timesUnavailable
 		}
 	}
-	entries := make(map[int]performanceWindowsSnapshotEntry)
-	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
-	snapshotReason := ""
-	if err != nil {
-		snapshotReason = performanceWindowsError("CreateToolhelp32Snapshot", err)
-	} else {
-		defer windows.CloseHandle(snapshot)
-		snapshotReason = performanceWindowsWalkSnapshot(snapshot, func(e *windows.ProcessEntry32) bool {
-			if len(entries) >= 32768 {
-				return false
-			}
-			pid := int(e.ProcessID)
-			entries[pid] = performanceWindowsSnapshotEntry{pid, int(e.ParentProcessID), e.Threads}
-			return true
-		})
+	entries := make(map[int]performanceSystemProcess, len(all))
+	for _, e := range all {
+		entries[e.PID] = e
 	}
-	if snapshotReason != "" {
-		s.Unavailable["process_discovery"] = snapshotReason
-	} else {
+	if listReason == "" {
 		c.discoverChildren(entries, s)
-		// A second pass over the SAME snapshot decodes names only for admitted
-		// identities. Held handles pin PIDs throughout this pass and GPU sampling.
-		if reason := performanceWindowsWalkSnapshot(snapshot, func(e *windows.ProcessEntry32) bool {
-			if p := c.processes[int(e.ProcessID)]; p != nil && p.timesUnavailable == "" {
-				p.name = performanceWindowsBasename(windows.UTF16ToString(e.ExeFile[:]))
-				if p.pid == c.rootPID {
-					p.parent = int(e.ParentProcessID)
+		for pid, p := range c.processes {
+			if e, ok := entries[pid]; ok && p.timesUnavailable == "" {
+				p.name = performanceWindowsBasename(e.Name)
+				if pid == c.rootPID {
+					p.parent = e.ParentPID
 				}
 			}
-			return true
-		}); reason != "" {
-			s.Unavailable["process_names"] = reason
 		}
 	}
 	ids := make([]int, 0, len(c.processes))
@@ -554,19 +463,19 @@ func (c *performanceWindowsCollector) collectProcesses(s *performancePlatformSam
 			continue
 		}
 		process := p.collect()
-		if e, ok := entries[pid]; ok && snapshotReason == "" {
-			process.Values["threads"] = float64(e.threads)
+		if e, ok := entries[pid]; ok {
+			process.Values["threads"] = float64(e.Threads)
 		} else {
-			process.Unavailable["threads"] = "process not present in a complete Toolhelp snapshot"
+			process.Unavailable["threads"] = "进程不在本次系统进程列表中"
 		}
 		s.Processes = append(s.Processes, process)
 	}
 }
 
-func (c *performanceWindowsCollector) discoverChildren(entries map[int]performanceWindowsSnapshotEntry, s *performancePlatformSample) {
+func (c *performanceWindowsCollector) discoverChildren(entries map[int]performanceSystemProcess, s *performancePlatformSample) {
 	children := make(map[int][]int)
 	for pid, e := range entries {
-		children[e.parent] = append(children[e.parent], pid)
+		children[e.ParentPID] = append(children[e.ParentPID], pid)
 	}
 	queue := make([]int, 0, performanceWindowsMaxProcesses)
 	for pid := range c.processes {
@@ -585,12 +494,12 @@ func (c *performanceWindowsCollector) discoverChildren(entries map[int]performan
 				continue
 			}
 			if len(c.processes) >= performanceWindowsMaxProcesses {
-				s.Unavailable["process_tree"] = "observed process tree limited to 64 pinned identities; unobserved descendants omitted"
+				s.Unavailable["process_tree"] = "计时器子进程超过 64 个，其余未逐个统计"
 				return
 			}
 			child, reason := performanceWindowsOpenProcess(pid)
 			if child == nil {
-				s.Unavailable["process_discovery"] = "a candidate descendant could not be identity-checked: " + reason
+				s.Unavailable["process_discovery"] = fmt.Sprintf("无法打开子进程 %s (PID %d)：%s", entries[pid].Name, pid, reason)
 				continue
 			}
 			var basic windows.PROCESS_BASIC_INFORMATION
@@ -599,7 +508,7 @@ func (c *performanceWindowsCollector) discoverChildren(entries map[int]performan
 			// Creation bounds stop a recycled parent's PID from claiming unrelated
 			// children. The native PPID also rejects snapshot/OpenProcess races.
 			if err != nil || length != uint32(unsafe.Sizeof(basic)) {
-				s.Unavailable["process_discovery"] = "a candidate descendant's native parent identity was unavailable"
+				s.Unavailable["process_discovery"] = fmt.Sprintf("无法确认子进程 %s (PID %d) 的父进程", entries[pid].Name, pid)
 				windows.CloseHandle(child.handle)
 				continue
 			}
@@ -628,7 +537,7 @@ func (p *performanceWindowsProcess) collect() PerformanceProcess {
 	s := PerformanceProcess{PID: p.pid, ParentPID: p.parent, Name: p.name,
 		StartID: strconv.FormatUint(p.created, 10), CounterAt: p.counterAt, Values: make(map[string]float64), Unavailable: make(map[string]string)}
 	if s.Name == "" {
-		s.Unavailable["name"] = "process basename unavailable in snapshot"
+		s.Unavailable["name"] = "进程名不可用"
 	}
 	if p.timesUnavailable == "" {
 		s.Values["cpu_seconds"] = (float64(p.kernel) + float64(p.user)) / 1e7
@@ -705,21 +614,21 @@ func performanceWindowsBOOL(proc *windows.LazyProc, args ...uintptr) string {
 	return ""
 }
 
+// Keep both the numeric code and the system's own message: the code survives
+// localisation, the message says what happened.
 func performanceWindowsError(operation string, err error) string {
-	// Never include error strings containing a directory, device path or DLL
-	// search path. Numeric native errors retain actionable permission/status info.
 	var errno syscall.Errno
 	if errors.As(err, &errno) && errno != 0 {
-		if errno == windows.ERROR_ACCESS_DENIED {
-			return operation + ": access denied"
-		}
-		return fmt.Sprintf("%s unavailable (Win32 %d)", operation, uint32(errno))
+		return fmt.Sprintf("%s：%s (Win32 %d)", operation, errno.Error(), uint32(errno))
 	}
 	var status windows.NTStatus
 	if errors.As(err, &status) {
-		return fmt.Sprintf("%s unavailable (NTSTATUS 0x%08x)", operation, uint32(status))
+		return fmt.Sprintf("%s：%s (NTSTATUS 0x%08x)", operation, status.Error(), uint32(status))
 	}
-	return operation + ": unavailable"
+	if err != nil {
+		return operation + "：" + err.Error()
+	}
+	return operation + "：失败"
 }
 
 func performanceWindowsUnavailable(m map[string]string, reason string, keys ...string) {

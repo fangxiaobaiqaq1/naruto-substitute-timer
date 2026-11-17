@@ -2,6 +2,7 @@ package diagnostics
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"image"
 	"math"
@@ -103,33 +104,33 @@ func TestPerformanceCounterRatesAndPIDReuse(t *testing.T) {
 	}
 }
 
-func TestPerformanceErrorPrivacy(t *testing.T) {
-	for _, err := range []error{
-		&os.PathError{Op: "open", Path: "/home/PRIVATE-ACCOUNT/data", Err: os.ErrPermission},
-		&os.LinkError{Op: "rename", Old: "/home/PRIVATE-ACCOUNT/old", New: "/home/PRIVATE-ACCOUNT/new", Err: os.ErrPermission},
-	} {
-		for _, text := range []string{performanceError(err), performancePanicError("collector", err).Error()} {
-			if strings.Contains(text, "PRIVATE-ACCOUNT") || strings.Contains(text, "/home/") {
-				t.Fatal("error leaked a path", text)
-			}
-		}
+// Recording is local and opt-in: errors keep the path and panic detail the
+// developer needs to act on them.
+func TestPerformanceErrorsKeepDetail(t *testing.T) {
+	err := &os.PathError{Op: "open", Path: "/data/report/samples.jsonl", Err: os.ErrPermission}
+	if text := performanceError(err); !strings.Contains(text, "/data/report/samples.jsonl") || !strings.Contains(text, "permission denied") {
+		t.Fatalf("error text = %q", text)
 	}
-	if strings.Contains(performancePanicError("collector", "/home/PRIVATE-ACCOUNT").Error(), "PRIVATE-ACCOUNT") {
-		t.Fatal("untyped panic payload leaked")
+	text := performancePanicError("性能采样异常", "index out of range [3]").Error()
+	if !strings.Contains(text, "index out of range [3]") || !strings.Contains(text, "goroutine") {
+		t.Fatalf("panic text lacks value or stack: %q", text)
 	}
-	b, err := json.Marshal(PerformanceSystem{})
-	if err != nil || bytes.Contains(b, []byte("total_ram_bytes")) {
+	if got := cleanPerformanceText("a\x00b\nc", 10); got != "a b c" {
+		t.Fatalf("control characters = %q", got)
+	}
+	b, jsonErr := json.Marshal(PerformanceSystem{})
+	if jsonErr != nil || bytes.Contains(b, []byte("total_ram_bytes")) {
 		t.Fatal("missing RAM reported as zero")
 	}
 }
 
-func TestPerformanceLifecyclePrivacyAndSnapshot(t *testing.T) {
+func TestPerformanceLifecycleAndSnapshot(t *testing.T) {
 	c := &fakePerformanceCollector{}
 	r := performanceTestRecorder(t, c, performanceLimits{10 * time.Millisecond, 5, 1 << 20}, false)
 	at := time.Now().Add(-20 * time.Millisecond)
 	f := frame.Frame{Img: image.NewRGBA(image.Rect(0, 0, 32, 24)), CaptureStarted: at, CapturedAt: at.Add(time.Millisecond),
-		AnalysisStarted: at.Add(time.Millisecond), AnalyzedAt: at.Add(2 * time.Millisecond), CaptureMethod: "mumu-sdk",
-		Scene: "fight", PlayerName: "SecretAccount", OppName: "SecretOpponent", Status: "SecretRawStatus", LeftNinja: "SecretNinja"}
+		AnalysisStarted: at.Add(time.Millisecond), AnalyzedAt: at.Add(2 * time.Millisecond), CaptureMethod: "MuMu 实例 0 · SDK",
+		Scene: "unsupported-resolution", LayoutProfile: "camp", Engine: "rgb"}
 	r.ObserveFrame(f, at.Add(3*time.Millisecond), 16*time.Millisecond, false)
 	r.ObserveUIQueue(2 * time.Millisecond)
 	if err := r.Mark("卡顿"); err != nil {
@@ -150,10 +151,9 @@ func TestPerformanceLifecyclePrivacyAndSnapshot(t *testing.T) {
 	if int64(len(data)) != s.Bytes || len(bytes.Split(bytes.TrimSpace(data), []byte{'\n'})) != s.Samples {
 		t.Fatal("published prefix does not match complete samples")
 	}
-	for _, secret := range []string{"SecretAccount", "SecretOpponent", "SecretRawStatus", "SecretNinja"} {
-		if bytes.Contains(data, []byte(secret)) {
-			t.Fatal("performance capture retained private frame text", secret)
-		}
+	// The real capture method, scene and layout reach the report unmodified.
+	if a := s.Latest.Application; a.Backend != "MuMu 实例 0 · SDK" || a.Scene != "unsupported-resolution" || a.LayoutProfile != "camp" || a.Engine != "rgb" || a.Width != 32 {
+		t.Fatalf("application labels = %+v", a)
 	}
 	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte{'\n'}) {
 		var sample PerformanceSample
@@ -220,8 +220,8 @@ func TestPerformanceByteLimitAndCollectorFailure(t *testing.T) {
 		if s.StopReason != "write_failed" || s.Bytes != 0 || r.Stop() == nil {
 			t.Fatalf("write failure: %+v", s)
 		}
-		if strings.Contains(s.LastError, s.Directory) {
-			t.Fatal("write error leaked report directory")
+		if !strings.Contains(s.LastError, "samples.jsonl") {
+			t.Fatalf("write error does not name the file: %q", s.LastError)
 		}
 	})
 }
@@ -229,14 +229,30 @@ func TestPerformanceByteLimitAndCollectorFailure(t *testing.T) {
 func TestPerformanceOptionalProfilesAndManualStop(t *testing.T) {
 	c := &fakePerformanceCollector{}
 	r := performanceTestRecorder(t, c, performanceLimits{time.Second, 100, 1 << 20}, true)
+	// The start CPU profile is still running: a user mark's profile is skipped
+	// (one CPU profile per process), and Stop ends the running one early.
+	deadline := time.Now().Add(5 * time.Second)
+	for !r.cpuProfiling.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if err := r.Mark(PerformanceUserMark + "：卡顿"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
 	if err := r.Stop(); err != nil {
 		t.Fatal(err)
+	}
+	if time.Since(started) > 10*time.Second {
+		t.Fatal("Stop waited for the full CPU profile duration")
 	}
 	s := r.Snapshot()
 	if s.StopReason != "user_stopped" || s.EndedAt == nil {
 		t.Fatal("manual stop not finalized")
 	}
-	for _, name := range []string{"heap-start.pprof", "heap-end.pprof", "goroutines-start.txt", "goroutines-end.txt"} {
+	if !strings.Contains(s.ProfileStatus["cpu-mark-1.pprof"], "跳过") {
+		t.Fatalf("overlapping CPU profile status = %q", s.ProfileStatus["cpu-mark-1.pprof"])
+	}
+	for _, name := range []string{"heap-start.pprof", "heap-end.pprof", "goroutines-start.txt", "goroutines-end.txt", "cpu-start.pprof"} {
 		if s.ProfileStatus[name] != "ok" {
 			t.Fatalf("%s: %s", name, s.ProfileStatus[name])
 		}
@@ -247,5 +263,175 @@ func TestPerformanceOptionalProfilesAndManualStop(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(s.Directory, "status.json")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func performanceTestFloat(v float64) *float64 { return &v }
+
+// The system-wide table must name the emulator and the heaviest other
+// programs, not just the timer's own tree, and stay bounded.
+func TestPerformanceTopProcessesNameTheEmulatorAndTheHogs(t *testing.T) {
+	previous := performancePlatformSample{}
+	host := performancePlatformSample{}
+	add := func(pid int, name string, before, now, memory float64) {
+		previous.AllProcesses = append(previous.AllProcesses, performanceSystemProcess{PID: pid, Name: name, StartID: "s", CPUSeconds: before})
+		host.AllProcesses = append(host.AllProcesses, performanceSystemProcess{PID: pid, Name: name, StartID: "s", CPUSeconds: now, WorkingSet: memory})
+	}
+	add(0, "System Idle Process", 0, 1000, 8<<10) // Idle time is not CPU usage.
+	add(10, "timer-app.exe", 1, 1.08, 150<<20)
+	add(11, "ocr-helper.exe", 0, 0, 80<<20)
+	add(500, "MuMuVMMHeadless.exe", 10, 12.4, 6<<30)
+	add(501, "MuMuNxDevice.exe", 5, 5.4, 1<<30)
+	add(600, "dnplayer.exe", 0, 0, 10<<20)
+	add(700, "chrome.exe", 3, 3.8, 3<<30)
+	for i := 0; i < 60; i++ { // Background noise that must not flood the table.
+		add(1000+i, "svchost.exe", 0, 0, float64(i)*(1<<20))
+	}
+	host.AllProcesses[3].GPUPercent, host.AllProcesses[3].GPUDedicated = performanceTestFloat(77), performanceTestFloat(2<<30)
+	// A reused PID must not produce a CPU rate from the old process's counter.
+	previous.AllProcesses = append(previous.AllProcesses, performanceSystemProcess{PID: 800, Name: "old.exe", StartID: "old", CPUSeconds: 0})
+	host.AllProcesses = append(host.AllProcesses, performanceSystemProcess{PID: 800, Name: "new.exe", StartID: "new", CPUSeconds: 500, WorkingSet: 4 << 30})
+
+	s := PerformanceSample{IntervalS: 2, Values: map[string]float64{}, Unavailable: map[string]string{},
+		Processes: []PerformanceProcess{{PID: 10}, {PID: 11}}}
+	performanceTop(&s, host, previous, 10, 4)
+	if len(s.Top) == 0 || len(s.Top) > PerformanceMaxTop {
+		t.Fatalf("top rows = %d", len(s.Top))
+	}
+	rows := make(map[int]PerformanceTopProcess)
+	for _, row := range s.Top {
+		rows[row.PID] = row
+	}
+	if s.Top[0].PID != 500 || math.Abs(*s.Top[0].CPUPercent-30) > 1e-9 { // 2.4 CPU-seconds / 2 s / 4 cores.
+		t.Fatalf("heaviest row = %+v", s.Top[0])
+	}
+	for pid, role := range map[int]string{10: "self", 11: "child", 500: "emulator", 501: "emulator", 600: "emulator", 700: ""} {
+		row, ok := rows[pid]
+		if !ok || row.Role != role {
+			t.Errorf("PID %d: listed=%v role=%q, want %q", pid, ok, row.Role, role)
+		}
+	}
+	if _, ok := rows[0]; ok {
+		t.Error("the idle pseudo-process was listed")
+	}
+	if row, ok := rows[800]; !ok || row.CPUPercent != nil {
+		t.Errorf("reused PID: listed=%v cpu=%v (memory-heavy, but no valid CPU baseline)", ok, row.CPUPercent)
+	}
+	if math.Abs(s.Values["emulator_cpu_percent"]-35) > 1e-9 || s.Values["emulator_working_set_bytes"] != 7<<30+10<<20 ||
+		s.Values["emulator_gpu_percent"] != 77 || s.Values["emulator_gpu_dedicated_bytes"] != 2<<30 {
+		t.Fatalf("emulator aggregates = %v", s.Values)
+	}
+	// No emulator and no process list are stated, never reported as 0.
+	bare := PerformanceSample{IntervalS: 1, Values: map[string]float64{}, Unavailable: map[string]string{}}
+	performanceTop(&bare, performancePlatformSample{AllProcesses: []performanceSystemProcess{{PID: 5, Name: "notepad.exe"}}}, performancePlatformSample{}, 10, 4)
+	if _, ok := bare.Values["emulator_cpu_percent"]; ok || bare.Unavailable["emulator_cpu_percent"] == "" {
+		t.Fatalf("missing emulator = %v / %v", bare.Values, bare.Unavailable)
+	}
+	bare = PerformanceSample{Values: map[string]float64{}, Unavailable: map[string]string{}}
+	performanceTop(&bare, performancePlatformSample{}, performancePlatformSample{}, 10, 4)
+	if bare.Top != nil || bare.Unavailable["top_processes"] == "" {
+		t.Fatal("missing process list not explained")
+	}
+	for name, want := range map[string]bool{"MuMuPlayer.exe": true, "Ld9BoxHeadless.exe": true, "dnplayer.exe": true, "HD-Player.exe": true, "explorer.exe": false, "timer-app.exe": false} {
+		if performanceEmulatorName(name) != want {
+			t.Errorf("performanceEmulatorName(%q) = %v", name, !want)
+		}
+	}
+}
+
+// One slow frame in a busy second must stay visible: the window keeps the
+// maximum, and failed/timed-out captures count toward the attempt time.
+func TestPerformanceWindowKeepsWorstFrameAndFailures(t *testing.T) {
+	block := make(chan struct{})
+	c := &fakePerformanceCollector{}
+	first := true
+	c.read = func() performancePlatformSample {
+		if !first {
+			<-block // Hold the second sample until the frames are observed.
+		}
+		first = false
+		return performancePlatformSample{}
+	}
+	r := performanceTestRecorder(t, c, performanceLimits{5 * time.Millisecond, 2, 1 << 20}, false)
+	for deadline := time.Now().Add(5 * time.Second); r.Snapshot().Samples < 1 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond) // The frames below belong to the second window.
+	}
+	base := time.Now().Add(-10 * time.Second)
+	poll := 16 * time.Millisecond
+	for i := 0; i < 29; i++ {
+		at := base.Add(time.Duration(i) * poll)
+		r.ObserveFrame(frame.Frame{CaptureStarted: at, CapturedAt: at.Add(5 * time.Millisecond), AnalysisStarted: at.Add(5 * time.Millisecond),
+			AnalyzedAt: at.Add(13 * time.Millisecond)}, at.Add(14*time.Millisecond), poll, false)
+		r.ObserveLoop(15*time.Millisecond, time.Millisecond)
+	}
+	at := base.Add(time.Second)
+	r.ObserveFrame(frame.Frame{CaptureStarted: at, CapturedAt: at.Add(600 * time.Millisecond), AnalysisStarted: at.Add(600 * time.Millisecond),
+		AnalyzedAt: at.Add(1000 * time.Millisecond)}, at.Add(1001*time.Millisecond), poll, false)
+	r.ObserveLoop(1010*time.Millisecond, 9*time.Millisecond)
+	// A capture that timed out after two seconds: no CapturedAt at all.
+	at = base.Add(3 * time.Second)
+	r.ObserveFrame(frame.Frame{CaptureStarted: at, Err: os.ErrDeadlineExceeded, CaptureMethod: "雷电 ADB"}, at.Add(2*time.Second), poll, false)
+	r.ObserveUIQueue(250 * time.Millisecond)
+	r.ObserveUIQueue(3 * time.Millisecond)
+	close(block)
+	waitPerformance(t, r)
+	a := r.Snapshot().Latest.Application
+	for name, got := range map[string]*float64{"capture max": a.CaptureMaxMS, "analysis max": a.AnalysisMaxMS, "attempt max": a.AttemptMaxMS,
+		"loop max": a.LoopMaxMS, "post max": a.PostMaxMS, "ui queue max": a.UIQueueMaxMS, "capture p95": a.CaptureP95MS} {
+		want := map[string]float64{"capture max": 600, "analysis max": 400, "attempt max": 2000, "loop max": 1010, "post max": 9, "ui queue max": 250, "capture p95": 5}[name]
+		if got == nil || math.Abs(*got-want) > 1e-6 {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+	if a.WindowSlow != 2 || a.SlowFrames != 2 || a.WindowErrors != 1 || a.Errors != 1 || a.Attempts != 31 {
+		t.Errorf("counters = slow %d/%d errors %d/%d attempts %d", a.WindowSlow, a.SlowFrames, a.WindowErrors, a.Errors, a.Attempts)
+	}
+	if !strings.Contains(a.LastError, "timeout") || a.Backend != "雷电 ADB" {
+		t.Errorf("error/backend = %q / %q", a.LastError, a.Backend)
+	}
+}
+
+// A session that was never exported (the app was closed, or crashed with a
+// torn last line) can still be turned into a report afterwards.
+func TestPerformanceOfflineSessionExport(t *testing.T) {
+	root := t.TempDir()
+	if PerformanceSessions(root) != nil {
+		t.Fatal("sessions listed in an empty directory")
+	}
+	r, err := newPerformance(PerformanceOptions{Root: root, Version: "v-test", Config: []byte(`{"capture":{"provider":"mumu"}}`)},
+		func(int, string) (performanceCollector, error) { return &fakePerformanceCollector{}, nil }, performanceLimits{time.Millisecond, 4, 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPerformance(t, r)
+	dir := r.Snapshot().Directory
+	sessions := PerformanceSessions(root)
+	if len(sessions) != 1 || sessions[0] != dir {
+		t.Fatalf("sessions = %v, want %s", sessions, dir)
+	}
+	// Simulate a crash: no final status, and a half-written last record.
+	if err := os.Remove(filepath.Join(dir, "status.json")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "samples.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(`{"at":"2026-01-02T03:04:05Z","elapsed_s":9,"va`)
+	_ = f.Close()
+	path, err := ExportPerformanceSession(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := performanceReportTestZIP(t, path)
+	s := performanceReportTestSummary(t, files)
+	if s.Samples != 4 || s.SkippedLines != 1 || s.StopReason != "not_finalized" {
+		t.Fatalf("offline summary: samples=%d skipped=%d stop=%q", s.Samples, s.SkippedLines, s.StopReason)
+	}
+	if string(files["config.json"]) != `{"capture":{"provider":"mumu"}}` || len(files["report.html"]) == 0 {
+		t.Fatal("offline export lacks config.json or report.html")
+	}
+	if _, err := ExportPerformanceSession(context.Background(), t.TempDir()); err == nil {
+		t.Fatal("a directory without a session exported")
 	}
 }
