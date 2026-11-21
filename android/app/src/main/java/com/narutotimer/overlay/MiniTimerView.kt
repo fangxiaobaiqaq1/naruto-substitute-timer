@@ -346,7 +346,7 @@ class MiniTimerView(context: Context) : View(context) {
     private fun accentColor(s: OverlayState): Int = when {
         editing -> TimerColors.CLOCK_LIVE
         s.showBothSides -> listOf(s.leftText to s.leftColor, s.rightText to s.rightColor)
-            .firstOrNull { isClock(it.first) && it.second == TimerColors.CLOCK_WARN }?.second
+            .firstOrNull { isClock(it.first) && (it.second == TimerColors.CLOCK_ALERT || it.second == TimerColors.CLOCK_WARN) }?.second
             ?: if (isClock(s.leftText) || isClock(s.rightText)) TimerColors.CLOCK_LIVE else TimerColors.PANEL_BORDER
         isClock(s.primaryText) -> s.primaryColor
         else -> TimerColors.PANEL_BORDER

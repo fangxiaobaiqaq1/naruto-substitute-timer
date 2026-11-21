@@ -1,16 +1,16 @@
 {
   "sourceRoot": "<source-corpus>",
   "sourceIndex": "avatars_index.json",
-  "sourceIndexSha256": "427b359eb86da549535ae419c8e9496e69d9ff58e0d576655c9968c01109e1d3",
+  "sourceIndexSha256": "0bdb9a6067f1e322958ed14ff42c9e21903bd2824555bc7cefe0acdf8c3a698c",
   "sourceCSV": "avatars_index.csv",
-  "sourceCSVSha256": "24b111da3a377d1ab9f1f3a3fe270980faa3dd1c1cf7484decaf0fdfaed180df",
+  "sourceCSVSha256": "2d9cbdd00e06de6f0331e1e4300f13fbe19c8fb79d211e9a9993bc96581384a2",
   "sourceChecksums": "CHECKSUMS.sha256",
-  "sourceChecksumsSha256": "821532904f3644c0b3ee8b87e0243b84355e5c36b6d6ae3d3cea08fcc51db9ad",
-  "sourceGeneratedAt": "2026-11-06T14:48:47Z",
-  "sourceScope": "2026-09-23 official snapshot retained; only ninja 90316 avatar and detail refreshed on 2026-11-06 from its public official detail URL and the exact lbtx URL. No roster refresh or new ID sweep. Original snapshot scope: Official station lists (all released ninjas + all skins) plus a bounded sweep of the whole 5-digit ninja id space (90000-99999) and the whole 92xxxx skin id space (920000-929999) against the public detail endpoints. No authentication, cookies, or private APIs.",
+  "sourceChecksumsSha256": "03eaa64a0408fcc346f5a85bf04b53e678d4ea4772d0da6281d06025adc3977c",
+  "sourceGeneratedAt": "2026-11-21T15:06:00Z",
+  "sourceScope": "2026-09-23 official snapshot retained; ninja 90316 avatar and detail refreshed on 2026-11-06; on 2026-11-21 only the newly released ninja 90553 (千手扉间[永夜逐光], online 2026-11-20) was added from the public official ninja list row, its detail URL and its exact lbtx URL. No roster refresh or new ID sweep. Original snapshot scope: Official station lists (all released ninjas + all skins) plus a bounded sweep of the whole 5-digit ninja id space (90000-99999) and the whole 92xxxx skin id space (920000-929999) against the public detail endpoints. No authentication, cookies, or private APIs.",
   "selection": "base rank A/S; skins whose baseNinjaId is a selected A/S base",
-  "fullCorpusEntries": 529,
-  "selectedBaseEntries": 183,
+  "fullCorpusEntries": 530,
+  "selectedBaseEntries": 184,
   "selectedSkinEntries": 59,
   "entries": [
     {
@@ -4126,6 +4126,23 @@
       "metadataSha256": "bb29ba624dadcfc6c08162e3c0cbc18725ae277180037c26b426eddc6f9558d1",
       "sha256": "91e120cb5dc408b79817fa6eb70d6ee22f559e0ac65a27f4bc76839d9d1cadc8",
       "bytes": 11382
+    },
+    {
+      "id": "90553",
+      "isSkin": false,
+      "ninja": "千手扉间",
+      "form": "永夜逐光",
+      "rank": "A",
+      "skinTitle": "永夜逐光",
+      "baseNinjaId": "",
+      "baseNinjaName": "千手扉间",
+      "canonicalRole": "千手扉间",
+      "canonicalVariant": "永夜逐光",
+      "canonicalName": "千手扉间[永夜逐光]",
+      "metadataPath": "details/metadata/ninja/90553.json",
+      "metadataSha256": "b0deb94fad92d1b9413626c9fa73f4e247daa3c7035d515d5b8e73c813eb8bcd",
+      "sha256": "43efa5e13ff0593da3969471a44dc2dbeb5c9a855e085be147a80298163b07b0",
+      "bytes": 9151
     }
   ],
   "sourceMetadataAmbiguities": [

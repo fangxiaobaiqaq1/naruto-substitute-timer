@@ -47,8 +47,8 @@ func TestEmbeddedNameTemplatesAllLoad(t *testing.T) {
 			portrait++
 		}
 	}
-	// 15 title strips plus the 百战鼬 portrait (shared by its two strips).
-	if len(r.source) != 15 || portrait != 2 || len(entries) != 16 {
+	// 16 title strips plus the 百战鼬 portrait (shared by its two strips).
+	if len(r.source) != 16 || portrait != 2 || len(entries) != 17 {
 		t.Fatalf("reader loaded %d strips (%d with portrait); %d files embedded", len(r.source), portrait, len(entries))
 	}
 }

@@ -28,7 +28,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.provider.Settings as SystemSettings
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -52,6 +54,7 @@ import com.narutotimer.NativeCore
 import com.narutotimer.R
 import com.narutotimer.Settings
 import com.narutotimer.TimerApp
+import com.narutotimer.WarnSound
 import com.narutotimer.capture.FrameLoop
 import com.narutotimer.capture.ProjectionCaptureService
 import com.narutotimer.service.TimerAccessibilityService
@@ -97,6 +100,12 @@ class MainActivity : Activity() {
     private lateinit var ninjaEdit: EditText
     private lateinit var modeGroup: RadioGroup
     private lateinit var bothChk: CheckBox
+    private lateinit var noticeChk: CheckBox
+    private lateinit var warnSecondsEdit: EditText
+    private lateinit var warnSecondsNote: TextView
+    private lateinit var warnRedChk: CheckBox
+    private lateinit var warnSoundChk: CheckBox
+    private lateinit var warnSoundText: TextView
     private lateinit var miniOpacityText: TextView
     private lateinit var miniOpacityBar: SeekBar
     private lateinit var opacityText: TextView
@@ -152,6 +161,8 @@ class MainActivity : Activity() {
         pendingIdentityLabel = savedInstanceState?.getString(STATE_IDENTITY_LABEL).orEmpty()
         title = getString(R.string.app_name)
         setContentView(buildContent())
+        // The launch notice (default on, can be turned off below) once per app start.
+        if (savedInstanceState == null && settings.showNotice) showNotice()
         // Android 13+: without this the recognition service's notification (and
         // its stop button) is silently hidden.
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -367,6 +378,49 @@ class MainActivity : Activity() {
             },
         ), 8f)
 
+        section(advancedPanel, "倒计时提醒（可选）", 18f)
+        val secondsRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        secondsRow.addView(Ui.text(this, "提醒秒数", 14f, Ui.TEXT))
+        warnSecondsEdit = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            isSingleLine = true
+            setTextColor(Ui.TEXT)
+            minEms = 3
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    if (syncing) return
+                    val v = parseWarnSeconds(s?.toString().orEmpty())
+                    warnSecondsNote.visibility = if (v == null) View.VISIBLE else View.GONE
+                    if (v != null && v != settings.warnSeconds) settings.warnSeconds = v
+                }
+            })
+        }
+        secondsRow.addView(warnSecondsEdit, LinearLayout.LayoutParams(dp(96), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+        secondsRow.addView(Ui.text(this, "秒（默认 3.0）", 13f, Ui.TEXT_2))
+        Ui.add(advancedPanel, secondsRow, 2f)
+        warnSecondsNote = Ui.text(this, "请输入 0.1–15.0 之间的秒数，最多一位小数", 12.5f, Ui.BAD).apply { visibility = View.GONE }
+        Ui.add(advancedPanel, warnSecondsNote, 0f)
+        warnRedChk = check("进入提醒秒数后倒计时变红（关闭时为琥珀色）") { on -> settings.warnRed = on }
+        warnSoundChk = check("进入提醒秒数时播放提示音") { on -> settings.warnSound = on }
+        Ui.add(advancedPanel, warnRedChk, 0f)
+        Ui.add(advancedPanel, warnSoundChk, 0f)
+        warnSoundText = Ui.text(this, "", 13f, Ui.TEXT_2).also { Ui.add(advancedPanel, it, 2f) }
+        Ui.add(advancedPanel, Ui.row(
+            this,
+            Ui.button(this, "试听") { WarnSound.play(this, settings) },
+            Ui.button(this, "导入音效") { pickWarnSound() },
+            Ui.button(this, "默认音效") {
+                settings.warnSoundFile = ""
+                WarnSound.dir(this).listFiles()?.forEach { it.delete() }
+                refreshWarnSound()
+            },
+        ), 6f)
+        Ui.add(advancedPanel, Ui.note(this, "变红和提示音默认关闭，可单独开启；每次倒计时只响一次。音效支持 WAV / MP3 / OGG / M4A（5 MB 以内），导入后复制保存在应用内。"), 4f)
+        noticeChk = check("打开应用时显示公告") { on -> settings.showNotice = on }
+        Ui.add(advancedPanel, noticeChk, 6f)
+
         section(advancedPanel, "采集与调试", 18f)
         projectionChk = check("优先使用录屏采集") { on -> settings.preferProjection = on }
         debugChk = check("输出调试日志") { on -> settings.debug = on }
@@ -501,6 +555,14 @@ class MainActivity : Activity() {
             preMatchSideChk.isChecked = settings.preMatchSideRecognition
             syncMode()
             bothChk.isChecked = settings.showBothSides
+            noticeChk.isChecked = settings.showNotice
+            warnRedChk.isChecked = settings.warnRed
+            warnSoundChk.isChecked = settings.warnSound
+            if (parseWarnSeconds(warnSecondsEdit.text.toString()) != settings.warnSeconds) {
+                warnSecondsEdit.setText(String.format(Locale.ROOT, "%.1f", settings.warnSeconds))
+            }
+            warnSecondsNote.visibility = View.GONE
+            refreshWarnSound()
             setSlider(miniOpacityBar, MINI_OPACITY_MIN, OPACITY_STEP, settings.miniOpacity.toDouble())
             setSlider(opacityBar, WINDOW_OPACITY_MIN, OPACITY_STEP, settings.windowOpacity.toDouble())
             setSlider(
@@ -563,6 +625,70 @@ class MainActivity : Activity() {
             syncing = false
         }
         refreshStatus()
+    }
+
+    // ---- 公告与倒计时提醒 ----
+
+    private fun showNotice() {
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val card = Ui.text(this, NOTICE_BODY, 15f, Ui.TEXT, bold = true).apply {
+            background = Ui.rounded(this@MainActivity, 0xFF2C161A.toInt(), 10f, 0xFF783432.toInt())
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        body.addView(card)
+        Ui.add(body, Ui.note(this, NOTICE_HINT), 10f)
+        Ui.add(body, Ui.row(
+            this,
+            Ui.button(this, "GitHub 仓库") { openUrl(NOTICE_GITHUB) },
+            Ui.button(this, "Gitee 仓库（国内）") { openUrl(NOTICE_GITEE) },
+        ), 10f)
+        AlertDialog.Builder(this)
+            .setTitle("⚠ 公告")
+            .setView(body)
+            .setPositiveButton("我知道了", null)
+            .show()
+    }
+
+    private fun openUrl(url: String) {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { toast("没有可用的浏览器") }
+    }
+
+    private fun refreshWarnSound() {
+        warnSoundText.text = "当前音效：" + WarnSound.label(settings)
+    }
+
+    private fun pickWarnSound() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("audio/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, WarnSound.MIME_TYPES)
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQUEST_SOUND)
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "open document failed", e)
+            toast("没有可用的文件选择器")
+        }
+    }
+
+    private fun importWarnSound(uri: Uri) {
+        Thread({
+            val result = runCatching { WarnSound.import(this, uri) }
+            main.post {
+                result.onSuccess { name ->
+                    settings.warnSoundFile = name
+                    if (!isDestroyed) refreshWarnSound()
+                    toast("音效已导入")
+                }.onFailure { e ->
+                    Log.w(TAG, "import sound failed", e)
+                    toast(e.message ?: "导入失败")
+                }
+            }
+        }, "nt-sound-import").start()
     }
 
     // ---- 区域校准（docs/区域校准.md） ----
@@ -858,6 +984,10 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_SOUND) {
+            if (resultCode == RESULT_OK) data?.data?.let { importWarnSound(it) }
+            return
+        }
         if (requestCode != REQUEST_IMPORT || resultCode != RESULT_OK || data == null) return
         val uris = ArrayList<Uri>()
         val clip = data.clipData
@@ -1012,6 +1142,19 @@ class MainActivity : Activity() {
         private const val STATUS_INTERVAL_MS = 1_000L
         private const val REQUEST_IMPORT = 41
         private const val REQUEST_NOTIFICATIONS = 42
+        private const val REQUEST_SOUND = 43
+        private const val NOTICE_BODY = "近期有闲鱼倒卖本开源软件，作者对售后不负责，本软件永久开源免费。"
+        private const val NOTICE_HINT = "请只从下面的官方仓库免费下载，付费购买的版本可能被改动过。"
+        private const val NOTICE_GITHUB = "https://github.com/fangxiaobaiqaq1/naruto-substitute-timer"
+        private const val NOTICE_GITEE = "https://gitee.com/xiaobaiqaq/naruto-substitute-timer"
+
+        /** 0.1–15.0 with at most one decimal; null = invalid (same rule as Go parseWarnSeconds). */
+        fun parseWarnSeconds(text: String): Double? {
+            val v = text.trim().replace('，', '.').toDoubleOrNull() ?: return null
+            if (v.isNaN() || v < Settings.WARN_SECONDS_MIN || v > Settings.WARN_SECONDS_MAX) return null
+            if (kotlin.math.abs(v * 10 - Math.round(v * 10)) > 1e-6) return null
+            return Math.round(v * 10) / 10.0
+        }
         private const val STATE_IDENTITY_LABEL = "identityLabel"
         private const val IDENTITY_DIR = "identity"
         /** AppOpsManager.OPSTR_PROJECT_MEDIA（隐藏常量）。 */

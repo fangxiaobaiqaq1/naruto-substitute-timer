@@ -18,15 +18,15 @@ import (
 
 func TestEmbeddedASAvatarCatalogIsBoundedAndValid(t *testing.T) {
 	stats, err := AvatarStats()
-	if err != nil || stats.Entries != 242 || stats.Base != 183 || stats.Skins != 59 || stats.Bytes != 3003344 {
+	if err != nil || stats.Entries != 243 || stats.Base != 184 || stats.Skins != 59 || stats.Bytes != 3012495 {
 		t.Fatalf("embedded stats=%+v err=%v", stats, err)
 	}
 	c, err := loadEmbeddedAvatarCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.entries) != 242 {
-		t.Fatalf("embedded avatar count=%d, want 242", len(c.entries))
+	if len(c.entries) != 243 {
+		t.Fatalf("embedded avatar count=%d, want 243", len(c.entries))
 	}
 	if _, err := assets.ASAvatars.ReadFile("avatars/90009.png"); err != nil {
 		t.Fatalf("embedded asset missing: %v", err)
@@ -39,8 +39,8 @@ func TestEmbeddedASAvatarCatalogIsBoundedAndValid(t *testing.T) {
 			skins++
 		}
 	}
-	if base != 183 || skins != 59 {
-		t.Fatalf("base/skin=%d/%d, want 183/59", base, skins)
+	if base != 184 || skins != 59 {
+		t.Fatalf("base/skin=%d/%d, want 184/59", base, skins)
 	}
 }
 

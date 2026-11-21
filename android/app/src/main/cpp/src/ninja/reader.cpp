@@ -107,6 +107,8 @@ std::shared_ptr<Reader> Reader::NewReader() {
         // Keep both the old duel and current camp lettering, as on Go.
         {"hashirama_edo", &HashiramaEdo, 6, Warm, 0, false},
         {"hashirama_edo_camp", &HashiramaEdo, 6, Warm, 0, false},
+        // Reviewed 2026-11-21 HUD: blue gauge above four ordinary beans, +9px.
+        {"tobirama_yongye", &TobiramaYongye, 4, Palette::None, 9, false},
         {"naruto_student", &NarutoStudent, 0, Palette::None, 0, false},
     };
     AssetStore& store = AssetStore::Instance();
@@ -394,6 +396,11 @@ Readout avatarReadout(const AvatarMatch& m) {
     } else if (key == normalizeAvatarName(TsunadeYokai)) {
         // Reviewed 90475 HUD: four ordinary beans below the red gauge.
         // 9px at 960x540, not Minato's 13px offset.
+        out.Slots = 4;
+        out.RowOffsetY = 9;
+    } else if (key == normalizeAvatarName(TobiramaYongye)) {
+        // Reviewed 2026-11-21 HUD of official ID 90553: blue gauge above
+        // four ordinary blue beans, also 9px lower at 960x540.
         out.Slots = 4;
         out.RowOffsetY = 9;
     }

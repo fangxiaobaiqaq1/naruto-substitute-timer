@@ -36,6 +36,8 @@ object TimerColors {
     const val CLOCK_IDLE = 0xFF9FB9C4.toInt()
     const val CLOCK_LIVE = 0xFF5CE1FF.toInt()
     const val CLOCK_WARN = 0xFFFFB547.toInt()
+    /** Optional red for the last 3 s (ui.warnRed), same as Go clockAlert. */
+    const val CLOCK_ALERT = 0xFFFF4848.toInt()
     const val TAG_MINE = 0xFFE3F6FB.toInt()
     const val TAG_IDLE = 0xFF8FB3C0.toInt()
     const val GLASS_BG = 0xFF061820.toInt()
@@ -727,7 +729,8 @@ class Session(
     }
 
     private fun clockColor(v: List<Double>): Int = if (v.isEmpty()) TimerColors.CLOCK_IDLE
-    else if (SideClock.displayTenths(v[0]) <= 30) TimerColors.CLOCK_WARN else TimerColors.CLOCK_LIVE
+    else if (SideClock.displayTenths(v[0]) <= Math.round(settings.warnSeconds * 10).toInt()) (if (settings.warnRed) TimerColors.CLOCK_ALERT else TimerColors.CLOCK_WARN)
+    else TimerColors.CLOCK_LIVE
 
     private fun fHoldLocked(): Boolean = lastFrame?.let { it.hold || it.err != null || it.uncertain } == true
 

@@ -363,11 +363,12 @@ func (s *session) buildSettings(tab int) {
 			widget.NewLabel("指定对面忍者（留空自动识别）"), ninjaEntry,
 			wrapped("照美冥［五代目水影］和半藏［秽土转生］同时显示 15 秒 / 10 秒。名字和忍者点下方按钮保存。"),
 			save)),
-		sectionCard("浮窗显示", container.NewVBox(miniSel, bothChk, topChk, autoScaleChk,
+		sectionCard("浮窗显示", container.NewVBox(miniSel, bothChk, topChk, autoScaleChk, s.noticeToggle(w),
 			wrapped("Ctrl+M 随时切换仅计时器；点击仅计时器展开设置、换边、两边计时和退出，拖动可移动。"))),
 		sectionCard("外观", container.NewVBox(
 			opacityText, opacitySlider, fontScaleText, fontScaleSlider, miniOpacityText, miniOpacitySlider,
 			resetAppearance, appearanceNote)),
+		sectionCard("倒计时提醒（可选）", s.warnControls(w)),
 		sectionCard("区域校准", container.NewVBox(
 			wrapped("少见分辨率识别不准时，在对局/训练场画面上自己框出豆和头像"), calibrationEntry)),
 		sectionCard("诊断", container.NewVBox(

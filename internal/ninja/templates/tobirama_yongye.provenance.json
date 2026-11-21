@@ -1,0 +1,15 @@
+{
+  "name": "千手扉间[永夜逐光]",
+  "officialID": "90553",
+  "scope": "Exact full-title identity; four ordinary blue slots 9px (960x540) below the default row, measured in one user duel screenshot. No account or cooldown inference.",
+  "source": "user-provided duel screenshot received 2026-11-21, inbox/regressions/tobirama-yongye-20261121/source.png",
+  "sourceSHA256": "7ababd3ce64d82c960104fc3213f0d3ec0a1964da34bcae57af2c4c2a6451a84",
+  "sourceSize": [1061, 598],
+  "referenceSize": [960, 540],
+  "boxInReference": [106, 20, 252, 41],
+  "template": "tobirama_yongye.png",
+  "templateSHA256": "186cce1b0f10ac6c7d821bdb91223391dc888807150158d3a2c7ad0641cca0e0",
+  "resampling": "Pillow BILINEAR full-frame resize to 960x540, then crop; account name excluded; no pixel editing",
+  "portrait": "Official 70x70 lbtx PNG of ID 90553 (assets/avatars/90553.png, SHA-256 43efa5e13ff0593da3969471a44dc2dbeb5c9a855e085be147a80298163b07b0), added through scripts/import-as-avatars.py from inbox/sources/hyrz-20261121-tobirama/.",
+  "regression": "internal/engine/rgb/testdata/tobirama-yongye/left-three.png keeps the top 112 rows unscaled with both account names masked. Left 3/4 at +9px, right 2/4 on the ordinary row. The portrait in that frame is covered by an orange hit mark, so the frame proves the title path only."
+}

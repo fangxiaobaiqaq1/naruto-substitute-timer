@@ -77,6 +77,31 @@ class Settings(context: Context) {
         @Synchronized get() = prefs.getBoolean(KEY_OVERLAY_ENABLED, false)
         set(value) = put(KEY_OVERLAY_ENABLED) { putBoolean(KEY_OVERLAY_ENABLED, value) }
 
+    /** ui.showNotice：每次打开应用显示公告（默认开）。 */
+    var showNotice: Boolean
+        @Synchronized get() = prefs.getBoolean(KEY_SHOW_NOTICE, true)
+        set(value) = put(KEY_SHOW_NOTICE) { putBoolean(KEY_SHOW_NOTICE, value) }
+
+    /** ui.warnSeconds：提醒秒数 ∈ [0.1, 15.0]，一位小数（默认 3.0）。 */
+    var warnSeconds: Double
+        @Synchronized get() = clampWarnSeconds(prefs.getFloat(KEY_WARN_SECONDS, 3f).toDouble())
+        set(value) = put(KEY_WARN_SECONDS) { putFloat(KEY_WARN_SECONDS, clampWarnSeconds(value).toFloat()) }
+
+    /** ui.warnRed：最后 3 秒显示红色而不是琥珀色（默认关）。 */
+    var warnRed: Boolean
+        @Synchronized get() = prefs.getBoolean(KEY_WARN_RED, false)
+        set(value) = put(KEY_WARN_RED) { putBoolean(KEY_WARN_RED, value) }
+
+    /** ui.warnSound：倒计时进入最后 3 秒时响一次（默认关）。 */
+    var warnSound: Boolean
+        @Synchronized get() = prefs.getBoolean(KEY_WARN_SOUND, false)
+        set(value) = put(KEY_WARN_SOUND) { putBoolean(KEY_WARN_SOUND, value) }
+
+    /** 导入音效在 filesDir/sounds 下的文件名；空 = 内置提示音。 */
+    var warnSoundFile: String
+        @Synchronized get() = prefs.getString(KEY_WARN_SOUND_FILE, "")!!
+        set(value) = put(KEY_WARN_SOUND_FILE) { putString(KEY_WARN_SOUND_FILE, value) }
+
     /** ui.windowOpacity ∈ [0.40, 1.00]（完整悬浮窗）。 */
     var windowOpacity: Float
         @Synchronized get() = prefs.getFloat(KEY_WINDOW_OPACITY, 1f).coerceIn(0.40f, 1f)
@@ -206,6 +231,11 @@ class Settings(context: Context) {
         const val KEY_UPDATE_SOURCE = "updateSource"
         const val KEY_AUTO_UPDATES = "autoCheckUpdates"
         const val KEY_DEBUG = "debug"
+        const val KEY_SHOW_NOTICE = "showNotice"
+        const val KEY_WARN_RED = "warnRed"
+        const val KEY_WARN_SECONDS = "warnSeconds"
+        const val KEY_WARN_SOUND = "warnSound"
+        const val KEY_WARN_SOUND_FILE = "warnSoundFile"
         const val KEY_CALIB_PROFILE = "calibProfile"
         const val KEY_CALIB_LEFT_BEADS = "calibLeftBeads"
         const val KEY_CALIB_RIGHT_BEADS = "calibRightBeads"
@@ -220,5 +250,9 @@ class Settings(context: Context) {
         const val FONT_SCALE_STEP = 0.01f
         const val CARD_STRETCH_MAX = 3.00f
         const val CARD_STRETCH_STEP = 0.05f
+        const val WARN_SECONDS_MIN = 0.1
+        const val WARN_SECONDS_MAX = 15.0
+        fun clampWarnSeconds(v: Double): Double =
+            if (v.isNaN()) 3.0 else (Math.round(v * 10) / 10.0).coerceIn(WARN_SECONDS_MIN, WARN_SECONDS_MAX)
     }
 }

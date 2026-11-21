@@ -27,6 +27,7 @@ object NinjaRules {
     const val ITACHI_HYAKUSEN = "宇智波鼬[百战]"
     const val MINATO_KYUBI = "波风水门[九喇嘛连结]"
     const val HASHIRAMA_EDO = "千手柱间[秽土转生]"
+    const val TOBIRAMA_YONGYE = "千手扉间[永夜逐光]"
     /** Substitutes on its own like FIFTH_MIZUKAGE: 15 s and 10 s. */
     const val HANZO_EDO = "半藏[秽土转生]"
 
@@ -55,6 +56,7 @@ object NinjaRules {
         normalize(MINATO_KYUBI) to "水门·九喇嘛连结",
         normalize(HASHIRAMA_EDO) to "柱间·秽土转生",
         normalize(HANZO_EDO) to "半藏·秽土转生",
+        normalize(TOBIRAMA_YONGYE) to "扉间·永夜逐光",
     )
 
     /**

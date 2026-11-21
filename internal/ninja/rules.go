@@ -24,6 +24,7 @@ const (
 	MinatoKyubi       = "波风水门[九喇嘛连结]"
 	HashiramaEdo      = "千手柱间[秽土转生]"
 	TsunadeYokai      = "纲手[妖怪奇谭]"
+	TobiramaYongye    = "千手扉间[永夜逐光]" // 官方 ID 90553，2026-11-20 上线。
 	// HanzoEdo can substitute on its own like FifthMizukage: 15 s and 10 s.
 	HanzoEdo = "半藏[秽土转生]"
 	// EnergyGaugeRowOffset is measured from reviewed native HUDs. The energy
@@ -77,6 +78,8 @@ func ShortLabel(name string) string {
 		return "柱间·秽土转生"
 	case normalize(HanzoEdo):
 		return "半藏·秽土转生"
+	case normalize(TobiramaYongye):
+		return "扉间·永夜逐光"
 	}
 	text := []rune(name)
 	if len(text) > 10 {

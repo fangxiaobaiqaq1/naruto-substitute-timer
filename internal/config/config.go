@@ -277,6 +277,17 @@ type UIConfig struct {
 	// MiniSize is the timer-only pill size the user dragged its edges to
 	// (Fyne units); nil fits the text. The height also sets the clock size.
 	MiniSize *ScreenSize `json:"miniSize,omitempty"`
+	// ShowNotice shows the launch notice on every start (default on).
+	ShowNotice bool `json:"showNotice"`
+	// WarnSeconds is the reminder threshold in seconds (0.1 steps, [0.1, 15.0]):
+	// the countdown turns amber (or red) and the optional sound plays there.
+	WarnSeconds float64 `json:"warnSeconds"`
+	// WarnRed shows the reminder window of a countdown in red instead of amber.
+	WarnRed bool `json:"warnRed"`
+	// WarnSound plays a reminder once when a countdown enters its last 3 s.
+	WarnSound bool `json:"warnSound"`
+	// WarnSoundFile is an imported WAV/MP3 copy; empty uses the built-in chime.
+	WarnSoundFile string `json:"warnSoundFile,omitempty"`
 }
 
 type ScreenPoint struct {
@@ -387,6 +398,8 @@ func Default() Config {
 			MiniFloating:              false,
 			MiniAutoScale:             false,
 			GPUAcceleration:           false,
+			ShowNotice:                true,
+			WarnSeconds:               3,
 			// Keep the published default neutral. Users can add their own names
 			// in config.json or through the settings window.
 			PlayerNames: []string{},

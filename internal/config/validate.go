@@ -187,6 +187,9 @@ func Validate(c Config) error {
 	if c.UI.MiniOpacity < 0.20 || c.UI.MiniOpacity > 1.00 {
 		return fmt.Errorf("ui.miniOpacity: must be in [0.20,1.00]")
 	}
+	if c.UI.WarnSeconds < 0.1 || c.UI.WarnSeconds > 15 || math.Abs(c.UI.WarnSeconds*10-math.Round(c.UI.WarnSeconds*10)) > 1e-6 {
+		return fmt.Errorf("ui.warnSeconds: got %v, want 0.1–15.0 with at most one decimal", c.UI.WarnSeconds)
+	}
 	if c.UI.FontScale < 0.25 || c.UI.FontScale > 3.00 {
 		return fmt.Errorf("ui.fontScale: must be in [0.25,3.00]")
 	}

@@ -24,11 +24,13 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import com.narutotimer.R
 import com.narutotimer.Settings
+import com.narutotimer.WarnSound
 import com.narutotimer.capture.FrameLoop
 import com.narutotimer.capture.ProjectionCaptureService
 import com.narutotimer.service.TimerAccessibilityService
 import com.narutotimer.tracker.OverlayState
 import com.narutotimer.tracker.Session
+import com.narutotimer.tracker.TimerColors
 import com.narutotimer.ui.CalibrationActivity
 import com.narutotimer.ui.ProjectionPermissionActivity
 import java.util.concurrent.atomic.AtomicBoolean
@@ -65,6 +67,7 @@ class OverlayController(
     private var clockDeadline = 0L
     private var forceRender = true
     private var lastState: OverlayState? = null
+    private var warnLatched = false
     private var appliedOpacity = -1f
     // Outside a fight (and with the settings panel closed) the 33 ms revision poll is off: Session
     // pushes each revision change ([onRevision]) and the loop only wakes for the clock deadline.
@@ -258,6 +261,10 @@ class OverlayController(
             lastSessionRevision = revision
             val state = safeState(now)
             if (state != null) {
+                // Optional reminder: once when the opponent clock enters its last 3 s.
+                val warn = state.primaryColor == TimerColors.CLOCK_WARN || state.primaryColor == TimerColors.CLOCK_ALERT
+                if (warn && !warnLatched && settings.warnSound) WarnSound.play(service, settings)
+                warnLatched = warn
                 lastState = state
                 view?.render(state)
                 applyOpacity(state.opacity)

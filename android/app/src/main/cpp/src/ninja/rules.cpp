@@ -60,6 +60,7 @@ std::string ShortLabel(const std::string& name) {
         {normalize(MinatoKyubi), "水门·九喇嘛连结"},
         {normalize(HashiramaEdo), "柱间·秽土转生"},
         {normalize(HanzoEdo), "半藏·秽土转生"},
+        {normalize(TobiramaYongye), "扉间·永夜逐光"},
     };
     const std::string key = normalize(name);
     for (const auto& [norm, label] : labels) {

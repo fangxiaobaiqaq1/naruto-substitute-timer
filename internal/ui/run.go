@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"math"
 	"narutotimer/internal/buildinfo"
 	"os"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"narutotimer/internal/frame"
 	"narutotimer/internal/identity"
 	"narutotimer/internal/ninja"
+	"narutotimer/internal/sound"
 	"narutotimer/internal/updates"
 )
 
@@ -118,17 +120,20 @@ type session struct {
 	right timerapp.SideClock
 	subs  *catalog.Table
 
-	clockOnce       sync.Once
-	lastCD          string
-	lastEventText   string
-	lastClockColor  color.Color
-	lastAlt         string
-	lastAltColor    color.Color
-	lastDual        bool
-	lastLeftBoth    string
-	lastRightBoth   string
-	lastLeftColor   color.Color
-	lastRightColor  color.Color
+	clockOnce      sync.Once
+	lastCD         string
+	lastEventText  string
+	lastClockColor color.Color
+	lastAlt        string
+	lastAltColor   color.Color
+	lastDual       bool
+	lastLeftBoth   string
+	lastRightBoth  string
+	lastLeftColor  color.Color
+	lastRightColor color.Color
+	// warnLatched is true while the opponent countdown is in its last 3 s,
+	// so the optional reminder sound plays once per countdown.
+	warnLatched     bool
 	lastMiniDisplay string
 	lastMiniCaption string
 	clockRevision   uint64 // Accessed only through sync/atomic.
@@ -292,6 +297,18 @@ func Run(cfg config.Config, provider frame.Provider, options ...Option) error {
 	}
 	go s.loop()
 	s.startAutomaticUpdateChecks()
+	if cfg.UI.ShowNotice {
+		go func() {
+			if !s.wait(400 * time.Millisecond) {
+				return
+			}
+			fyne.Do(func() {
+				if !s.stopped() {
+					s.showLaunchNotice()
+				}
+			})
+		}()
+	}
 	go func() {
 		if !s.wait(250 * time.Millisecond) {
 			return
@@ -534,7 +551,7 @@ func (s *session) dualClockText(now time.Time) (bool, string, color.NRGBA) {
 	if remaining <= 0 {
 		return true, "就绪", clockIdle
 	}
-	return true, timerapp.FormatCD([]float64{remaining}), clockColor([]float64{remaining})
+	return true, timerapp.FormatCD([]float64{remaining}), clockColor([]float64{remaining}, warnTenths(s.cfg.UI.WarnSeconds))
 }
 
 func (s *session) loop() {
@@ -1209,14 +1226,34 @@ func (s *session) maybeAutoSide(f frame.Frame) {
 	// newer settings save, and must never turn "auto" into a saved left/right.
 }
 
-func clockColor(secs []float64) color.NRGBA {
+// warnTenths is the configured reminder threshold in tenths of a second.
+func warnTenths(seconds float64) int {
+	return min(150, max(1, int(math.Round(seconds*10))))
+}
+
+func clockColor(secs []float64, tenths int) color.NRGBA {
 	if len(secs) == 0 {
 		return clockIdle
 	}
-	if timerapp.DisplayTenths(secs[0]) <= 30 {
+	if timerapp.DisplayTenths(secs[0]) <= tenths {
 		return clockWarn
 	}
 	return clockLive
+}
+
+// warnTint swaps the last-3-seconds amber for the optional red.
+func warnTint(c color.NRGBA) color.NRGBA {
+	if c == clockWarn {
+		return clockAlert
+	}
+	return c
+}
+
+// playWarnSound is a seam so tests can observe reminders without audio.
+var playWarnSound = func(path string) {
+	if err := sound.Play(path); err != nil && path != "" {
+		_ = sound.Play("") // A missing/broken import falls back to the chime.
+	}
 }
 
 func (s *session) refreshClock() {
@@ -1248,12 +1285,21 @@ func (s *session) refreshClockAt(now time.Time) {
 	secs := s.oppRemaining(now)
 	eventText := s.detectedText()
 	txt := timerapp.FormatCD(secs)
-	col := clockColor(secs)
+	tenths := warnTenths(s.cfg.UI.WarnSeconds)
+	col := clockColor(secs, tenths)
 	dual, altText, altColor := s.dualClockText(now)
 	leftSecs := s.left.LatestRemaining(now)
 	rightSecs := s.right.LatestRemaining(now)
-	leftText, leftColor := timerapp.FormatCD(leftSecs), clockColor(leftSecs)
-	rightText, rightColor := timerapp.FormatCD(rightSecs), clockColor(rightSecs)
+	leftText, leftColor := timerapp.FormatCD(leftSecs), clockColor(leftSecs, tenths)
+	rightText, rightColor := timerapp.FormatCD(rightSecs), clockColor(rightSecs, tenths)
+	if s.cfg.UI.WarnRed {
+		col, altColor, leftColor, rightColor = warnTint(col), warnTint(altColor), warnTint(leftColor), warnTint(rightColor)
+	}
+	warnNow := len(secs) > 0 && secs[0] > 0 && timerapp.DisplayTenths(secs[0]) <= tenths
+	if warnNow && !s.warnLatched && s.cfg.UI.WarnSound {
+		go playWarnSound(s.cfg.UI.WarnSoundFile)
+	}
+	s.warnLatched = warnNow
 	miniText, miniCaption := s.miniTextLocked(txt, altText, leftText, rightText, dual), s.miniSideTextLocked()
 	same := s.lastCD == txt && s.lastEventText == eventText && s.lastClockColor == col && s.lastDual == dual && s.lastAlt == altText && s.lastAltColor == altColor && s.lastLeftBoth == leftText && s.lastRightBoth == rightText && s.lastLeftColor == leftColor && s.lastRightColor == rightColor && s.lastMiniDisplay == miniText && s.lastMiniCaption == miniCaption
 	trace := s.traceFrame
@@ -1378,8 +1424,10 @@ func (s *session) applyPendingClock() {
 // colour (cyan, or amber in the last 3 s), otherwise the neutral border.
 func stripeColor(u *clockUpdate, both bool) color.NRGBA {
 	if both {
-		if u.leftColor == clockWarn || u.rightColor == clockWarn {
-			return clockWarn
+		for _, warn := range []color.NRGBA{clockAlert, clockWarn} {
+			if u.leftColor == warn || u.rightColor == warn {
+				return warn
+			}
 		}
 		if u.leftColor == clockLive || u.rightColor == clockLive {
 			return clockLive

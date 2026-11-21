@@ -14,8 +14,10 @@ var (
 	clockIdle = color.NRGBA{R: 159, G: 185, B: 196, A: 255}
 	clockLive = color.NRGBA{R: 92, G: 225, B: 255, A: 255}
 	clockWarn = color.NRGBA{R: 255, G: 181, B: 71, A: 255}
-	tagMine   = color.NRGBA{R: 227, G: 246, B: 251, A: 255}
-	tagIdle   = color.NRGBA{R: 143, G: 179, B: 192, A: 255}
+	// clockAlert replaces clockWarn when the optional "last 3 s in red" is on.
+	clockAlert = color.NRGBA{R: 255, G: 72, B: 72, A: 255}
+	tagMine    = color.NRGBA{R: 227, G: 246, B: 251, A: 255}
+	tagIdle    = color.NRGBA{R: 143, G: 179, B: 192, A: 255}
 
 	glassBG     = color.NRGBA{R: 6, G: 24, B: 32, A: 255}
 	panelBG     = color.NRGBA{R: 11, G: 26, B: 36, A: 255}

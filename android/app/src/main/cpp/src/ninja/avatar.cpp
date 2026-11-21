@@ -747,8 +747,9 @@ bool avatarVariantPolicy(const std::string& name) {
     static const std::string& minato = *new std::string(normalizeAvatarName(MinatoKyubi));
     static const std::string& hashiramaEdo = *new std::string(normalizeAvatarName(HashiramaEdo));
     static const std::string& tsunade = *new std::string(normalizeAvatarName(TsunadeYokai));
+    static const std::string& tobirama = *new std::string(normalizeAvatarName(TobiramaYongye));
     const std::string key = normalizeAvatarName(canonicalAvatarName(name));
-    return key == obito || key == xiayin || key == jinying || key == itachi || key == minato || key == hashiramaEdo || key == tsunade;
+    return key == obito || key == xiayin || key == jinying || key == itachi || key == minato || key == hashiramaEdo || key == tsunade || key == tobirama;
 }
 
 void avatarFactorSize(const avatarEntry* entry, double scale, double factor, int& w, int& h) {

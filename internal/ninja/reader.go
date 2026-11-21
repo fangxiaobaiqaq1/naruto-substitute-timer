@@ -25,6 +25,7 @@ import (
 //go:embed templates/sasuke_xiayin.png templates/sasuke_xiayin_duel.png
 //go:embed templates/itachi_hyakusen.png templates/itachi_hyakusen_mumu.png templates/itachi_hyakusen_portrait.png
 //go:embed templates/minato_kyubi.png templates/hashirama_edo.png templates/hashirama_edo_camp.png templates/naruto_student.png
+//go:embed templates/tobirama_yongye.png
 var templates embed.FS
 
 type Palette string
@@ -175,6 +176,9 @@ func NewReaderWithAvatars(options AvatarOptions) *Reader {
 		// on the ordinary row. Keep both the old duel and current camp lettering.
 		{"hashirama_edo", HashiramaEdo, 6, Warm, 0, false},
 		{"hashirama_edo_camp", HashiramaEdo, 6, Warm, 0, false},
+		// Reviewed 2026-11-21 HUD (official ID 90553): a blue gauge above four
+		// ordinary blue beans pushes the row 9px down at 960x540.
+		{"tobirama_yongye", TobiramaYongye, 4, "", 9, false},
 		{"naruto_student", NarutoStudent, 0, "", 0, false},
 	} {
 		data, err := templates.ReadFile("templates/" + spec.file + ".png")
@@ -447,6 +451,10 @@ func avatarReadout(m AvatarMatch) Readout {
 	case normalizeAvatarName(TsunadeYokai):
 		// Reviewed 90475 HUD: the red gauge sits above four ordinary beans.
 		// Their row is 9px lower at 960x540, not Minato's 13px offset.
+		out.Slots, out.RowOffsetY = 4, 9
+	case normalizeAvatarName(TobiramaYongye):
+		// Reviewed 2026-11-21 HUD of official ID 90553: a blue gauge sits
+		// above four ordinary blue beans, 9px lower at 960x540.
 		out.Slots, out.RowOffsetY = 4, 9
 	}
 	return out
