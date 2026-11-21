@@ -63,6 +63,12 @@ for asset in "$@"; do
   [[ -f "$asset" ]] || { echo "asset not found: $asset" >&2; exit 1; }
   name=$(basename -- "$asset")
   size=$(wc -c < "$asset")
+  # Gitee is a download mirror with a 1 GB repository attachment quota: keep
+  # only what the in-app updaters and users download (EXE, APK, checksums).
+  if [[ "${name,,}" == *.zip ]]; then
+    echo "Skipping ZIP on the Gitee mirror (EXE/APK only): $name"
+    continue
+  fi
   if (( size > max_attachment_bytes )); then
     case "${name,,}" in
       *.zip)

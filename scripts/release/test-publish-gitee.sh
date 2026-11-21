@@ -127,7 +127,7 @@ run_publish() {
 
 first_output="$tmpdir/first.out"
 run_publish >"$first_output" 2>&1
-grep -q 'Skipping optional ZIP over Gitee 100 MB limit: optional.zip' "$first_output"
+grep -q 'Skipping ZIP on the Gitee mirror (EXE/APK only): optional.zip' "$first_output"
 grep -q 'Uploading SHA256SUMS.txt' "$first_output"
 ! grep -q 'Uploading optional.zip' "$first_output"
 
