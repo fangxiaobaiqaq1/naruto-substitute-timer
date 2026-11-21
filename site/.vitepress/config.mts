@@ -15,6 +15,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: '下载', link: '/#download' },
+      { text: '公告', link: '/notice' },
       { text: '教程', link: '/guide/usage', activeMatch: '/guide/' },
       { text: '更新日志', link: `${gitee}/releases` },
     ],

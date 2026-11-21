@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "updatedAt": "2026-11-22T12:00:00+08:00",
+  "notices": [
+    {
+      "id": "2026-11-21-resale",
+      "level": "warning",
+      "title": "公告",
+      "body": "近期有闲鱼倒卖本开源软件，作者对售后不负责，本软件永久开源免费。",
+      "hint": "请只从下面的官方仓库免费下载，付费购买的版本可能被改动过。",
+      "links": [
+        { "label": "GitHub 仓库", "url": "https://github.com/fangxiaobaiqaq1/naruto-substitute-timer" },
+        { "label": "Gitee 仓库（国内）", "url": "https://gitee.com/xiaobaiqaq/naruto-substitute-timer" }
+      ],
+      "platforms": ["windows", "android"],
+      "minVersion": "",
+      "maxVersion": "",
+      "startAt": "",
+      "endAt": "",
+      "everyLaunch": true
+    }
+  ]
+}

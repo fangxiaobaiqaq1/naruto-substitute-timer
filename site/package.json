@@ -7,7 +7,7 @@
     "build": "vitepress build",
     "preview": "wrangler dev",
     "deploy": "vitepress build && wrangler deploy",
-    "test": "node worker.test.js"
+    "test": "node worker.test.js && node notice.test.js"
   },
   "devDependencies": {
     "vitepress": "^1.6.4",
