@@ -44,7 +44,7 @@ const platforms = [
     name: 'Android 手机版',
     req: 'Android 12 及以上，手机直接用',
     file: 'naruto-timer-universal.apk',
-    tip: '在 QQ / 微信里下载不了？点右上角「…」→「在浏览器打开」。',
+    tip: '在 QQ / 微信里下载不了？点右上角「…」→「在浏览器打开」。下载成 .apk.zip 的，把文件名末尾的 .zip 删掉再点开安装，不要解压。',
   },
 ]
 </script>
